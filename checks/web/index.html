@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>p2p-chat checks</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.4 -apple-system, system-ui, sans-serif; margin: 16px; max-width: 900px; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { margin: 4px 0 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  button { font: inherit; padding: 10px 14px; border-radius: 10px; border: 1px solid #8884; background: #8881; }
+  button:disabled { opacity: .5; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; background: #8881; padding: 10px; border-radius: 10px; max-height: 60vh; overflow: auto; }
+</style>
+</head>
+<body>
+<h1>p2p-chat checkpoints</h1>
+<p>Runs S1, S2, S4, S8, E2 (gate G2: Snowflake), C-P1 and C-P4 in this browser. On an iPhone, then run S6 and S4 with the buttons below. Nothing here is stored; the results go only to the laptop that served this page, or wherever you copy or share them.</p>
+<div class="row">
+  <button id="run">1. Run checks</button>
+  <button id="s6">2. S6 background test</button>
+  <button id="s4">3. S4 camera test</button>
+  <button id="finish">4. Send results to laptop</button>
+</div>
+<div class="row">
+  <button id="copy">Copy results</button>
+  <button id="share">Share results</button>
+</div>
+<pre id="log"></pre>
+<script src="page.js"></script>
+<script src="runner.js"></script>
+</body>
+</html>

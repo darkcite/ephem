@@ -1,0 +1,41 @@
+{
+ "label": "iphone",
+ "net": true,
+ "autorun": false,
+ "interactive": true,
+ "cross": false,
+ "resultUrl": null,
+ "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+ "gateways": [
+  "https://trustless-gateway.link",
+  "https://ipfs.io",
+  "https://dweb.link"
+ ],
+ "delegated": "https://delegated-ipfs.dev",
+ "stun": [
+  {
+   "urls": [
+    "stun:stun.l.google.com:19302",
+    "stun:stun.cloudflare.com:3478"
+   ]
+  }
+ ],
+ "snowflake": {
+  "fp": "2B280B23E1107BB62ABFC40DDCC8824814F80A72",
+  "brokers": [
+   "https://1098762253.rsc.cdn77.org/",
+   "https://snowflake-broker.torproject.net/"
+  ],
+  "stun": [
+   {
+    "urls": [
+     "stun:stun.l.google.com:19302",
+     "stun:stun.antisip.com:3478",
+     "stun:stun.nextcloud.com:3478"
+    ]
+   }
+  ]
+ },
+ "ipnsName": "k51qzi5uqu5dhnxkyu1ccqnysitj34cgoeiuukt7nxi4rnmh7tb67jsg3bdkpy",
+ "ipnsRecord": "CkEvaXBmcy9iYWZ5YmVpZ2R5cnp0NXNmcDd1ZG03aHU3NnVoN3kyNm5mM2VmdXlscWFiZjNvY2xndHF5NTVmYnpkaRJAieV3yUW1C4G8Q2sD1sirIAT8oJecLVA00adJElMdkiVfit6vMcH1Myx5sBt+moCnK163iERlSg+qUQOXr5jBDRgAIh4yMDI3LTA5LTI4VDA5OjM4OjU5LjIxMzAwMDAwMFooATCA8JLL3QhCQNNTsSCVoNI2MLxs/NaLadyy6NfeCCgRZgAk47+5lYAMqcUsTnYo65HBRJ4aiLgjocsb/vf3n5UPOV1aRYmHuQdKmAGlY1RUTBsAAABF2WS4AGVWYWx1ZVhBL2lwZnMvYmFmeWJlaWdkeXJ6dDVzZnA3dWRtN2h1NzZ1aDd5MjZuZjNlZnV5bHFhYmYzb2NsZ3RxeTU1ZmJ6ZGloU2VxdWVuY2UBaFZhbGlkaXR5WB4yMDI3LTA5LTI4VDA5OjM4OjU5LjIxMzAwMDAwMFpsVmFsaWRpdHlUeXBlAA=="
+}

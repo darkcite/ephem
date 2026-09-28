@@ -1,5 +1,6 @@
-// In-browser half of the checkpoint suite. Loaded by checks/browser_checks.mjs
-// into Chromium, Firefox and WebKit. Every function returns plain JSON.
+// In-browser half of the checkpoint suite (docs/P2P-CHAT.md §24). Used by
+// browser_checks.mjs (Playwright), safari_checks.mjs (real Safari) and the iPhone page
+// (index.html + runner.js). Every function returns plain JSON.
 window.C = (() => {
   const st = { pc: null, dc: null, got: [] };
 
@@ -119,6 +120,53 @@ window.C = (() => {
     return { alice: oa, bob: ob, received: got, offerCands: off.cands.map((c) => c.typ), ok: got === 'p2p ✓' };
   }
 
+  // ---------- S6: does a pending offer survive the app going to the background? ----------
+  // bgStart() creates Alice's offer; the user then leaves the app; bgFinish() completes
+  // the exchange with a fresh Bob and reports whether Alice's pending connection still works.
+  let bg = null;
+  function onVis() {
+    if (!bg) return;
+    if (document.visibilityState === 'hidden') bg.hiddenAt = performance.now();
+    else if (bg.hiddenAt !== null) { bg.hiddenMs += performance.now() - bg.hiddenAt; bg.hiddenAt = null; }
+  }
+  document.addEventListener('visibilitychange', onVis);
+  async function bgStart() {
+    const pc = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
+    const dc = pc.createDataChannel('c', { negotiated: true, id: 0, ordered: true });
+    await pc.setLocalDescription(await pc.createOffer());
+    await gather(pc, 5000);
+    bg = { pc, dc, off: extract(pc.localDescription.sdp), hiddenAt: null, hiddenMs: 0, t0: performance.now() };
+    return { signaling: pc.signalingState };
+  }
+  async function bgFinish() {
+    if (!bg) return { error: 'bgStart not called' };
+    const before = { signaling: bg.pc.signalingState, gathering: bg.pc.iceGatheringState, connection: bg.pc.connectionState };
+    const b = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
+    const bdc = b.createDataChannel('c', { negotiated: true, id: 0, ordered: true });
+    let got = null;
+    bdc.onmessage = (e) => { got = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data); };
+    let open = 'not attempted';
+    try {
+      await b.setRemoteDescription({ type: 'offer', sdp: rebuild(bg.off, 'actpass', '1234567890') });
+      await b.setLocalDescription(await b.createAnswer());
+      await gather(b, 5000);
+      await bg.pc.setRemoteDescription({ type: 'answer', sdp: rebuild(extract(b.localDescription.sdp), 'active', '987654321') });
+      open = await waitOpen(bg.dc, bg.pc, 20000);
+      if (open === 'open') { bg.dc.send('survived'); await new Promise((r) => setTimeout(r, 1000)); }
+    } catch (e) { open = `${e.name}: ${e.message}`; }
+    const r = { hiddenSeconds: Math.round(bg.hiddenMs / 1000), totalSeconds: Math.round((performance.now() - bg.t0) / 1000), before, open, received: got, ok: got === 'survived' };
+    bg.pc.close(); b.close(); bg = null;
+    return r;
+  }
+
+  // ---------- S4 on a real device: host candidates after a real camera permission ----------
+  async function cameraOffer() {
+    const s = await navigator.mediaDevices.getUserMedia({ video: true });
+    s.getTracks().forEach((t) => t.stop());
+    const f = await offer([]);
+    return [...new Set(f.cands.filter((c) => c.typ === 'host').map((c) => (/^[0-9.]+$/.test(c.addr) || c.addr.includes(':') ? 'RAW-IP' : 'mdns')))];
+  }
+
   // ---------- S8 / TS3 / TS4: what the peer would see ----------
   async function srflx(iceServers) {
     const pc = new RTCPeerConnection({ iceServers });
@@ -223,5 +271,6 @@ window.C = (() => {
     waitOpen: (ms) => waitOpen(st.dc, st.pc, ms),
     send: (m) => st.dc.send(new TextEncoder().encode(m)), got: () => st.got.slice(),
     srflx, snowflake, gwCar, ipnsPut, ipnsGet, e8Start, e8Result, selfPair, extract,
+    bgStart, bgFinish, cameraOffer,
   };
 })();

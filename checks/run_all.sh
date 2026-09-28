@@ -118,7 +118,7 @@ say "Browser checks: S1 S2 S4 S8 TS4 E2 C-P1 C-P4 ${E8:+E8}"
 
 # ---------------------------------------------------------------- real Safari (macOS)
 if [ "${SAFARI:-0}" = 1 ]; then
-  say "Real Safari: S2 S4 S8 E2 C-P1 (a Safari tab opens; it closes itself when done)"
+  say "Real Safari: S1 (one tab + Chrome↔Safari cross-engine) S2 S4 S8 E2 C-P1 C-P4 (a Safari tab opens; leave it until DONE)"
   ( cd "$ROOT" && NET="${NET:-1}" node safari_checks.mjs "$OUT" ) 2>&1 | tee "$OUT/safari.log"
   { echo "## Real Safari"; echo; cat "$OUT/safari.md" 2>/dev/null || echo "Safari checks did not produce a report (see safari.log)"; echo; } >> "$OUT/REPORT.md"
 fi
@@ -173,7 +173,7 @@ cat >> "$OUT/REPORT.md" <<'EOF'
 |---|---|---|
 | TS3 | Run this script twice: `./checks/run_all.sh warp-off`, then with Cloudflare WARP (or your VPN) on: `./checks/run_all.sh warp-on`. Compare the S8 tables | With the VPN on, every IPv4 **and** IPv6 address shown belongs to the VPN, not to your ISP |
 | S3 | Two devices in a chat (once MVP-1 exists); switch one device from Wi-Fi to mobile data | Recorded per browser: does the chat recover without a new code (T0)? |
-| S6 | iPhone: create an invite, switch to a messenger for 30 / 60 / 120 s, come back | The pending connection survives at least 60 s (otherwise iOS users always answer, P2P-CHAT.md §17.5) |
+| G2, S6, S4 (iPhone) | Open https://darkcite.github.io/p2p-chat/checks/web/ in Safari on the iPhone: tap 1 (checks), 2 (S6: leave for ~60 s, come back), 3 (S4 camera), then Share/Copy the results | E2 rows PASS (gate G2 on iOS); S6 PASS after ≥ 60 s in the background |
 | S7 | Desktop: open an answer link in a new tab while the inviting tab is open | The answer is handed to the inviting tab and the new tab closes |
 | S9 | iPhone: a room with 15 peers for 10 minutes | No reload or memory kill; battery use recorded |
 | E3–E7 | Snowflake Turbotunnel, arti bootstrap, onion hosting in WASM | Needs the TOR-1 implementation; not runnable yet |

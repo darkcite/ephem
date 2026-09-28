@@ -1073,7 +1073,9 @@ E8=1 ./checks/run_all.sh hidden-tab           # adds the 7-minute hidden-tab tes
 NET=0 SKIP_ARTI=1 ./checks/run_all.sh quick   # offline, fast
 ```
 
-- **Needs:** Node ≥ 20, Python ≥ 3.9, Rust (rustup) and clang. Runs on macOS or Linux; on Windows, use WSL2.
+- **Needs:** Node ≥ 20, Python ≥ 3.9, Rust (rustup). For E1 only: an LLVM clang with the WebAssembly backend (Linux `clang`; macOS `brew install llvm`, because Apple's clang has none). Runs on macOS or Linux; on Windows, use WSL2.
+- **`SAFARI=1`** also runs the page in your real Safari, **including cross-engine S1** (Chrome ↔ Safari in both directions, exchanging only the minimal fields through a local mailbox).
+- **iPhone (G2, S6, S4):** open **https://darkcite.github.io/p2p-chat/checks/web/** in Safari. Tap **1** (automatic checks), **2** (S6: leave the app for about 60 s, then come back), **3** (S4: allow the camera), then **Share** or **Copy** the results. The page is `checks/web/` served by GitHub Pages from this branch (repo root, with `.nojekyll`). Refresh the test IPNS record in `checks/web/config.json` with `node checks/make_web_config.mjs`.
 - **Output:** `checks/out/<timestamp>-<label>/REPORT.md`, plus raw JSON and logs.
 
 ### 24.2 Checkpoint list and results

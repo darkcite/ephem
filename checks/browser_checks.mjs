@@ -29,7 +29,7 @@ const TEST_CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
 const DELEGATED = 'https://delegated-ipfs.dev';
 
 // ---------- local static server (http://127.0.0.1 is a secure context) ----------
-const pageJs = fs.readFileSync(path.join(HERE, 'lib', 'page.js'));
+const pageJs = fs.readFileSync(path.join(HERE, 'web', 'page.js'));
 const srv = http.createServer((q, r) => {
   if (q.url === '/page.js') { r.writeHead(200, { 'content-type': 'text/javascript' }); r.end(pageJs); return; }
   r.writeHead(200, { 'content-type': 'text/html' });
