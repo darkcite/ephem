@@ -60,7 +60,7 @@ if (!peer) console.log('note: no Chrome/Chromium for the cross-engine test; it i
 const timeout = new Promise((r) => setTimeout(() => r(null), 10 * 60 * 1000));
 const page = await Promise.race([finished, timeout]);
 await Promise.race([crossRun, new Promise((r) => setTimeout(r, 5000))]);
-srv.close(); if (peer) await peer.close();
+srv.close(); if (peer) await Promise.race([peer.close().catch(() => {}), new Promise((z) => setTimeout(z, 5000))]);
 if (!page) { console.log('Safari checks timed out after 10 minutes'); process.exit(1); }
 const results = [...page.slice(0, 2), ...crossResults, ...page.slice(2)];
 sv.writeReport(OUT, 'safari', results);

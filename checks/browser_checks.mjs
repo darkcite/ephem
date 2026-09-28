@@ -42,6 +42,16 @@ const ORIGIN = `http://127.0.0.1:${srv.address().port}`;
 
 const results = [];
 const step = (m) => console.log(`  … ${m}`);
+// Closing Chrome can hang after a failed WebRTC connection (seen with WARP on macOS).
+// Close the peer connections first, then give the browser 5 s; leftovers die with this process.
+async function closeB(b) {
+  if (!b) return;
+  try { await Promise.race([Promise.all(b.contexts().flatMap((c) => c.pages()).map((pg) =>
+    pg.evaluate(() => { try { window.C && window.C.closeAll && window.C.closeAll(); } catch (_) {} }).catch(() => {}))),
+    new Promise((z) => setTimeout(z, 2000))]); } catch (_) { /* ignore */ }
+  const closed = await Promise.race([b.close().then(() => true).catch(() => true), new Promise((z) => setTimeout(() => z(false), 5000))]);
+  if (!closed) step('browser did not close within 5 s; continuing (it is killed when this script exits)');
+}
 function writeOut() {
   fs.writeFileSync(path.join(OUT, 'browser.json'), JSON.stringify(results, null, 1));
   const md = ['| ID | Check | Result | Details |', '|---|---|---|---|',
@@ -80,7 +90,7 @@ const codeBytes = (f, kind) => 4 + (kind === 'invite' ? 68 : 48) + 1 + f.ufrag.l
 // ---------- which browsers launch at all ----------
 const avail = [];
 for (const b of BROWSERS) {
-  try { const { browser, page } = await openPage(b); const ua = await page.evaluate(() => C.ua()); await browser.close(); avail.push(b); rec('ENV', `${b} launches`, 'PASS', ua); }
+  try { const { browser, page } = await openPage(b); const ua = await page.evaluate(() => C.ua()); await closeB(browser); avail.push(b); rec('ENV', `${b} launches`, 'PASS', ua); }
   catch (e) { rec('ENV', `${b} launches`, 'SKIP', String(e.message).split('\n')[0]); }
 }
 
@@ -90,7 +100,7 @@ for (const b of avail) {
   try {
     const { browser, page } = await openPage(b);
     const f = await page.evaluate(() => C.offer([]));
-    await browser.close();
+    await closeB(browser);
     rec('S2', `${b} offer fields`, 'PASS', { ufrag: f.ufrag.length, pwd: f.pwd.length, setup: f.setup, mid: f.mid, sctpPort: f.sctpPort,
       maxMsg: f.maxMsg, cands: f.cands.map((c) => `${c.typ}:${isIp(c.addr) ? 'ip' : 'mdns'}`), inviteBytes: codeBytes(f, 'invite'), rawSdpBytes: f.rawSdpBytes, gatherMs: f.gatherMs });
   } catch (e) { rec('S2', `${b} offer fields`, 'FAIL', e.message.split('\n')[0]); }
@@ -114,7 +124,7 @@ for (const a of avail) for (const b of avail) {
     }
     rec('S1', `${a} → ${b}`, got.length ? 'PASS' : 'FAIL', { alice: oa, bob: ob, received: got.length, answerSetup: ans.setup });
   } catch (e) { rec('S1', `${a} → ${b}`, 'FAIL', e.message.split('\n')[0]); }
-  finally { if (A) await A.browser.close(); if (B) await B.browser.close(); }
+  finally { await closeB(A && A.browser); await closeB(B && B.browser); }
 }
 
 // ---------- S1-srflx: connect through the public (or VPN) address only ----------
@@ -139,7 +149,7 @@ if (NET) {
         { alice: oa, bob: ob, srflx: [...new Set(off.cands.filter((c) => c.typ === 'srflx').map((c) => c.addr))] });
     }
   } catch (e) { rec('S1', `${k} via srflx only`, 'FAIL', e.message.split('\n')[0]); }
-  finally { if (A) await A.browser.close(); if (B) await B.browser.close(); }
+  finally { await closeB(A && A.browser); await closeB(B && B.browser); }
 }
 
 // ---------- S4: camera permission vs mDNS host obfuscation ----------
@@ -157,7 +167,7 @@ for (const b of avail) {
       const kinds = [...new Set(f.cands.filter((c) => c.typ === 'host').map((c) => (isIp(c.addr) ? 'RAW-IP' : 'mdns')))];
       rec('S4', `${b}: ${name}`, 'INFO', `host candidates: ${kinds.join(',') || 'none'}`);
     } catch (e) { rec('S4', `${b}: ${name}`, 'FAIL', e.message.split('\n')[0]); }
-    finally { if (P) await P.browser.close(); }
+    finally { await closeB(P && P.browser); }
   }
 }
 
@@ -173,7 +183,7 @@ if (NET) {
       rec('S8', `${b} srflx via Google+Cloudflare STUN`, r.srflx.length ? 'PASS' : 'FAIL', { v4, v6, gatherComplete: r.complete });
       if (v4.length && v6.length) rec('TS4', `${b} both IPv4 and IPv6 visible`, 'INFO', 'If you are on a v4-only VPN, the IPv6 address above is your real one (P2P-CHAT.md §29.2)');
     } catch (e) { rec('S8', `${b} srflx`, 'FAIL', e.message.split('\n')[0]); }
-    finally { if (P) await P.browser.close(); }
+    finally { await closeB(P && P.browser); }
   }
 
   // ---------- E2 / gate G2: live Snowflake rendezvous + DataChannel to a proxy ----------
@@ -189,7 +199,7 @@ if (NET) {
       }
       rec('E2', `${b} via ${new URL(broker).host}`, r.ok ? 'PASS' : 'FAIL', r);
     } catch (e) { rec('E2', `${b} via ${broker}`, 'FAIL', e.message.split('\n')[0]); }
-    finally { if (P) await P.browser.close(); }
+    finally { await closeB(P && P.browser); }
   }
 
   // ---------- C-P1: trustless CAR from public gateways (CORS) ----------
@@ -203,7 +213,7 @@ if (NET) {
         rec('C-P1', `${b} CAR from ${new URL(gw).host}`, r.ok ? 'PASS' : 'FAIL', r);
       }
     } catch (e) { rec('C-P1', `${b}`, 'FAIL', e.message.split('\n')[0]); }
-    finally { if (P) await P.browser.close(); }
+    finally { await closeB(P && P.browser); }
   }
 
   // ---------- C-P4: browser publishes a signed IPNS record, gateways serve it back ----------
@@ -223,7 +233,7 @@ if (NET) {
         rec('C-P4', `read back via ${new URL(gw).host}`, r.ok ? 'PASS' : 'FAIL', r);
       }
     }
-    await P.browser.close();
+    await closeB(P.browser);
   } catch (e) { rec('C-P4', 'IPNS publish', 'FAIL', e.message.split('\n')[0]); }
 }
 
@@ -257,7 +267,7 @@ if (E8 && e8kind) {
     const status = r.hiddenSamples === 0 ? 'INCONCLUSIVE' : (r.maxGapMs < 5000 ? 'PASS' : 'FAIL');
     rec('E8', 'hidden tab timers with open DataChannel', status, { ...r, note: 'PASS = timers kept running (max gap < 5 s) while hidden; intensive throttling would give ~60 s gaps' });
   } catch (e) { rec('E8', 'hidden tab', 'FAIL', e.message.split('\n')[0]); }
-  finally { await browser.close(); }
+  finally { await closeB(browser); }
 }
 
 srv.close();

@@ -57,12 +57,14 @@ window.C = (() => {
     });
   }
 
+  const allPcs = [];
+  function closeAll() { allPcs.forEach((pc) => { try { pc.close(); } catch (_) {} }); allPcs.length = 0; }
   function mkpc(iceServers) {
     const pc = new RTCPeerConnection({ iceServers: iceServers || [], bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
     const dc = pc.createDataChannel('c', { negotiated: true, id: 0, ordered: true });
     dc.binaryType = 'arraybuffer';
     dc.onmessage = (e) => st.got.push(typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data));
-    st.pc = pc; st.dc = dc;
+    st.pc = pc; st.dc = dc; allPcs.push(pc);
     return pc;
   }
 
@@ -277,6 +279,6 @@ window.C = (() => {
     waitOpen: (ms) => waitOpen(st.dc, st.pc, ms),
     send: (m) => st.dc.send(new TextEncoder().encode(m)), got: () => st.got.slice(),
     srflx, snowflake, gwCar, ipnsPut, ipnsGet, e8Start, e8Result, selfPair, extract,
-    bgStart, bgFinish, cameraOffer,
+    bgStart, bgFinish, cameraOffer, closeAll,
   };
 })();
