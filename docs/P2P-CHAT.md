@@ -1512,6 +1512,45 @@ Candidate line: `a=candidate:{foundation} 1 udp {priority} {addr} {port} typ {ho
 
 **Effort:** this is the largest item in the project. The ongoing cost is tracking arti releases and Tor protocol changes, and applying Tor security fixes quickly.
 
+### C.5 Implementation plan (TOR-1 … TOR-4, started 2026-09-28)
+
+**Key simplification: the bridge is a "TCP" address.** arti needs no pluggable-transport manager. The Snowflake bridge line's placeholder address (`192.0.2.3:80`, as in Tor Browser) is configured as an ordinary bridge, and our runtime's `NetStreamProvider::connect` returns the **Snowflake stream** for exactly that address, and refuses every other address (`E_TOR_UNAVAILABLE`; this is also the transport guard of §28.5, since the Tor code can open no other socket). arti then runs TLS (rustls) and the Tor link handshake over that stream, exactly as over TCP. The snowflake server on the bridge side forwards the stream to the bridge's ORPort unchanged.
+
+**Wire stack of the Snowflake stream** (from the reference Go client v2.9.2, kcp-go v5.6.8, smux v1.5.24):
+
+| Layer | Format | Our implementation |
+|---|---|---|
+| WebRTC DataChannel to a proxy | proxy relays bytes ↔ WebSocket to the snowflake server | web-sys `RTCPeerConnection` (as in E2) |
+| Turbotunnel | per DataChannel: `Token 12 93 60 5d 27 81 75 f5` ‖ `ClientID [8]` (random per session), then encapsulated packets; a new DataChannel continues the same session | `crates/snowflake` |
+| Encapsulation | chunks: `dcxxxxxx [cyyyyyyy [0zzzzzzz]]` length prefix (d = data/padding), ≤ 3 prefix bytes | `crates/snowflake::encap` |
+| KCP | ikcp segments, little-endian `conv u32, cmd u8 (81 PUSH, 82 ACK, 83 WASK, 84 WINS), frg u8, wnd u16, ts u32, sn u32, una u32, len u32`; no crypto, no FEC; stream mode; window 65 535; congestion control off; MTU 1400 | port of kcp-go's `kcp.go`, sans-IO, fixed-capacity rings |
+| smux v2 | `ver u8=2, cmd u8 (0 SYN, 1 FIN, 2 PSH, 3 NOP, 4 UPD), len u16, sid u32`; UPD = `consumed u32, window u32` flow control; client stream ids odd from 1; keep-alive NOP | `crates/snowflake::smux`, one stream |
+| Tor link protocol | TLS 1.2/1.3 + cells, run by arti | arti (rustls) |
+
+**Crates and pages:**
+
+- `crates/snowflake` (sans-IO, no wasm-bindgen): encapsulation, KCP, smux, Turbotunnel session (redial on a new DataChannel keeps the KCP/smux session). Native tests + interop tests against the Go server.
+- `crates/tor` → `app/pkg/tor_bg.wasm` (lazy, only on `tor.html`): browser runtime for arti (`CompoundRuntime`: spawn via `spawn_local`, timers via `setTimeout`, `web-time` clock, blocking work inline, UDP/listen unsupported, rustls + ring TLS), the Snowflake transport (broker rendezvous by `fetch`, `RTCPeerConnection` to proxies), arti-client, onion service hosting, and the Tor transport for `core`.
+- `vendor/arti-client` (0.46.0): **one documented patch**: on wasm, the state manager is the in-memory `TestingStateMgr` instead of `unimplemented!()`. Upstream marks this spot "TODO wasm"; the patch is dropped as soon as arti ships wasm storage. arti's core crates stay unmodified (G1).
+- `app/tor.html` + `app/tor.js`: the Tor session page (own CSP, §28.6), same UI components as `/app/`.
+
+**Offline Tor lab** (`checks/tor-lab/`, no Internet needed, because this container cannot reach torproject.org): chutney builds a private Tor network (directory authorities, relays, exits with `TestingTorNetwork`), plus one **bridge** whose ORPort is fed by the real **Go snowflake server**; the real Go **broker** and a **standalone proxy** run on localhost. arti is configured with the lab's authorities and the lab bridge. This exercises every layer end to end (browser included) exactly as on the real network; only the broker URL, bridge line and authorities differ. Live-network runs happen on the owner's laptop (`checks/run_all.sh tor`).
+
+**Steps:**
+
+| # | Work | Proof |
+|---|---|---|
+| T-1 | Lab: chutney network + Go broker, proxy, server | a native Tor client (system `tor`) bootstraps through the lab |
+| T-2 (E3) | `crates/snowflake`: encapsulation, KCP, smux, Turbotunnel | unit tests; **native interop**: our client ↔ Go snowflake server (WebSocket, as a proxy would) ↔ TCP echo, 10 MB both ways; proxy switch mid-transfer keeps the stream |
+| T-3 (E3) | Browser Snowflake: broker rendezvous, DataChannel, redial | Chromium ↔ lab broker/proxy/server ↔ echo |
+| T-4 (E4) | arti runtime shim + vendored patch; bootstrap over Snowflake; dial an onion (lab onion service) | **G3** in the lab: bootstrap time cold/warm, onion echo round trip, in Chromium |
+| T-5 (E5) | Onion service hosted from the tab (key from the seed, §7.1); directory cache in IndexedDB | two Chromium tabs reach each other's onion |
+| T-6 (TOR-2) | `tor.html`; TOR_INVITE (kind 5); Noise IK over the onion stream (u16 framing); accept rules (§28.4); SAS; the same chat features | e2e: 1:1 chat over Tor in the lab |
+| T-7 (TOR-3) | Contacts with `onion_pk`: "Connect" without a QR | e2e reconnect of saved contacts |
+| T-8 (TOR-4) | Rooms over Tor: owner-signed state carries `onion_pk`; members dial each other | e2e room of 3 over Tor |
+| T-9 (E6, E7) | Size (G4), memory; fuzz the Snowflake parsers; review | numbers in §24.2 |
+| T-10 | Live network on the owner's laptop and iPhone | G3/G4 on the real Tor network |
+
 ## Appendix D: Public channels, detailed design
 
 Normative summary: §27. **This depends on Tor mode passing gates G2–G4.**
