@@ -3,7 +3,7 @@
 // - Pins the version: a new sw.js installs and WAITS; the page shows the new build and asks the
 //   user before it is activated (message 'activate').
 // VERSION and FILES are written by tools/stamp.py (run by ./build.sh).
-const VERSION = 'c9bdc289a25d';
+const VERSION = '377c4f6df76f';
 const FILES = ["./", "index.html", "app.css", "app.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
 const CACHE = `ephem-${VERSION}`;
 

@@ -200,7 +200,7 @@ try {
   await a.fill('#t-msg', 'Hello Bob (edited)');
   await a.press('#t-msg', 'Enter');
   await b.waitForFunction(() => [...document.querySelectorAll('#log li.them')].some((li) => li.textContent.includes('Hello Bob (edited)') && li.textContent.includes('edited')), null, { timeout: 5000 });
-  check('edit reaches the peer', true);
+  check('edit reaches the peer; quotes follow the edit', /You: Hello Bob \(edited\)/.test(await lastThem(a).locator('.quote').textContent()));
 
   // Delete for everyone
   await a.fill('#t-msg', 'oops, wrong chat');

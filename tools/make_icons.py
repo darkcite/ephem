@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Generates the Ephem app icons (app/icons/*.png, app/icons/icon.svg) without dependencies.
 
-The mark: a white chat bubble on the accent colour, with three text lines that fade out
+The mark: an accent (#5b9cf5) chat bubble on the dark panel colour (#171a21), the palette of
+the darkcite dashboards,, with three text lines that fade out
 (messages that disappear). Run: python3 tools/make_icons.py
 """
 import os
 import struct
 import zlib
 
-ACCENT = (58, 91, 217)
-WHITE = (255, 255, 255)
+BG = (23, 26, 33)   # panel #171a21 (background)
+BUBBLE = (91, 156, 245)   # accent #5b9cf5 (bubble)
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app", "icons")
 SS = 4  # supersampling per axis
 
@@ -49,10 +50,10 @@ def sample(x, y, full_bleed):
     if rounded_rect(u, v, 0.18, 0.22, 0.82, 0.68, 0.12) or tail(u, v):
         for x0, x1, yc, alpha in LINES:
             if rounded_rect(u, v, x0, yc - 0.035, x1, yc + 0.035, 0.035):
-                mix = tuple(round(WHITE[i] * (1 - alpha) + ACCENT[i] * alpha) for i in range(3))
+                mix = tuple(round(BUBBLE[i] * (1 - alpha) + BG[i] * alpha) for i in range(3))
                 return mix + (255,)
-        return WHITE + (255,)
-    return ACCENT + (255,)
+        return BUBBLE + (255,)
+    return BG + (255,)
 
 
 def render(size, full_bleed):
@@ -90,11 +91,11 @@ def png(path, size, full_bleed):
 
 
 SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-<rect width="100" height="100" rx="22" fill="#3a5bd9"/>
-<path d="M30 22h40a12 12 0 0 1 12 12v22a12 12 0 0 1-12 12H46L27 80l3-12a12 12 0 0 1-12-12V34a12 12 0 0 1 12-12z" fill="#fff"/>
-<rect x="30" y="32.5" width="40" height="7" rx="3.5" fill="#3a5bd9"/>
-<rect x="30" y="43.5" width="32" height="7" rx="3.5" fill="#3a5bd9" fill-opacity=".6"/>
-<rect x="30" y="54.5" width="20" height="7" rx="3.5" fill="#3a5bd9" fill-opacity=".28"/>
+<rect width="100" height="100" rx="22" fill="#171a21"/>
+<path d="M30 22h40a12 12 0 0 1 12 12v22a12 12 0 0 1-12 12H46L27 80l3-12a12 12 0 0 1-12-12V34a12 12 0 0 1 12-12z" fill="#5b9cf5"/>
+<rect x="30" y="32.5" width="40" height="7" rx="3.5" fill="#171a21"/>
+<rect x="30" y="43.5" width="32" height="7" rx="3.5" fill="#171a21" fill-opacity=".6"/>
+<rect x="30" y="54.5" width="20" height="7" rx="3.5" fill="#171a21" fill-opacity=".28"/>
 </svg>
 """
 

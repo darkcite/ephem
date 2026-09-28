@@ -89,7 +89,7 @@ function renderCodeBox(box, kind, code) {
 }
 
 function renderExposure() {
-  const lines = app.exposure().trim().split('\n').filter(Boolean);
+  const lines = [...new Set(app.exposure().trim().split('\n').filter(Boolean))]; // one IP may appear with several ports
   const pretty = lines.map((l) => (l.startsWith('v6') ? 'IPv6 ' : 'IPv4 ') + l.slice(3));
   const box = $('exposure');
   box.querySelector('.addrs').textContent = pretty.length ? pretty.join('\n') : 'No public address in this code (LAN only, or STUN was unreachable).';
@@ -164,8 +164,10 @@ function setTick(upto, level) {
   }
 }
 
+// Re-renders every quote of message `key` (after an edit, a delete or an expiry).
 function refreshQuotes(key) {
-  for (const q of document.querySelectorAll(`.quote[data-ref="${key}"]`)) q.textContent = 'Message unavailable';
+  const [mine, seq] = [key[0] === 'm', Number(key.slice(2))];
+  for (const q of document.querySelectorAll(`.quote[data-ref="${key}"]`)) q.textContent = quoteText(mine, seq);
 }
 
 function markDeleted(key, label) {
@@ -316,6 +318,7 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
         m.text = text(ptr, len);
         m.body.textContent = m.text;
         m.meta.textContent = 'edited';
+        refreshQuotes(m.li.dataset.key);
       }
       break;
     }
@@ -490,6 +493,7 @@ function send(ev) {
       m.text = msg;
       m.body.textContent = msg;
       m.meta.textContent = 'edited';
+      refreshQuotes(m.li.dataset.key);
     }
   } else {
     const reply = composing?.mode === 'reply' ? composing : null;

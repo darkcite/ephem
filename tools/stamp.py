@@ -7,7 +7,7 @@
   (app.js fetches it with `integrity`).
 - app/sw.js: VERSION (= build id) and FILES (the precache list).
 
-The build id is the first 12 hex digits of SHA-256 over the stamped files, so it changes
+The build id is the first 12 hex digits of SHA-256 over every precached file, so it changes
 whenever any of them changes. Run by ./build.sh; run it again after editing app/*.js or *.css.
 """
 import base64
@@ -42,7 +42,9 @@ def sri(data, alg="sha384"):
 
 def main():
     hashes = {rel: sri(read(rel)) for rel in HASHED}
-    build = hashlib.sha256("".join(hashes[r] for r in HASHED).encode()).hexdigest()[:12]
+    # Every precached file feeds the build id, so any change (icons too) makes a new SW version.
+    cached = [f for f in PRECACHE if f not in ("./", "index.html")]
+    build = hashlib.sha256("".join(sri(read(r)) for r in cached).encode()).hexdigest()[:12]
     importmap = json.dumps({"imports": {}, "integrity": {"./" + m: hashes[m] for m in MODULES}}, separators=(",", ":"))
     block = "\n".join([
         "<!-- stamp:begin (tools/stamp.py) -->",
