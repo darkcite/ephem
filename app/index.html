@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-Wss/ZO2IstHgMirWmNhe/bdo8+AbvZMuDoS/T9nOyYE='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="377c4f6df76f">
-<meta name="ephem-wasm" content="sha384-4qqUSMr7tpf8pD4Iw2IxiEDKakuKV6LvkxCEkObn5OHZvNlzhIJSyXlt508DhnIq">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-YCoWeJNy9fF0LPr4suUQCpXdlbmFgjUmNWH30J9Osqc='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="f406ac0477bf">
+<meta name="ephem-wasm" content="sha384-By0CQrFz5tdx6g6DmszfDizwPxRz2aAahZPtzwIow4jER8IX/DyYe9tnbRFuu65Y">
 <link rel="stylesheet" href="app.css" integrity="sha384-ic4f3+Bi9HvyS+HIk4PLZh7LSQu92m1VvsR0fLhKRfd7pSf9wgUZvBj8L5eHp+Wn">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-x2wtwiZvLf1UAkZ1iAbO4YCXnKh7DJAiOBLXJoT1POPnaega8sAYj7IxYJSOJfCt","./pkg/ephem.js":"sha384-OsjNk41N9eWfqgzJ0qq62t1Za2Bqb5NV3b4O9Xl/BlGpPDhqIUwKCM/my1+1b0uB"}}</script>
-<script type="module" src="app.js" integrity="sha384-x2wtwiZvLf1UAkZ1iAbO4YCXnKh7DJAiOBLXJoT1POPnaega8sAYj7IxYJSOJfCt"></script>
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-XPGQQposwOaxZ3EcPlWbPsPtBk6CDBNS0EAueBhKDhO3KyXjSVwP8rUv5ZDSNVHe","./pkg/ephem.js":"sha384-ggZQZVr0YiYNTSpBMyRJfOoq9Aq7ptnC0b7C+XWSrB4EKEuJZVVNO3b6LANxZAs5"}}</script>
+<script type="module" src="app.js" integrity="sha384-XPGQQposwOaxZ3EcPlWbPsPtBk6CDBNS0EAueBhKDhO3KyXjSVwP8rUv5ZDSNVHe"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -220,7 +220,8 @@
 
 <div id="scanner" class="scanner" hidden>
   <video id="scan-video" playsinline muted></video>
-  <p>Point the camera at the QR code.</p>
+  <p>Point the camera at the QR code; fill about half of the picture with it.</p>
+  <p id="scan-status" class="note"></p>
   <button id="b-scan-cancel">Cancel</button>
 </div>
 

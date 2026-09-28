@@ -574,13 +574,51 @@ async function loadIdentity() {
   }
 }
 
-// ---- QR scanner (§8.2): BarcodeDetector where available, else rqrr in wasm (iOS) -----------
+// ---- QR scanner (§8.2): BarcodeDetector where it really supports QR, else rqrr in wasm (iOS) --
+async function qrDetector() {
+  // iOS can expose BarcodeDetector without QR support; trust it only if it lists qr_code.
+  if (!('BarcodeDetector' in globalThis)) return null;
+  try {
+    const formats = await globalThis.BarcodeDetector.getSupportedFormats();
+    return formats.includes('qr_code') ? new globalThis.BarcodeDetector({ formats: ['qr_code'] }) : null;
+  } catch {
+    return null;
+  }
+}
+
+// One frame through the wasm decoder. Even frames: the whole picture (long side ≤ 1280 px);
+// odd frames: a centre square at native resolution, which doubles the pixels per QR module.
+function wasmScan(video, ctx, n) {
+  const [vw, vh] = [video.videoWidth, video.videoHeight];
+  let sx = 0, sy = 0, sw = vw, sh = vh;
+  if (n % 2) {
+    sw = sh = Math.round(Math.min(vw, vh) * 0.7);
+    sx = Math.round((vw - sw) / 2);
+    sy = Math.round((vh - sh) / 2);
+  }
+  const k = Math.min(1, 1280 / Math.max(sw, sh));
+  const w = Math.round(sw * k);
+  const h = Math.round(sh * k);
+  ctx.canvas.width = w;
+  ctx.canvas.height = h;
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+  const img = ctx.getImageData(0, 0, w, h);
+  // One documented copy (§11.6): camera frame → preallocated wasm scan buffer.
+  const ptr = app.scan_buf(img.data.length);
+  mem(ptr, img.data.length).set(img.data);
+  return { text: app.scan(w, h), size: `${w}×${h}` };
+}
+
 async function scan(onText) {
   const video = $('scan-video');
   $('scanner').hidden = false;
+  $('scan-status').textContent = 'Starting the camera…';
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    });
   } catch {
     $('scanner').hidden = true;
     return error('The camera is not available. Paste the code instead.');
@@ -595,30 +633,35 @@ async function scan(onText) {
   };
   video.srcObject = stream;
   await video.play().catch(() => {});
-  const detector = 'BarcodeDetector' in globalThis ? new globalThis.BarcodeDetector({ formats: ['qr_code'] }) : null;
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  let detector = await qrDetector();
+  const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  let frames = 0;
   while (active) {
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 150));
     if (!active || !video.videoWidth) continue;
+    const t0 = performance.now();
     let found = '';
+    let info = '';
     if (detector) {
-      found = (await detector.detect(video).catch(() => []))[0]?.rawValue || '';
-    } else {
-      const w = Math.min(video.videoWidth, 960);
-      const h = Math.round((video.videoHeight * w) / video.videoWidth);
-      canvas.width = w;
-      canvas.height = h;
-      ctx.drawImage(video, 0, 0, w, h);
-      const img = ctx.getImageData(0, 0, w, h);
-      // One documented copy (§11.6): camera frame → preallocated wasm scan buffer.
-      const ptr = app.scan_buf(img.data.length);
-      mem(ptr, img.data.length).set(img.data);
-      found = app.scan(w, h);
+      try {
+        found = (await detector.detect(video))[0]?.rawValue || '';
+        info = 'native detector';
+      } catch {
+        detector = null; // broken detector: fall back to wasm for good
+      }
     }
+    if (!found && !detector) {
+      const r = wasmScan(video, ctx, frames);
+      found = r.text;
+      info = `wasm ${r.size}`;
+    }
+    frames++;
+    $('scan-status').textContent = `Looking for a code… ${frames} frames · ${info} · ${Math.round(performance.now() - t0)} ms`;
     if (found && /#[iarq]=/.test(found)) {
       scanStop();
       onText(found);
+    } else if (found) {
+      $('scan-status').textContent = 'That QR code is not an Ephem code.';
     }
   }
 }

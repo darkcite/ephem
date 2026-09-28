@@ -43,7 +43,7 @@ function serve() {
   return new Promise((res) => srv.listen(0, '127.0.0.1', () => res(srv)));
 }
 
-/** A Y4M video (for Chrome's fake camera) showing `text` as a QR code. */
+/** A Y4M video (for Chrome's fake camera) showing `text` as a QR code, filmed badly. */
 function qrVideo(text, file) {
   const q = QRCode.create(text, { errorCorrectionLevel: 'M' });
   const n = q.modules.size;
@@ -55,6 +55,17 @@ function qrVideo(text, file) {
   for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
     if (!q.modules.get(r, c)) continue;
     for (let dy = 0; dy < scale; dy++) Y.fill(0, (y0 + r * scale + dy) * W + x0 + c * scale, (y0 + r * scale + dy) * W + x0 + (c + 1) * scale);
+  }
+  // Make it look like a phone filming a screen: blur, lower contrast, light falling off, noise.
+  // (rqrr alone cannot read this; the wasm scanner cleans the frame first.)
+  const src = Buffer.from(Y);
+  let seed = 7;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    let sum = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) sum += src[Math.min(H - 1, Math.max(0, y + dy)) * W + Math.min(W - 1, Math.max(0, x + dx))];
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const v = 60 + ((sum / 9) * 140) / 255; // contrast 60..200
+    Y[y * W + x] = Math.max(0, Math.min(255, v * (0.75 + (0.25 * x) / W) + ((seed >>> 24) - 128) / 8));
   }
   const UV = Buffer.alloc((W / 2) * (H / 2) * 2, 128);
   const frame = Buffer.concat([Buffer.from('FRAME\n'), Y, UV]);
