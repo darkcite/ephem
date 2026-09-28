@@ -2,10 +2,14 @@
 // - Caches only the static app files below; never sees codes (URL fragments are not sent) or messages.
 // - Pins the version: a new sw.js installs and WAITS; the page shows the new build and asks the
 //   user before it is activated (message 'activate').
-// VERSION and FILES are written by tools/stamp.py (run by ./build.sh).
-const VERSION = 'bec3b455e479';
+// - Tor mode (tor.html and the Tor build, §28.2) is cached on first use only: direct users never
+//   download it. It belongs to the same version (the build id covers it).
+// VERSION, FILES and TOR_FILES are written by tools/stamp.py (run by ./build.sh).
+const VERSION = 'd6dcb8896359';
 const FILES = ["./", "index.html", "app.css", "app.js", "slots.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
+const TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm"];
 const CACHE = `ephem-${VERSION}`;
+const TOR_PATHS = new Set(TOR_FILES.map((f) => new URL(f, self.location).pathname));
 
 self.addEventListener('install', (e) => {
   // cache: 'reload' bypasses the HTTP cache so the precache matches this version exactly.
@@ -22,7 +26,14 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
-  e.respondWith((async () => (await (await caches.open(CACHE)).match(req, { ignoreSearch: true })) || fetch(req))());
+  e.respondWith((async () => {
+    const cache = await caches.open(CACHE);
+    const hit = await cache.match(req, { ignoreSearch: true });
+    if (hit) return hit;
+    const res = await fetch(req);
+    if (res.ok && TOR_PATHS.has(new URL(req.url).pathname)) await cache.put(req, res.clone());
+    return res;
+  })());
 });
 
 self.addEventListener('message', (e) => {

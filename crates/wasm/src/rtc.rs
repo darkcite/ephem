@@ -8,7 +8,6 @@ use crate::{Inner, Shared, emit, emit_err, ev, meta, now_ms, on_link, room};
 use core::cell::{Cell, RefCell};
 use ephem_core::{Privacy, State};
 use ephem_proto::ErrorCode;
-use ephem_proto::b64url;
 use ephem_proto::code::{IceParams, MAX_CODE_LEN};
 use ephem_proto::frame::MAX_FRAME;
 use ephem_proto::sdp::MAX_SDP_LEN;
@@ -234,10 +233,10 @@ fn build(inner: &Shared, id: u32, privacy: Privacy, srflx_at: Rc<Cell<f64>>) -> 
             }
             let now = now_ms();
             let Inner { links, meta, inbox, rx, .. } = g;
-            let crate::Link { sess, rtc, id, member, peer, .. } = &mut links[i];
+            let crate::Link { sess, rtc, tor, id, member, peer, .. } = &mut links[i];
             // The single documented RX copy (§11.6): JS ArrayBuffer → preallocated wasm slot.
             view.copy_to(&mut rx[..len]);
-            let mut out = crate::Out { rtc: rtc.as_ref(), meta, inbox, peer, link: *id, member: *member };
+            let mut out = crate::Out { rtc: rtc.as_ref(), tor: tor.as_ref(), meta, inbox, peer, link: *id, member: *member };
             sess.on_frame(now, &mut rx[..len], &mut |e| crate::on_event(&mut out, e));
         });
         // Room records the frame carried (§14), handled with the borrow released.
@@ -272,6 +271,16 @@ fn build(inner: &Shared, id: u32, privacy: Privacy, srflx_at: Rc<Cell<f64>>) -> 
 
 /// Creates the RTCPeerConnection for path `id` and runs offer or answer negotiation.
 pub(crate) fn start(inner: Shared, id: u32, privacy: Privacy, step: Step) {
+    // Transport guard (§28.5): the Tor build never opens a WebRTC connection to a chat peer
+    // (its only RTCPeerConnections are the Snowflake transport's, to Snowflake proxies).
+    if cfg!(feature = "tor") {
+        emit_err(ev::ERROR, ErrorCode::NotPermitted);
+        let mut g = inner.borrow_mut();
+        if let Some(i) = g.find(id) {
+            abort(&mut g, i, ErrorCode::NotPermitted);
+        }
+        return;
+    }
     let srflx_at = Rc::new(Cell::new(0.0));
     let rtc = match build(&inner, id, privacy, srflx_at.clone()) {
         Ok(r) => r,
@@ -390,14 +399,7 @@ async fn negotiate(inner: &Shared, id: u32, pc: &RtcPeerConnection, srflx_at: &C
         // Introduction or T2 inside a room: sealed to the member, relayed by the owner (§14.4).
         room::relay_code(inner, id, &code[..n])?;
     } else {
-        let mut g = inner.borrow_mut();
-        let kind = code[1];
-        let len = b64url::encode(&code[..n], &mut g.scratch[..]).map_err(|_| ErrorCode::InvalidInvite)?;
-        g.meta[meta::MEMBER] = g.links[i].member;
-        let ptr = g.scratch.as_ptr() as u32;
-        drop(g);
-        // Emitted after the borrow ends; the scratch buffer is stable (boxed at start).
-        crate::js_event(ev::CODE, kind as f64, ptr, len as u32);
+        crate::emit_code(inner, i, &code[..n])?;
     }
     if step == Step::Answer {
         let mut g = inner.borrow_mut();

@@ -1,14 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-mode="tor">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-RgwuI3/+I4r7/o6LRVYnvKn4VXWA0QImlXaWpXYofFc='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-GGN/XuPOtY5dvsO1dqnzlUuoZ8dYTEBB9BTOVhlwnzk='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://snowflake-broker.torproject.net; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
 <meta name="ephem-build" content="d6dcb8896359">
-<meta name="ephem-wasm" content="sha384-t/O5m7F1UyNyj301rFUMSOAsok8L6cvPF7j2X5BVS98LT2LUFfcr+EmipdYiQW5f">
+<meta name="ephem-wasm" content="sha384-DwZV+jkgsDYcmqqqzjwk9nBVSXanOSz+8Yau7CmoPUYz6J42H4cC3P/0QWGi9I1T">
 <link rel="stylesheet" href="app.css" integrity="sha384-KZyITPZ3GHGWJGfigtvweOjJ0Q+0JiKzjPh8eCB1I2ZnwRrJ+pWIlL92vZbPl9uM">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-fFtKEcOjwEo8UEsWa/GJVvDZN/A1VZuOr2X0tWsfwiF63mqix/oUNwLqaIfjyOas","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem.js":"sha384-r8mT07dwdnkeemy4TayMbxTJWXhqvwlhL86djGza/r3mvtvOlZCFs0uSfa5dOihI"}}</script>
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-fFtKEcOjwEo8UEsWa/GJVvDZN/A1VZuOr2X0tWsfwiF63mqix/oUNwLqaIfjyOas","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem_tor.js":"sha384-M4tyY0mBl833VbapMf+v9nQgzDfSdXe+xQL7iMgXo2tpjzY9Oswi+M9fizkZ8lIu"}}</script>
 <script type="module" src="app.js" integrity="sha384-fFtKEcOjwEo8UEsWa/GJVvDZN/A1VZuOr2X0tWsfwiF63mqix/oUNwLqaIfjyOas"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
@@ -17,7 +17,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Ephem">
-<title>Ephem</title>
+<title>Ephem · Tor</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">

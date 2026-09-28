@@ -15,6 +15,24 @@
 mod qr;
 mod room;
 mod rtc;
+#[cfg(feature = "tor")]
+mod tor;
+
+/// A chat link's Tor stream (Tor build only, §28): frames with a u16 length prefix.
+#[cfg(feature = "tor")]
+pub(crate) use tor::TorWire;
+/// The direct build has no Tor streams (uninhabited).
+#[cfg(not(feature = "tor"))]
+pub(crate) enum TorWire {}
+#[cfg(not(feature = "tor"))]
+impl TorWire {
+    pub(crate) fn send(&self, _frame: &[u8]) {
+        match *self {}
+    }
+    pub(crate) fn close(&self) {
+        match *self {}
+    }
+}
 
 use core::cell::RefCell;
 use ephem_core::room::{OWNER_IDX, RoomRole};
@@ -88,6 +106,9 @@ pub mod ev {
     pub const ROOM: u32 = 24;
     /// The room is gone for us. num = error code (`E_ROOM_DISPOSED`, `E_NOT_PERMITTED` = removed).
     pub const ROOM_CLOSED: u32 = 25;
+    /// Tor build (§28): num = 1 starting (text = bootstrap status), 2 ready (text = our
+    /// `.onion`), 3 failed (text = reason).
+    pub const TOR: u32 = 26;
 }
 
 /// Byte offsets inside the meta block.
@@ -111,6 +132,18 @@ fn emit(kind: u32, num: f64, bytes: &[u8]) {
 #[inline]
 fn emit_err(kind: u32, e: ErrorCode) {
     emit(kind, e.code() as f64, e.name().as_bytes());
+}
+
+/// CODE for the UI: `code` (of link `i`) as base64url in the scratch buffer; num = its kind.
+pub(crate) fn emit_code(inner: &Shared, i: usize, code: &[u8]) -> Result<(), ErrorCode> {
+    let mut g = inner.borrow_mut();
+    let len = b64url::encode(code, &mut g.scratch[..]).map_err(|_| ErrorCode::InvalidInvite)?;
+    g.meta[meta::MEMBER] = g.links[i].member;
+    let ptr = g.scratch.as_ptr() as u32;
+    drop(g);
+    // Emitted after the borrow ends; the scratch buffer is stable (boxed at start).
+    js_event(ev::CODE, code[1] as f64, ptr, len as u32);
+    Ok(())
 }
 
 #[inline(always)]
@@ -147,6 +180,8 @@ pub(crate) struct Link {
     pub(crate) member: u8,
     pub(crate) sess: Box<Session>,
     pub(crate) rtc: Option<rtc::Rtc>,
+    /// Tor mode: the link's Tor stream instead of an RTCPeerConnection.
+    pub(crate) tor: Option<TorWire>,
     /// Codes of this link go to the peer sealed through the room owner (§14.4), not to the UI.
     pub(crate) via_owner: bool,
     /// Last automatic T2 attempt (ms).
@@ -180,6 +215,9 @@ pub(crate) struct Inner {
     meta: Box<[u8; meta::LEN]>,
     /// RGBA camera frame for the QR scanner; sized on first use (setup path).
     scan: Vec<u8>,
+    /// Tor build: arti and our onion service (§28).
+    #[cfg(feature = "tor")]
+    tor: tor::TorState,
 }
 
 pub(crate) type Shared = Rc<RefCell<Inner>>;
@@ -189,8 +227,8 @@ pub(crate) type Shared = Rc<RefCell<Inner>>;
 macro_rules! on_link {
     ($g:expr, $i:expr, |$s:ident, $k:ident, $text:ident| $body:expr) => {{
         let $crate::Inner { links, meta, inbox, text: $text, .. } = &mut *$g;
-        let $crate::Link { sess: $s, rtc, id, member, peer, .. } = &mut links[$i];
-        let mut out = $crate::Out { rtc: rtc.as_ref(), meta: &mut **meta, inbox, peer, link: *id, member: *member };
+        let $crate::Link { sess: $s, rtc, tor, id, member, peer, .. } = &mut links[$i];
+        let mut out = $crate::Out { rtc: rtc.as_ref(), tor: tor.as_ref(), meta: &mut **meta, inbox, peer, link: *id, member: *member };
         let mut $k = |e: ephem_core::Event<'_>| $crate::on_event(&mut out, e);
         let _ = &$text;
         $body
@@ -216,7 +254,7 @@ impl Inner {
 
     pub(crate) fn add_link(&mut self, member: u8, sess: Session, via_owner: bool) -> u32 {
         let id = self.next_id();
-        self.links.push(Link { id, member, sess: Box::new(sess), rtc: None, via_owner, t2_at: 0, synced: 0, peer: PeerInfo::default() });
+        self.links.push(Link { id, member, sess: Box::new(sess), rtc: None, tor: None, via_owner, t2_at: 0, synced: 0, peer: PeerInfo::default() });
         id
     }
 
@@ -224,6 +262,9 @@ impl Inner {
     pub(crate) fn new_path(&mut self, i: usize) -> u32 {
         if let Some(r) = self.links[i].rtc.take() {
             r.close();
+        }
+        if let Some(t) = self.links[i].tor.take() {
+            t.close();
         }
         let id = self.next_id();
         self.links[i].id = id;
@@ -237,6 +278,9 @@ impl Inner {
         let l = self.links.remove(i);
         if let Some(r) = l.rtc {
             r.close();
+        }
+        if let Some(t) = l.tor {
+            t.close();
         }
     }
 
@@ -277,6 +321,7 @@ impl Inner {
 /// Where a link's core events go: the DataChannel, JS, and the room inbox.
 pub(crate) struct Out<'a> {
     pub(crate) rtc: Option<&'a rtc::Rtc>,
+    pub(crate) tor: Option<&'a TorWire>,
     pub(crate) meta: &'a mut [u8; meta::LEN],
     pub(crate) inbox: &'a mut Vec<(u32, u8, Vec<u8>)>,
     pub(crate) peer: &'a mut PeerInfo,
@@ -288,7 +333,9 @@ pub(crate) fn on_event(o: &mut Out<'_>, e: Event<'_>) {
     o.meta[meta::MEMBER] = o.member;
     match e {
         Event::Send(frame) => {
-            if let Some(r) = o.rtc {
+            if let Some(t) = o.tor {
+                t.send(frame);
+            } else if let Some(r) = o.rtc {
                 r.send(frame);
             }
         }
@@ -404,6 +451,39 @@ pub struct App {
     inner: Shared,
 }
 
+/// Tor build only (tor.html, §28).
+#[cfg(feature = "tor")]
+#[wasm_bindgen]
+impl App {
+    /// Starts arti over Snowflake, then hosts our onion service (key from the identity seed).
+    /// Progress arrives as TOR events. `ice`: comma-separated `stun:` URLs; `nat`: the broker's
+    /// NAT hint (empty = "unknown"); `network_toml`: empty for the real Tor network.
+    pub fn tor_start(&self, broker: &str, fingerprint: &str, ice: &str, nat: &str, network_toml: &str) -> u32 {
+        let sf = ephem_tor::web::Snowflake {
+            broker: broker.to_owned(),
+            fingerprint: fingerprint.to_owned(),
+            ice: ice.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect(),
+            nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
+        };
+        status(tor::start(&self.inner, sf, network_toml))
+    }
+
+    /// Bootstrap status line (empty before `tor_start`).
+    pub fn tor_status(&self) -> String {
+        tor::status(&self.inner.borrow())
+    }
+
+    /// Our `.onion` address (empty until the service is up).
+    pub fn onion(&self) -> String {
+        self.inner.borrow().tor.onion.clone()
+    }
+
+    /// arti logs to the console at `level` (`"info"`, `"debug"`, …; diagnostics only).
+    pub fn tor_log(&self, level: &str) {
+        ephem_tor::web::tor_log(level);
+    }
+}
+
 #[wasm_bindgen]
 impl App {
     /// Starts with a fresh temporary identity (§7.2 default).
@@ -423,6 +503,8 @@ impl App {
                 scratch: Box::new([0; 1024]),
                 meta: Box::new([0; meta::LEN]),
                 scan: Vec::new(),
+                #[cfg(feature = "tor")]
+                tor: tor::TorState::default(),
             })),
         }
     }
@@ -665,6 +747,13 @@ impl App {
         self.invite(ttl_s, flags::TRANSFER);
     }
 
+    /// Tor build: a TOR_INVITE to our onion service (§28.4); identity transfer is direct-only.
+    #[cfg(feature = "tor")]
+    fn invite(&self, ttl_s: u32, extra: u8) {
+        status(if extra == 0 { tor::invite(&self.inner, ttl_s) } else { Err(ErrorCode::NotPermitted) });
+    }
+
+    #[cfg(not(feature = "tor"))]
     fn invite(&self, ttl_s: u32, extra: u8) {
         let now_s = (now_ms() / 1000) as u32;
         let (inv, room) = ids();
@@ -697,6 +786,10 @@ impl App {
 
     /// T3: a reconnect code for the 1:1 chat or for the link to the room owner (§13). Emits CODE(3).
     pub fn create_resume(&self, ttl_s: u32) -> u32 {
+        // Tor mode has no reconnect codes: the dialer redials the onion (§28.5).
+        if cfg!(feature = "tor") {
+            return status(Err(ErrorCode::NotPermitted));
+        }
         let now_s = (now_ms() / 1000) as u32;
         let (inv, _) = ids();
         let res = {
@@ -741,6 +834,10 @@ impl App {
         let code = &bin[..n];
         let now_s = (now_ms() / 1000) as u32;
         let c = Code::decode(code)?;
+        // Modes never mix (§28.2): the Tor build takes only Tor invites, the direct build none.
+        if (c.kind == Kind::TorInvite) != cfg!(feature = "tor") {
+            return Err(if cfg!(feature = "tor") { ErrorCode::NotPermitted } else { ErrorCode::TorUnavailable });
+        }
         match c.kind {
             Kind::Invite => {
                 let group = c.flags & flags::GROUP != 0;
@@ -778,8 +875,11 @@ impl App {
                 };
                 rtc::start(self.inner.clone(), id, privacy, rtc::Step::Answer);
             }
-            // A Tor invite needs a Tor session (tor.html, §28.2); modes never mix.
-            Kind::TorInvite => return Err(ErrorCode::TorUnavailable),
+            Kind::TorInvite =>
+            {
+                #[cfg(feature = "tor")]
+                tor::join(&self.inner, code, now_s, scanned)?
+            }
             Kind::Answer | Kind::ResumeAnswer => {
                 let id = {
                     let mut g = self.inner.borrow_mut();
@@ -985,8 +1085,13 @@ impl App {
         let now = now_ms();
         for i in 0..g.links.len() {
             if (member && g.links[i].via_owner) || (!member && Some(i) == g.primary()) {
-                g.new_path(i);
+                let _lid = g.new_path(i);
                 on_link!(g, i, |s, k, _t| s.path_lost(now, ErrorCode::IceFailed, &mut k));
+                // Tor: the side that dialled dials again (§28.5); the other side waits.
+                #[cfg(feature = "tor")]
+                if g.links[i].sess.role() == ephem_core::Role::Answerer {
+                    tor::dial(&self.inner, _lid);
+                }
             }
         }
     }
@@ -1034,7 +1139,7 @@ impl Default for App {
 fn extract_payload(s: &str) -> &str {
     let s = s.trim();
     let s = s.rsplit_once('#').map_or(s, |(_, f)| f);
-    for k in ["i=", "a=", "r=", "q="] {
+    for k in ["i=", "a=", "r=", "q=", "t="] {
         if let Some(rest) = s.strip_prefix(k) {
             return rest;
         }

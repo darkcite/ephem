@@ -8,6 +8,11 @@ license.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# The JS API of the lab page (TorNet, TorStream). The Ephem app build uses the Rust API only.
+default = ["js-api"]
+js-api = []
+
 [dependencies]
 ephem-snowflake = { path = "../snowflake" }
 arti-client = { version = "0.46", default-features = false, features = ["onion-service-client", "onion-service-service", "ephemeral-keystore", "bridge-client", "keymgr", "experimental-api"] }

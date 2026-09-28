@@ -1,12 +1,25 @@
 // Ephem UI glue. Rust (pkg/ephem_bg.wasm) owns every piece of protocol and chat state; this file
 // renders the DOM and forwards input. Event contract: crates/wasm/src/lib.rs `ev` / `meta`.
 // Re-entrancy rule: an ephemEvent handler never calls into `app` synchronously (use `later`).
-import init, { App, qr_svg_path } from './pkg/ephem.js';
+// Tor mode (§28): tor.html (html data-mode="tor") loads the Tor build, pkg/ephem_tor*, instead;
+// the direct page never downloads it.
 import * as slots from './slots.js';
+
+const TOR = document.documentElement.dataset.mode === 'tor';
+// Tor mode: the Snowflake rendezvous and bridge built into the app (as in Tor Browser, §28.3).
+// Its STUN servers serve only the Snowflake proxy connections, never a chat peer (§28.5).
+const SNOWFLAKE = {
+  broker: 'https://snowflake-broker.torproject.net/',
+  fingerprint: '2B280B23E1107BB62ABFC40DDCC8824814F80A72',
+  ice: 'stun:stun.l.google.com:19302,stun:stun.antisip.com:3478,stun:stun.bluesip.net:3478,stun:stun.dus.net:3478,stun:stun.epygi.com:3478,stun:stun.sonetel.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.voys.nl:3478',
+  nat: '',
+  network: '', // empty: the real Tor network
+};
+let App, qr_svg_path;
 
 const EV = { CODE: 1, CONNECTED: 2, HELLO: 3, CHAT: 4, DELIVERED: 5, DEGRADED: 6, ALIVE: 7, PEER_HIDDEN: 8, CLOSED: 9, ERROR: 10,
   PROGRESS: 11, PATH: 12, SETTING: 13, EDITED: 14, DELETED: 15, EXPIRED: 16, READ: 17, TYPING: 18, SUSPENDED: 19,
-  REACTION: 20, PEER_READY: 21, IDENTITY_SENT: 22, IDENTITY_RECEIVED: 23, ROOM: 24, ROOM_CLOSED: 25 };
+  REACTION: 20, PEER_READY: 21, IDENTITY_SENT: 22, IDENTITY_RECEIVED: 23, ROOM: 24, ROOM_CLOSED: 25, TOR: 26 };
 // Meta block offsets (crates/wasm/src/lib.rs `meta`).
 const META = { TTL: 0, HAS_REPLY: 4, SENDER: 5, REPLY_SEQ: 8, RESUMED: 0, MEMBER: 16, LEN: 24 };
 const PENDING = 0xff;           // member index of a joiner the owner has not admitted yet
@@ -17,13 +30,13 @@ const FLAG_GROUP = 2;
 const FLAG_TRANSFER = 4;
 const FLAG_OBSERVER = 8;
 const ST = { NONE: 0, GATHERING: 1, AWAITING: 2, CONNECTING: 3, CONNECTED: 4, CLOSED: 5, SUSPENDED: 6 };
-const FRAG = { 1: 'i', 2: 'a', 3: 'r', 4: 'q' };
+const FRAG = { 1: 'i', 2: 'a', 3: 'r', 4: 'q', 5: 't' };
 const TTL_LABEL = { 5: '5 seconds', 30: '30 seconds', 60: '1 minute', 300: '5 minutes', 3600: '1 hour', 86400: '1 day' };
 const TTL_SHORT = { 5: '5s', 30: '30s', 60: '1m', 300: '5m', 3600: '1h', 86400: '1d' };
 // ErrorCode values (§19) for negative return values.
 const ERR = { 0x11: 'E_ROOM_FULL', 0x12: 'E_ROOM_DISPOSED', 0x13: 'E_NOT_OWNER', 0x23: 'E_DUPLICATE_SESSION', 0x24: 'E_NOT_A_CONTACT', 0x01: 'E_INVALID_INVITE', 0x02: 'E_EXPIRED_INVITE', 0x03: 'E_INVITE_CONSUMED', 0x04: 'E_ANSWER_MISMATCH', 0x10: 'E_INVALID_ROOM',
   0x20: 'E_AUTH_FAILED', 0x21: 'E_CRYPTO_FAILED', 0x22: 'E_SAS_REJECTED', 0x30: 'E_ICE_FAILED', 0x31: 'E_NO_DIRECT_PATH', 0x32: 'E_RELAY_REJECTED',
-  0x35: 'E_PEER_OFFLINE', 0x40: 'E_PROTOCOL_MISMATCH', 0x41: 'E_MESSAGE_TOO_LARGE', 0x42: 'E_BACKPRESSURE', 0x43: 'E_NOT_PERMITTED', 0x60: 'E_KEYFILE_INVALID' };
+  0x35: 'E_PEER_OFFLINE', 0x36: 'E_TOR_UNAVAILABLE', 0x40: 'E_PROTOCOL_MISMATCH', 0x41: 'E_MESSAGE_TOO_LARGE', 0x42: 'E_BACKPRESSURE', 0x43: 'E_NOT_PERMITTED', 0x60: 'E_KEYFILE_INVALID' };
 const MESSAGES = {
   E_INVALID_INVITE: 'This is not a valid Ephem code. Copy the whole link again.',
   E_EXPIRED_INVITE: 'This code has expired. Ask for a new one.',
@@ -36,6 +49,7 @@ const MESSAGES = {
   E_SAS_REJECTED: 'You reported that the safety codes differ. The chat was closed: the exchange may have been intercepted.',
   E_NO_DIRECT_PATH: 'No direct path between you and your peer. Ephem never uses a relay. Common causes: a VPN such as WARP, or strict NATs on both sides. Try another network (e.g. mobile data), or LAN only on the same Wi-Fi.',
   E_ICE_FAILED: 'The direct connection was lost.',
+  E_TOR_UNAVAILABLE: 'Tor is not reachable from here (the Snowflake broker may be blocked on this network). Tor mode never falls back to a direct connection.',
   E_RELAY_REJECTED: 'The connection went through a relay, which Ephem does not allow. The chat was closed.',
   E_PEER_OFFLINE: 'Your peer left the chat. Nothing was stored.',
   E_MESSAGE_TOO_LARGE: 'Message too long (max 4096 bytes).',
@@ -64,6 +78,7 @@ let readSent = 0;
 let typingTimer = 0;
 let scanStop = null;
 let pathText = '';
+let torReady = false;
 let lockRelease = null;        // releases the Web Lock of the saved identity in use (§7.2)
 let updateWorker = null;
 let transferring = null;       // identity transfer (§7.6): 'receiver' (new device) | 'sender' (old device)
@@ -349,8 +364,8 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
         showRoomInvite(code);
         break;
       }
-      codeExpires = num === 1 || num === 3 ? Date.now() + Number($('s-ttl').value) * 1000 : 0;
-      if (num <= 2) showCode(num, code);
+      codeExpires = num === 1 || num === 3 || num === 5 ? Date.now() + Number($('s-ttl').value) * 1000 : 0;
+      if (num <= 2 || num === 5) showCode(num, code);
       else showResumeCode(num, code);
       later(renderExposure);
       break;
@@ -373,7 +388,7 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       codeExpires = 0;
       if (resumed) {
         $('resume').hidden = true;
-        sysLine('Reconnected directly. Pending messages are being delivered.');
+        sysLine(`Reconnected ${TOR ? 'through Tor' : 'directly'}. Pending messages are being delivered.`);
         break;
       }
       const d = String(num).padStart(6, '0');
@@ -398,7 +413,9 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       $('sas').classList.remove('optional');
       $('verified').textContent = 'unverified';
       $('verified').className = 'pill';
-      openChat(room ? 'Connected to the room owner. The member list arrives next.' : 'Connected directly. Messages are end-to-end encrypted and exist only in these two tabs.');
+      openChat(room ? 'Connected to the room owner. The member list arrives next.'
+        : TOR ? 'Connected through Tor: neither of you sees the other\'s IP address. Messages are end-to-end encrypted and exist only in these two tabs.'
+          : 'Connected directly. Messages are end-to-end encrypted and exist only in these two tabs.');
       break;
     }
     case EV.HELLO: {
@@ -513,7 +530,10 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       }
       status('disconnected', 'bad');
       $('peer-state').textContent = room ? 'owner unreachable' : '';
-      if (chatOpen) {
+      if (TOR) {
+        // No reconnect codes over Tor: whoever dialled dials the onion again (§28.5).
+        if (chatOpen) sysLine('The Tor connection dropped. Reconnecting through Tor…');
+      } else if (chatOpen) {
         $('resume').hidden = false;
         $('resume').querySelector('.codebox').hidden = true;
         sysLine(room ? 'Direct path to the room owner lost. Share a reconnect code with the owner to continue.' : 'Direct path lost. Share a reconnect code to continue.');
@@ -540,17 +560,32 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
     case EV.ERROR:
       error(text(ptr, len));
       break;
+    case EV.TOR: {
+      const t = text(ptr, len);
+      if (num === 2) {
+        torReady = true;
+        $('tor-state').textContent = `Reachable through Tor while this tab is open (${t.slice(0, 8)}….onion).`;
+        if (!$('v-start').hidden) status('Tor ready', 'ok');
+      } else if (num === 3) {
+        $('tor-state').textContent = `Tor failed: ${t}`;
+        status('Tor failed', 'bad');
+        error('E_TOR_UNAVAILABLE');
+      }
+      break;
+    }
   }
 };
 
 // ---- views ---------------------------------------------------------------------------------
 function showCode(kind, code) {
-  $('code-title').textContent = transferring === 'receiver' ? 'Receive an identity' : kind === 1 ? 'Your invite' : 'Your answer';
+  $('code-title').textContent = transferring === 'receiver' ? 'Receive an identity' : kind === 1 || kind === 5 ? 'Your invite' : 'Your answer';
   $('code-help').textContent = transferring === 'receiver'
     ? 'On the old device, sign in with the identity you want to move, then scan this code (or open the link) and send back the answer.'
     : transferring === 'sender'
       ? 'Show this answer to the new device (QR or link). Both devices then show a safety code to compare.'
-      : kind === 1
+      : kind === 5
+        ? 'Let your peer scan this QR code, or send them the link (they open it in Tor mode). It works once, and no answer is needed: keep this tab open until they connect through Tor.'
+        : kind === 1
         ? 'Let your peer scan this QR code, or send them the link. It works once.'
         : 'Send this answer back to the person who invited you (QR or link). The chat opens as soon as they apply it.';
   renderCodeBox(document.querySelector('#v-code .codebox'), kind, code);
@@ -724,6 +759,7 @@ function ended(name) {
   $('log').replaceChildren();
   $('note-title').textContent = wasChat ? (wasRoom ? 'Room closed' : 'Chat ended') : 'Could not connect';
   $('note-text').textContent = MESSAGES[name] || name;
+  $('b-again').textContent = 'Start over';
   $('b-again').hidden = false;
   show('v-note');
 }
@@ -746,7 +782,7 @@ function reset() {
     box.querySelector('.link').value = '';
     box.querySelector('.qr').replaceChildren();
   }
-  status('ready');
+  status(TOR && !torReady ? 'starting Tor' : 'ready');
   renderIdentity();
   show('v-start');
 }
@@ -926,6 +962,14 @@ function applyCode(raw, scanned) {
   if ((info & 0xff) === 1) {
     room = group ? { owner: false, role: (info >> 8) & FLAG_OBSERVER ? 2 : 1, confirmed: false } : null;
     myIdx = 1;
+  } else if ((info & 0xff) === 5) {
+    room = null;
+    myIdx = 1;
+    status('connecting via Tor');
+    $('note-title').textContent = 'Connecting through Tor…';
+    $('note-text').textContent = 'Reaching your peer\'s onion service. This usually takes 10–60 seconds; their tab must be open.';
+    $('b-again').textContent = 'Cancel';
+    show('v-note');
   }
 }
 
@@ -1156,7 +1200,7 @@ const bc = 'BroadcastChannel' in globalThis ? new BroadcastChannel('p2pchat-code
 
 function takeFragment() {
   const h = location.hash;
-  if (!/^#[iarq]=/.test(h)) return null;
+  if (!/^#[iarqt]=/.test(h)) return null;
   history.replaceState(null, '', location.pathname);
   return h;
 }
@@ -1220,6 +1264,15 @@ function applyUpdate() {
   updateWorker?.postMessage('activate');
 }
 
+// ---- Tor mode (§28) --------------------------------------------------------------------------
+// Test hook: the offline lab (checks/tor-lab) sets `ephemTorLab` before the page loads (its own
+// broker, bridge and Tor network). A page script cannot set it: the CSP allows only our files.
+function startTor() {
+  const c = globalThis.ephemTorLab || SNOWFLAKE;
+  if (globalThis.ephemTorLab?.log) app.tor_log(globalThis.ephemTorLab.log);
+  app.tor_start(c.broker, c.fingerprint, c.ice, c.nat, c.network);
+}
+
 // ---- boot ----------------------------------------------------------------------------------
 const io = new IntersectionObserver((entries) => {
   for (const e of entries) {
@@ -1231,13 +1284,22 @@ const io = new IntersectionObserver((entries) => {
 }, { threshold: 0.6 });
 
 async function main() {
+  // A Tor invite opens in Tor mode, every other code in direct mode (modes never mix, §28.2).
+  if (location.hash.startsWith('#t=') !== TOR && /^#[iarqt]=/.test(location.hash)) {
+    location.replace((TOR ? './' : 'tor.html') + location.hash);
+    return;
+  }
   const frag = takeFragment();
-  // The wasm module is fetched with the SHA-384 pinned in index.html (§17.2).
+  const mod = await import(TOR ? './pkg/ephem_tor.js' : './pkg/ephem.js');
+  ({ App, qr_svg_path } = mod);
+  // The wasm module is fetched with the SHA-384 pinned in the page (§17.2).
   const wasmSri = document.querySelector('meta[name="ephem-wasm"]')?.content;
-  wasm = await init({ module_or_path: fetch(new URL('./pkg/ephem_bg.wasm', import.meta.url), wasmSri ? { integrity: wasmSri } : {}) });
+  const wasmUrl = new URL(TOR ? './pkg/ephem_tor_bg.wasm' : './pkg/ephem_bg.wasm', import.meta.url);
+  wasm = await mod.default({ module_or_path: fetch(wasmUrl, wasmSri ? { integrity: wasmSri } : {}) });
   app = new App();
   metaPtr = app.meta_ptr();
   renderIdentity();
+  if (TOR) startTor();
 
   const codeBoxes = document.querySelectorAll('.codebox');
   for (const box of codeBoxes) {
@@ -1365,6 +1427,10 @@ async function main() {
   setInterval(() => {
     app.tick(document.hidden);
     if (!$('diag').hidden) $('diag-core').textContent = app.diag();
+    if (TOR && !torReady && !$('v-start').hidden) {
+      const t = app.tor_status();
+      if (t) $('tor-state').textContent = `Connecting to Tor through Snowflake: ${t}`;
+    }
     const s = codeExpires ? Math.max(0, Math.round((codeExpires - Date.now()) / 1000)) : -1;
     $('expiry').textContent = s >= 0 && !$('v-code').hidden ? `Code expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : '';
   }, 1000);
@@ -1375,10 +1441,10 @@ async function main() {
   if (build) $('build').textContent = `Build ${build}.`;
   registerWorker();
 
-  status('ready');
+  status(TOR ? 'starting Tor' : 'ready');
   show('v-start');
   if (!frag) return;
-  if (frag.startsWith('#i=')) return applyCode(frag, false);
+  if (frag.startsWith('#i=') || frag.startsWith('#t=')) return applyCode(frag, false);
   if (await forward(frag)) {
     $('note-title').textContent = 'Code delivered';
     $('note-text').textContent = 'The code was passed to your open Ephem tab. You can close this tab.';

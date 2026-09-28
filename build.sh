@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Ephem web app into app/pkg/ (committed, served by GitHub Pages).
+# Builds the Ephem web app into app/pkg/ (committed, served by GitHub Pages), and app/tor.html.
 # Needs: rustup target wasm32-unknown-unknown, wasm-bindgen-cli matching crates/wasm (=0.2.129).
 # Optional: wasm-opt (binaryen) shrinks the module further.
 set -euo pipefail
@@ -12,12 +12,18 @@ if [[ "$have" != "$want" ]]; then
   exit 1
 fi
 
-cargo build --release --locked --target wasm32-unknown-unknown -p ephem-wasm
+# Two builds of the same adapter (§28.2): direct (index.html) and Tor (tor.html, cargo feature
+# `tor`: arti + Snowflake inside). The direct page never downloads the Tor build.
 rm -rf app/pkg
-wasm-bindgen --target web --no-typescript --out-dir app/pkg --out-name ephem \
-  target/wasm32-unknown-unknown/release/ephem_wasm.wasm
-if command -v wasm-opt >/dev/null; then
-  wasm-opt -Os --enable-bulk-memory --enable-nontrapping-float-to-int -o app/pkg/ephem_bg.wasm app/pkg/ephem_bg.wasm
-fi
+for variant in ephem:"" ephem_tor:"--features tor"; do
+  name=${variant%%:*}
+  # shellcheck disable=SC2086
+  cargo build --release --locked --target wasm32-unknown-unknown -p ephem-wasm ${variant#*:}
+  wasm-bindgen --target web --no-typescript --out-dir app/pkg --out-name "$name" \
+    target/wasm32-unknown-unknown/release/ephem_wasm.wasm
+  if command -v wasm-opt >/dev/null; then
+    wasm-opt -Os --enable-bulk-memory --enable-nontrapping-float-to-int -o "app/pkg/${name}_bg.wasm" "app/pkg/${name}_bg.wasm"
+  fi
+done
 python3 tools/stamp.py
 ls -l app/pkg

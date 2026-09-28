@@ -1,10 +1,9 @@
 //! `tor_bg.wasm`: arti in the page, reaching Tor only through Snowflake.
 //!
-//! JS API (setup path; allocations are fine here): [`TorNet::new`] with the Snowflake broker,
-//! bridge fingerprint and STUN list (and, in the offline lab, the private network's TOML);
-//! [`TorNet::bootstrap`]; [`TorNet::connect`] to `onion:port`; [`TorNet::host`] an onion
-//! service with a given key and [`TorNet::accept`] its incoming streams. A [`TorStream`] reads
-//! and writes independently (a pending read never blocks a write).
+//! [`Tor`] is the Rust handle (used by the Ephem app build, `crates/wasm` feature `tor`):
+//! bootstrap, dial `onion:port`, host an onion service with a given key, accept its streams.
+//! With the `js-api` feature, [`TorNet`] / [`TorStream`] expose the same to JS (lab page).
+//! Setup path throughout: allocations are fine here.
 
 mod carrier;
 mod rt;
@@ -13,30 +12,33 @@ use crate::config;
 use crate::net::BridgeNet;
 use crate::tls::TorTls;
 use arti_client::config::onion_service::OnionServiceConfigBuilder;
-use arti_client::{DataStream, TorClient};
+use arti_client::TorClient;
 use futures::StreamExt;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use tor_hscrypto::pk::{HsId, HsIdKeypair};
 use tor_hsservice::RunningOnionService;
 use tor_llcrypto::pk::ed25519;
-use tor_proto::client::stream::{DataReader, DataWriter};
 use carrier::{SnowflakeParams, WarmPool, WebDialer};
-use futures::{AsyncReadExt, AsyncWriteExt};
 use rt::WebTask;
 use std::rc::Rc;
 use std::sync::Arc;
 use tor_rtcompat::{CompoundRuntime, RealCoarseTimeProvider};
-use wasm_bindgen::prelude::*;
 
 pub type Runtime = CompoundRuntime<WebTask, WebTask, RealCoarseTimeProvider, BridgeNet, BridgeNet, TorTls, BridgeNet>;
 
-fn err(e: impl std::fmt::Display) -> JsValue {
-    JsValue::from_str(&e.to_string())
+pub use arti_client::DataStream;
+pub use carrier::SnowflakeParams as Snowflake;
+pub use rt::sleep_ms;
+pub use tor_proto::client::stream::{DataReader, DataWriter};
+
+/// `"<56 base32 chars>.onion"` of an onion service key.
+pub fn onion_address(pk: &[u8; 32]) -> String {
+    safelog::DisplayRedacted::display_unredacted(&HsId::from(*pk)).to_string()
 }
 
 /// Logs to the browser console (no timestamps: `SystemTime::now` is unavailable in wasm).
-#[wasm_bindgen]
+#[cfg_attr(feature = "js-api", wasm_bindgen::prelude::wasm_bindgen)]
 pub fn tor_log(level: &str) {
     struct Console;
     impl std::io::Write for Console {
@@ -52,46 +54,33 @@ pub fn tor_log(level: &str) {
     let _ = tracing_subscriber::fmt().with_max_level(level).without_time().with_ansi(false).with_writer(|| Console).try_init();
 }
 
-#[wasm_bindgen]
-pub struct TorNet {
+/// arti in the page (single-threaded; share it with `Rc`).
+pub struct Tor {
     client: Arc<TorClient<Runtime>>,
     pool: WarmPool,
-    /// Running onion services (kept alive) and their accepted, not yet taken, streams.
-    services: Rc<RefCell<Vec<Arc<RunningOnionService>>>>,
+    /// The running onion service (kept alive) and its accepted, not yet taken, streams.
+    services: RefCell<Vec<Arc<RunningOnionService>>>,
     incoming: Rc<RefCell<VecDeque<DataStream>>>,
 }
 
-#[wasm_bindgen]
-impl TorNet {
-    /// `ice`: comma-separated `stun:` URLs for the proxy connections. `nat`: the broker hint
-    /// (empty = "unknown"). `network_toml`: empty for the real Tor network; the lab passes its
-    /// private network.
-    #[wasm_bindgen(constructor)]
-    pub fn new(broker: &str, bridge_fp: &str, ice: &str, nat: &str, network_toml: &str) -> Result<TorNet, JsValue> {
-        let params = SnowflakeParams {
-            broker: broker.to_owned(),
-            fingerprint: bridge_fp.to_owned(),
-            ice: ice.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect(),
-            nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
-        };
-        let pool = WarmPool::start(params);
+impl Tor {
+    /// `network_toml`: empty for the real Tor network; the lab passes its private network.
+    pub fn new(sf: SnowflakeParams, network_toml: &str) -> Result<Tor, String> {
+        let fp = sf.fingerprint.clone();
+        let pool = WarmPool::start(sf);
         let net = BridgeNet::new(Arc::new(WebDialer { pool: pool.clone() }));
         let rt: Runtime = CompoundRuntime::new(WebTask::default(), WebTask::default(), RealCoarseTimeProvider::new(), net.clone(), net.clone(), TorTls::default(), net);
-        let cfg = config::build(bridge_fp, network_toml, "/ephem").map_err(err)?;
-        let client = TorClient::with_runtime(rt).config(cfg).create_unbootstrapped().map_err(err)?;
-        Ok(TorNet { client, pool, services: Rc::default(), incoming: Rc::default() })
+        let cfg = config::build(&fp, network_toml, "/ephem")?;
+        let client = TorClient::with_runtime(rt).config(cfg).create_unbootstrapped().map_err(|e| e.to_string())?;
+        Ok(Tor { client, pool, services: RefCell::default(), incoming: Rc::default() })
     }
 
-    /// Resolves when the directory is ready (the bridge descriptor may still follow; connects
-    /// retry until it is there). Waits first for a Snowflake proxy, so arti's first bridge
-    /// connection does not time out (which would mark the bridge down for minutes).
-    pub fn bootstrap(&self) -> js_sys::Promise {
-        let (c, pool) = (self.client.clone(), self.pool.clone());
-        wasm_bindgen_futures::future_to_promise(async move {
-            pool.ready(90_000.0).await.map_err(err)?;
-            c.bootstrap().await.map_err(err)?;
-            Ok(JsValue::UNDEFINED)
-        })
+    /// Directory ready (the bridge descriptor may still follow; connects retry until it is
+    /// there). Waits first for a Snowflake proxy, so arti's first bridge connection does not
+    /// time out (which would mark the bridge down for minutes).
+    pub async fn bootstrap(&self) -> Result<(), String> {
+        self.pool.ready(90_000.0).await?;
+        self.client.bootstrap().await.map_err(|e| e.to_string())
     }
 
     /// Bootstrap progress for the UI, e.g. "45%: connecting successfully; …".
@@ -99,30 +88,34 @@ impl TorNet {
         self.client.bootstrap_status().to_string()
     }
 
-    /// Opens a stream to `host:port` (an onion address in Ephem).
-    pub fn connect(&self, host: String, port: u16) -> js_sys::Promise {
-        let c = self.client.clone();
-        wasm_bindgen_futures::future_to_promise(async move {
-            let s = c.connect((host.as_str(), port)).await.map_err(err)?;
-            Ok(TorStream::new(s).into())
-        })
+    /// Whether circuits can be built now.
+    pub fn ready(&self) -> bool {
+        self.client.bootstrap_status().ready_for_traffic()
     }
 
-    /// Hosts an onion service whose identity is the Ed25519 key `secret` (32 bytes; Ephem
-    /// derives it from the identity seed, §7.1, so a saved identity keeps its address).
-    /// Returns `"<56 chars>.onion"`. Every stream to any port is accepted; take them with
-    /// [`Self::accept`]. The service stays up while this `TorNet` lives.
-    pub fn host(&self, nickname: &str, secret: &[u8]) -> Result<String, JsValue> {
-        let sk: [u8; 32] = secret.try_into().map_err(|_| err("onion key must be 32 bytes"))?;
-        let kp = ed25519::Keypair::from_bytes(&sk);
+    /// A stream to `host:port` (an onion address in Ephem).
+    pub async fn connect(&self, host: &str, port: u16) -> Result<DataStream, String> {
+        self.client.connect((host, port)).await.map_err(|e| e.to_string())
+    }
+
+    /// Hosts an onion service whose identity is the Ed25519 key `secret` (Ephem derives it from
+    /// the identity seed, §7.1). Returns `"<56 chars>.onion"`. Every stream to any port is
+    /// accepted; take them with [`Self::accept`]. It replaces the service hosted before (the
+    /// tab's identity changed); `nickname` must differ from that one's.
+    pub fn host(&self, nickname: &str, secret: &[u8; 32]) -> Result<String, String> {
+        let kp = ed25519::Keypair::from_bytes(secret);
         let hsid: HsId = tor_hscrypto::pk::HsIdKey::from(*ed25519::ExpandedKeypair::from(&kp).public()).id();
-        let cfg = OnionServiceConfigBuilder::default().nickname(nickname.parse().map_err(err)?).build().map_err(err)?;
+        let cfg = OnionServiceConfigBuilder::default()
+            .nickname(nickname.parse().map_err(|e: tor_hsservice::InvalidNickname| e.to_string())?)
+            .build()
+            .map_err(|e| e.to_string())?;
         let (svc, rend) = self
             .client
             .launch_onion_service_with_hsid(cfg, HsIdKeypair::from(ed25519::ExpandedKeypair::from(&kp)))
-            .map_err(err)?
-            .ok_or_else(|| err("onion services are disabled"))?;
-        self.services.borrow_mut().push(svc);
+            .map_err(|e| e.to_string())?
+            .ok_or("onion services are disabled")?;
+        // Dropping the previous service shuts it down (and ends its stream of requests).
+        *self.services.borrow_mut() = vec![svc];
         let incoming = self.incoming.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let mut streams = tor_hsservice::handle_rend_requests(rend);
@@ -137,53 +130,113 @@ impl TorNet {
     }
 
     /// The next incoming stream of the hosted onion services.
-    pub fn accept(&self) -> js_sys::Promise {
-        let incoming = self.incoming.clone();
-        wasm_bindgen_futures::future_to_promise(async move {
-            loop {
-                if let Some(s) = incoming.borrow_mut().pop_front() {
-                    return Ok(TorStream::new(s).into());
-                }
-                rt::sleep_ms(50).await;
+    pub async fn accept(&self) -> DataStream {
+        loop {
+            if let Some(s) = self.incoming.borrow_mut().pop_front() {
+                return s;
             }
-        })
+            rt::sleep_ms(50).await;
+        }
     }
 }
 
-/// A Tor stream (to or from an onion service), read and written independently.
-#[wasm_bindgen]
-pub struct TorStream {
-    reader: Rc<futures::lock::Mutex<DataReader>>,
-    writer: Rc<futures::lock::Mutex<DataWriter>>,
-}
+#[cfg(feature = "js-api")]
+pub use js::{TorNet, TorStream};
 
-impl TorStream {
-    fn new(s: DataStream) -> Self {
-        let (r, w) = s.split();
-        Self { reader: Rc::new(futures::lock::Mutex::new(r)), writer: Rc::new(futures::lock::Mutex::new(w)) }
-    }
-}
+/// The same API for JS (the lab page).
+#[cfg(feature = "js-api")]
+mod js {
+    use super::*;
+    use futures::{AsyncReadExt, AsyncWriteExt};
+    use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
-impl TorStream {
-    pub fn write(&self, data: Vec<u8>) -> js_sys::Promise {
-        let s = self.writer.clone();
-        wasm_bindgen_futures::future_to_promise(async move {
-            let mut g = s.lock().await;
-            g.write_all(&data).await.map_err(err)?;
-            g.flush().await.map_err(err)?;
-            Ok(JsValue::UNDEFINED)
-        })
+    fn err(e: impl std::fmt::Display) -> JsValue {
+        JsValue::from_str(&e.to_string())
     }
 
-    /// Up to `max` bytes (empty = end of stream).
-    pub fn read(&self, max: u32) -> js_sys::Promise {
-        let s = self.reader.clone();
-        wasm_bindgen_futures::future_to_promise(async move {
-            let mut buf = vec![0u8; max as usize];
-            let n = s.lock().await.read(&mut buf).await.map_err(err)?;
-            buf.truncate(n);
-            Ok(js_sys::Uint8Array::from(&buf[..]).into())
-        })
+    #[wasm_bindgen]
+    pub struct TorNet {
+        tor: Rc<Tor>,
+    }
+
+    #[wasm_bindgen]
+    impl TorNet {
+        /// `ice`: comma-separated `stun:` URLs for the proxy connections. `nat`: the broker
+        /// hint (empty = "unknown"). `network_toml`: empty for the real Tor network.
+        #[wasm_bindgen(constructor)]
+        pub fn new(broker: &str, bridge_fp: &str, ice: &str, nat: &str, network_toml: &str) -> Result<TorNet, JsValue> {
+            let sf = SnowflakeParams {
+                broker: broker.to_owned(),
+                fingerprint: bridge_fp.to_owned(),
+                ice: ice.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect(),
+                nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
+            };
+            Ok(TorNet { tor: Rc::new(Tor::new(sf, network_toml).map_err(err)?) })
+        }
+
+        pub fn bootstrap(&self) -> js_sys::Promise {
+            let t = self.tor.clone();
+            wasm_bindgen_futures::future_to_promise(async move {
+                t.bootstrap().await.map_err(err)?;
+                Ok(JsValue::UNDEFINED)
+            })
+        }
+
+        pub fn status(&self) -> String {
+            self.tor.status()
+        }
+
+        pub fn connect(&self, host: String, port: u16) -> js_sys::Promise {
+            let t = self.tor.clone();
+            wasm_bindgen_futures::future_to_promise(async move { Ok(TorStream::new(t.connect(&host, port).await.map_err(err)?).into()) })
+        }
+
+        pub fn host(&self, nickname: &str, secret: &[u8]) -> Result<String, JsValue> {
+            let sk: [u8; 32] = secret.try_into().map_err(|_| err("onion key must be 32 bytes"))?;
+            self.tor.host(nickname, &sk).map_err(err)
+        }
+
+        pub fn accept(&self) -> js_sys::Promise {
+            let t = self.tor.clone();
+            wasm_bindgen_futures::future_to_promise(async move { Ok(TorStream::new(t.accept().await).into()) })
+        }
+    }
+
+    /// A Tor stream (to or from an onion service), read and written independently.
+    #[wasm_bindgen]
+    pub struct TorStream {
+        reader: Rc<futures::lock::Mutex<DataReader>>,
+        writer: Rc<futures::lock::Mutex<DataWriter>>,
+    }
+
+    impl TorStream {
+        fn new(s: DataStream) -> Self {
+            let (r, w) = s.split();
+            Self { reader: Rc::new(futures::lock::Mutex::new(r)), writer: Rc::new(futures::lock::Mutex::new(w)) }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl TorStream {
+        pub fn write(&self, data: Vec<u8>) -> js_sys::Promise {
+            let s = self.writer.clone();
+            wasm_bindgen_futures::future_to_promise(async move {
+                let mut g = s.lock().await;
+                g.write_all(&data).await.map_err(err)?;
+                g.flush().await.map_err(err)?;
+                Ok(JsValue::UNDEFINED)
+            })
+        }
+
+        /// Up to `max` bytes (empty = end of stream).
+        pub fn read(&self, max: u32) -> js_sys::Promise {
+            let s = self.reader.clone();
+            wasm_bindgen_futures::future_to_promise(async move {
+                let mut buf = vec![0u8; max as usize];
+                let n = s.lock().await.read(&mut buf).await.map_err(err)?;
+                buf.truncate(n);
+                Ok(js_sys::Uint8Array::from(&buf[..]).into())
+            })
+        }
     }
 }

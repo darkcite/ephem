@@ -5,7 +5,10 @@
   the CSP (with the hash of the inline import map), build id, SRI of app.css and app.js,
   an import map with the integrity of every JS module, and the SHA-384 of the wasm module
   (app.js fetches it with `integrity`).
-- app/sw.js: VERSION (= build id) and FILES (the precache list).
+- app/tor.html (§28.2), generated from app/index.html: the same page with `data-mode="tor"`,
+  its own CSP (the Snowflake broker in `connect-src`) and the Tor build (pkg/ephem_tor*).
+- app/sw.js: VERSION (= build id), FILES (the precache list: the direct app) and TOR_FILES
+  (cached on first use, so direct users never download the Tor build).
 
 The build id is the first 12 hex digits of SHA-256 over every precached file, so it changes
 whenever any of them changes. Run by ./build.sh; run it again after editing app/*.js or *.css.
@@ -18,7 +21,9 @@ import re
 
 APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app")
 MODULES = ["app.js", "slots.js", "pkg/ephem.js"]
+TOR_MODULES = ["app.js", "slots.js", "pkg/ephem_tor.js"]
 HASHED = ["app.css", "app.js", "slots.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest"]
+TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm"]
 PRECACHE = ["./", "index.html"] + HASHED + [
     "icons/icon.svg",
     "icons/icon-192.png",
@@ -27,8 +32,10 @@ PRECACHE = ["./", "index.html"] + HASHED + [
     "icons/apple-touch-icon.png",
 ]
 CSP = ("default-src 'none'; script-src 'self' 'wasm-unsafe-eval' '{importmap}'; style-src 'self'; "
-       "img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; "
+       "img-src 'self' data: blob:; connect-src 'self'{connect}; worker-src 'self'; manifest-src 'self'; "
        "media-src 'self' blob:; base-uri 'none'; form-action 'none'")
+# Tor mode reaches only the Snowflake broker with fetch (§28.6); everything else goes through Tor.
+TOR_CONNECT = " https://snowflake-broker.torproject.net"
 
 
 def read(rel):
@@ -40,36 +47,57 @@ def sri(data, alg="sha384"):
     return f"{alg}-" + base64.b64encode(hashlib.new(alg, data).digest()).decode()
 
 
-def main():
-    hashes = {rel: sri(read(rel)) for rel in HASHED}
-    # Every precached file feeds the build id, so any change (icons too) makes a new SW version.
-    cached = [f for f in PRECACHE if f not in ("./", "index.html")]
-    build = hashlib.sha256("".join(sri(read(r)) for r in cached).encode()).hexdigest()[:12]
-    importmap = json.dumps({"imports": {}, "integrity": {"./" + m: hashes[m] for m in MODULES}}, separators=(",", ":"))
-    block = "\n".join([
+def stamp_block(hashes, modules, wasm, connect):
+    importmap = json.dumps({"imports": {}, "integrity": {"./" + m: hashes[m] for m in modules}}, separators=(",", ":"))
+    csp = CSP.format(importmap=sri(importmap.encode(), "sha256"), connect=connect)
+    return "\n".join([
         "<!-- stamp:begin (tools/stamp.py) -->",
-        f'<meta http-equiv="Content-Security-Policy" content="{CSP.format(importmap=sri(importmap.encode(), "sha256"))}">',
-        f'<meta name="ephem-build" content="{build}">',
-        f'<meta name="ephem-wasm" content="{hashes["pkg/ephem_bg.wasm"]}">',
+        f'<meta http-equiv="Content-Security-Policy" content="{csp}">',
+        "{build}",
+        f'<meta name="ephem-wasm" content="{hashes[wasm]}">',
         f'<link rel="stylesheet" href="app.css" integrity="{hashes["app.css"]}">',
         f'<script type="importmap">{importmap}</script>',
         f'<script type="module" src="app.js" integrity="{hashes["app.js"]}"></script>',
         "<!-- stamp:end -->",
     ])
-    path = os.path.join(APP, "index.html")
-    with open(path, encoding="utf-8") as f:
-        html = f.read()
+
+
+def restamp(html, block):
     html, n = re.subn(r"<!-- stamp:begin.*?<!-- stamp:end -->", lambda _: block, html, flags=re.S)
     if n != 1:
         raise SystemExit("app/index.html: stamp markers not found")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(html)
+    return html
+
+
+def write(rel, text):
+    with open(os.path.join(APP, rel), "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def main():
+    tor_pkg = [f for f in TOR_FILES if f.startswith("pkg/")]
+    hashes = {rel: sri(read(rel)) for rel in HASHED + tor_pkg}
+    with open(os.path.join(APP, "index.html"), encoding="utf-8") as f:
+        index = f.read()
+    tor = restamp(index, stamp_block(hashes, TOR_MODULES, "pkg/ephem_tor_bg.wasm", TOR_CONNECT))
+    tor, n = re.subn(r'<html lang="en">', '<html lang="en" data-mode="tor">', tor, count=1)
+    tor = tor.replace("<title>Ephem</title>", "<title>Ephem · Tor</title>", 1)
+    if n != 1:
+        raise SystemExit("app/index.html: <html lang=\"en\"> not found")
+    # Every file feeds the build id (icons and the Tor build too), so any change makes a new SW
+    # version. tor.html is derived from the others (and would contain the id itself).
+    cached = [f for f in PRECACHE if f not in ("./", "index.html")] + tor_pkg
+    build = hashlib.sha256("".join(sri(read(r)) for r in cached).encode()).hexdigest()[:12]
+    meta = f'<meta name="ephem-build" content="{build}">'
+    write("index.html", restamp(index, stamp_block(hashes, MODULES, "pkg/ephem_bg.wasm", "")).replace("{build}", meta, 1))
+    write("tor.html", tor.replace("{build}", meta, 1))
 
     path = os.path.join(APP, "sw.js")
     with open(path, encoding="utf-8") as f:
         sw = f.read()
     sw = re.sub(r"^const VERSION = .*;$", f"const VERSION = '{build}';", sw, count=1, flags=re.M)
     sw = re.sub(r"^const FILES = .*;$", "const FILES = " + json.dumps(PRECACHE) + ";", sw, count=1, flags=re.M)
+    sw = re.sub(r"^const TOR_FILES = .*;$", "const TOR_FILES = " + json.dumps(TOR_FILES) + ";", sw, count=1, flags=re.M)
     with open(path, "w", encoding="utf-8") as f:
         f.write(sw)
     print(f"build {build}")
