@@ -4,7 +4,7 @@
 |---|---|
 | Document | The **single** project document. It replaces the earlier SPEC, REVIEW, plans and spike notes (all merged here on 2026-09-28) |
 | Spec level | v0.6 (see the decision log, §25) |
-| Status | Architecture and protocol draft. MVP-1 is ready to start; Tor mode and public channels are behind gates G2–G4 (§23.3) |
+| Status | Architecture and protocol draft. MVP-1 is ready to start. **Gate G2 passed on desktop and iOS**; Tor mode and public channels are now gated only by G3–G4 (need TOR-1 code) (§23.3) |
 | Deployment | GitHub Pages, project site `https://<owner>.github.io/p2p-chat/` |
 | Runtime | Browser PWA. **Only our WASM app is built: no native programs (P10)** |
 | Implementation | Rust (edition 2024) → `wasm32-unknown-unknown` |
@@ -33,8 +33,8 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 | Area | State |
 |---|---|
 | Design | Complete up to MVP-3, plus Tor mode and public channels |
-| Proven | SDP rebuild from ~150-byte codes connects (Chrome, Safari); camera permission exposes the real IP (Chrome); crypto, QR and MLS crates fit in 293 KB gzip **with no C code**; Argon2id cost measured; **arti (Tor) builds for WASM (G1)**; **live Snowflake rendezvous + DataChannel to a proxy from Chrome 153 and Safari 26.5 on macOS (G2, desktop)**; a browser can publish an IPNS record and read it back through a public gateway |
-| Next | 1. G2 on an **iPhone** (Safari/PWA). 2. Firefox run (`BROWSERS=chrome,firefox,webkit`) and a WARP run (TS3). 3. Start MVP-1. 4. In parallel, TOR-1 steps E3–E5 |
+| Proven | SDP rebuild from ~150-byte codes connects (Chrome, Safari, iPhone); camera permission exposes the real IP (Chrome **and iPhone**); a pending offer survives 53 s in the iOS background; crypto, QR and MLS crates fit in 293 KB gzip **with no C code**; Argon2id cost measured; **arti (Tor) builds for WASM (G1)**; **live Snowflake rendezvous + DataChannel to a proxy from Chrome 153, Safari 26.5 and iPhone Safari (iOS 18.7) (G2 ✅)**; a browser (including iPhone) can publish an IPNS record and read it back through a public gateway |
+| Next | 1. Mac run with cross-engine S1 and the gateway curl diagnostic. 2. S6 at ≥ 120 s. 3. Start MVP-1. 4. In parallel, TOR-1 steps E3–E5 (G3, G4) |
 | Blocked on devices | S3, S6, S7, S9 (phones, real networks) |
 
 ---
@@ -1056,7 +1056,7 @@ MVP-1 does not depend on Tor. The Tor track runs in parallel and is dropped clea
 | Gate | Criterion | Status | If it fails |
 |---|---|---|---|
 | G1 | arti builds for `wasm32` without forking its core | ✅ Passed at compile level (E1) | — |
-| G2 | Snowflake broker rendezvous and a DataChannel to a proxy work from a browser, on desktop **and** iOS Safari | ✅ **Desktop passed** (Chrome 153, Safari 26.5, macOS, 2026-09-28; rendezvous 0.7–4.8 s, DataChannel open 2–6 s). ⏳ iPhone | No Tor mode; no public channels; IP privacy via VPN/WARP only |
+| G2 | Snowflake broker rendezvous and a DataChannel to a proxy work from a browser, on desktop **and** iOS Safari | ✅ **Passed** (2026-09-28): Chrome 153 and Safari 26.5 on macOS; **iPhone Safari (iOS 18.7)**: rendezvous 0.5–0.7 s, DataChannel open 1.4–2.2 s, through both the CDN URL and the direct broker | No Tor mode; no public channels; IP privacy via VPN/WARP only |
 | G3 | Tor bootstrap ≤ 60 s cold, ≤ 10 s warm; an onion connects on desktop and iOS | ⏳ needs TOR-1 code | Same as G2 |
 | G4 | `tor_bg.wasm` ≤ 5 MB compressed; no iOS memory kills; onion hosting from a tab works | ⏳ needs TOR-1 code | Client-only Tor (dial, no hosting): no one-way invites from Tor hosts in tabs, no channels |
 
@@ -1084,13 +1084,13 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 
 | ID | Question | Result so far (container, 2026-09-28) | Run | Gates |
 |---|---|---|---|---|
-| S1 | Does the Appendix A template SDP connect, in every offerer × answerer browser pair? | ✅ Chrome ↔ Chrome (Chromium 141 and Chrome 153), raw-IP and mDNS candidates; ✅ real Safari 26.5 in one tab. ⏳ Chrome ↔ Safari cross-engine, Firefox, iOS | 🤖 | §8 |
-| S2 | Real code sizes per browser | ✅ Chrome and Safari 26.5 are identical: ufrag 4, pwd 24, `actpass`/`active`, mid 0, sctp-port 5000, max-message-size 262144. Invite 141 B (IPv4 host), **153 B (mDNS, the default)**, about 179 B (plus srflx v4 and v6), versus 586–657 B of raw SDP. ⏳ Firefox | 🤖 | §8.5 |
+| S1 | Does the Appendix A template SDP connect, in every offerer × answerer browser pair? | ✅ Chrome ↔ Chrome (Chromium 141, Chrome 153); ✅ real Safari 26.5 in one tab; ✅ iPhone Safari (iOS 18.7) in one tab. Raw-IP and mDNS candidates. ⏳ Chrome ↔ Safari cross-engine (Mac run), Firefox | 🤖 | §8 |
+| S2 | Real code sizes per browser | ✅ Chrome, macOS Safari 26.5 and iPhone Safari are identical: ufrag 4, pwd 24, `actpass`/`active`, mid 0, sctp-port 5000, max-message-size 262144. Invite 141 B (IPv4 host), **153 B (mDNS, the default)**, about 179 B (plus srflx v4 and v6), versus 586–657 B of raw SDP. ⏳ Firefox | 🤖 | §8.5 |
 | S3 | Path switch without signalling (T0) | ⏳ | ✋ two devices | §13 |
-| S4 | Does camera permission disable mDNS obfuscation? | ✅ **Yes (Chromium 141, Chrome 153)**: just granting permission gives raw IPs, and they stay after the camera stops. Safari 26.5 without permission: mDNS. ⏳ Safari with permission (manual: Safari prompts), Firefox | 🤖 | §9.4 |
+| S4 | Does camera permission disable mDNS obfuscation? | ✅ **Yes on Chrome 153 and on iPhone Safari (iOS 18.7)**: after camera permission, host candidates carry the raw IP; without it, mDNS. Same on macOS Safari without permission (mDNS). So the invite builder's own filtering (§9.4) is mandatory on every target | 🤖 / iPhone page | §9.4 |
 | S5 | WASM sizes of the protocol crates | ✅ gzip: Noise 37 KB; key-file crypto 130 KB; QR 34 KB; all three 176 KB; with openmls 293 KB. **The whole protocol stack builds with no C compiler** (verified with `CC=/bin/false`) once `snow` is used **without** its `std` feature, because `snow`'s `std` silently enables `ring` (C). Also: `hkdf::SimpleHkdf` for BLAKE2s | 🤖 | §22 |
 | S5b | Argon2id cost in WASM | ✅ x86 server: m 19 MiB t 4 = 61 ms. **Apple Silicon (V8): t 2 = 21 ms, t 4 = 32 ms; m 64 MiB t 3 = 98 ms.** Memory 21 MiB (85 MiB at 64 MiB), never shrinks. The spec uses m 19 MiB, t 4 | 🤖 | §7.3 |
-| S6 | iOS: does a pending connection survive the background? | ⏳ | ✋ iPhone | §17.5 |
+| S6 | iOS: does a pending connection survive the background? | ✅ **iPhone (iOS 18.7): a pending offer survived 53 s in the background** (have-local-offer, gathering complete), then connected and delivered a message. ⏳ repeat at ≥ 120 s to set the invite TTL guidance; until then the §17.5 fallback (iOS users answer) is **not** needed | iPhone page | §17.5 |
 | S7 | Answer-link hand-off between tabs | ⏳ | ✋ | §8.7 |
 | S8 | Default STUN servers dual-stack; srflx gathering | ✅ DNS: Google and Cloudflare have A + AAAA; Twilio A only. ✅ Live (macOS, home Wi-Fi): all three answer over IPv4 and both browsers get the same srflx-v4. That network has **no IPv6**, so srflx-v6 is untested | 🤖 | §9.3 |
 | S9 | 15 connections on iOS | ⏳ | ✋ iPhone | §14.1 |
@@ -1100,9 +1100,9 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 | E2 | Snowflake from a browser (**G2**) | ✅ **Live, desktop:** Chrome 153 and Safari 26.5 (macOS) get a proxy answer from the broker and open a DataChannel to a volunteer proxy, through **both** the CDN URL (`1098762253.rsc.cdn77.org`, no domain fronting needed) and `snowflake-broker.torproject.net`. Rendezvous 0.7–4.8 s; DataChannel open 2–6 s after start; sometimes the first tries report no proxy available, so retry. Protocol: `POST /client`, body `1.0\n{"offer": <JSON SDP>, "nat": "unknown", "fingerprint": <bridge fp>}`; stack: WebRTC → encapsulation → KCP → smux. ⏳ iPhone | 🤖 | §28 |
 | E3–E7 | Turbotunnel, bootstrap, onion hosting, size, hardening | ⏳ needs TOR-1 code | — | G3, G4 |
 | E8 | Does a hidden desktop tab with an open DataChannel keep its timers? | ⏳ | 🤖 (E8=1) | §27, §28.3 |
-| C-P1 | Gateways: trustless CAR with CORS | ✅ `trustless-gateway.link`: CAR served to Chrome and Safari (119 874 B). ❌ `ipfs.io`, `dweb.link`: both browsers fail the fetch (cause under investigation with the curl diagnostic in `checks/run_all.sh`: a redirect without CORS headers, or a network block). **Default list: `trustless-gateway.link` first** | 🤖 | App. D |
+| C-P1 | Gateways: trustless CAR with CORS | ✅ `trustless-gateway.link`: CAR served to Chrome, Safari and iPhone (119 874 B). ❌ `ipfs.io`, `dweb.link`: fail identically on every browser and device **on the same home network**. Likely network-side (curl diagnostic pending). **Default list: `trustless-gateway.link` first** | 🤖 | App. D |
 | C-P2, C-P3, C-P5 | Two onions in one tab; loading 1 000 posts; OPFS quota | ⏳ after TOR-1 | — | App. D |
-| C-P4 | Republishing signed IPNS records; browser PUT | ✅ **Live:** Chrome and Safari `PUT` a fresh signed record to `delegated-ipfs.dev` (200), and `trustless-gateway.link` serves back the **identical 397-byte record**. Kubo `name put` also accepts third-party records (source) | 🤖 | App. D |
+| C-P4 | Republishing signed IPNS records; browser PUT | ✅ **Live:** Chrome, Safari and **iPhone** `PUT` a signed record to `delegated-ipfs.dev` (200), and `trustless-gateway.link` serves back the **identical 397-byte record**. Kubo `name put` also accepts third-party records (source) | 🤖 | App. D |
 
 **Container limits (why some checks are still open):** no outbound UDP, no IPv6, and HTTPS only to an allow-list (crates.io and the Go proxy). The Snowflake broker, IPFS gateways and STUN were unreachable, and only Chromium was installed.
 
@@ -1281,7 +1281,7 @@ base-uri 'none'; form-action 'none'
 | Gate | Criterion | Status |
 |---|---|---|
 | G1 | arti builds for `wasm32` without forking its core | ✅ Passed at compile level (spike E1, 2026-09-28) |
-| G2 | Broker rendezvous and a DataChannel to a Snowflake proxy work from `github.io`, on desktop **and** iOS Safari | ✅ Desktop (Chrome, Safari; live 2026-09-28). ⏳ iPhone |
+| G2 | Broker rendezvous and a DataChannel to a Snowflake proxy work from `github.io`, on desktop **and** iOS Safari | ✅ Passed: desktop Chrome and Safari, and iPhone Safari from `darkcite.github.io` (live, 2026-09-28) |
 | G3 | Bootstrap ≤ 60 s cold and ≤ 10 s warm; an onion connects on desktop and iOS | ⏳ |
 | G4 | `tor_bg.wasm` ≤ 5 MB compressed, lazily loaded; no iOS memory kills; onion hosting from a tab works | ⏳ |
 
@@ -1437,7 +1437,7 @@ Candidate line: `a=candidate:{foundation} 1 udp {priority} {addr} {port} typ {ho
 | Step | Work | Gate |
 |---|---|---|
 | E1 | arti for wasm32 | **G1 ✅** |
-| E2 | Live broker rendezvous and a DataChannel to a proxy, desktop and iOS | **G2**: ✅ desktop, ⏳ iPhone |
+| E2 | Live broker rendezvous and a DataChannel to a proxy, desktop and iOS | **G2 ✅** (desktop and iPhone) |
 | E3 | Turbotunnel (KCP + smux) to the real bridge; stable for 10 min | — |
 | E4 | arti over E3: bootstrap, circuit, dial a known onion | **G3** |
 | E5 | Onion hosting from a tab | — |
