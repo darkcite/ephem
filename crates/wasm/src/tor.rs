@@ -14,6 +14,8 @@
 
 use crate::{Inner, Link, Out, Shared, emit, ev, now_ms, on_event, room};
 use ephem_core::{Role, Session, State};
+use ephem_crypto::PeerId;
+use ephem_crypto::contacts::cflags;
 use ephem_proto::ErrorCode;
 use ephem_proto::code::{Code, TOR_CODE_LEN, flags};
 use ephem_proto::frame::MAX_FRAME;
@@ -104,15 +106,6 @@ pub(crate) fn start(inner: &Shared, sf: Snowflake, network_toml: &str) -> Result
 
 /// A new 1:1 chat and its TOR_INVITE (emitted as CODE 5). Streams for it arrive at our onion.
 pub(crate) fn invite(inner: &Shared, ttl_s: u32) -> Result<(), ErrorCode> {
-    // The identity changed since the service went up (sign-in): host the new one's (§28.7).
-    let rehost = {
-        let g = inner.borrow();
-        let t = &g.tor;
-        (!t.onion.is_empty() && t.onion != onion_address(&g.identity().onion_pk())).then(|| t.tor.clone()).flatten()
-    };
-    if let Some(tor) = rehost {
-        host(inner, &tor)?;
-    }
     let now_s = (now_ms() / 1000) as u32;
     let (inv, room) = crate::ids();
     // Copy of the 104-byte code out of the session (setup path): emitting borrows the tab.
@@ -147,6 +140,62 @@ pub(crate) fn join(inner: &Shared, code: &[u8], now_s: u32, scanned: bool) -> Re
     };
     dial(inner, lid);
     Ok(())
+}
+
+/// Dials a contact's stored onion (§28.7, "Connect"): a new chat, no code.
+pub(crate) fn call(inner: &Shared, peer: PeerId) -> Result<(), ErrorCode> {
+    let lid = {
+        let mut g = inner.borrow_mut();
+        if g.tor.tor.is_none() {
+            return Err(ErrorCode::TorUnavailable);
+        }
+        let c = g.saved.as_ref().and_then(|s| s.contacts.get(&peer)).copied().ok_or(ErrorCode::NotAContact)?;
+        if c.flags & cflags::HAS_ONION == 0 {
+            return Err(ErrorCode::NotPermitted);
+        }
+        let s = Session::tor_contact_dialer(g.identity(), peer, c.onion_pk, g.settings());
+        g.reset();
+        g.add_link(0, s, false)
+    };
+    dial(inner, lid);
+    Ok(())
+}
+
+/// A contact dials while the tab has no chat (§28.7): a new chat for the stream, if its key is
+/// one of our contacts. Returns the new link's index.
+fn contact_host(g: &mut Inner, now: u64, frame: &[u8], wire: &TorWire) -> Option<usize> {
+    if g.room.is_some() || g.links.iter().any(|l| l.sess.state() != State::Closed) || g.saved.as_ref().is_none_or(|s| s.contacts.list().is_empty()) {
+        return None;
+    }
+    let s = Session::tor_contact_host(g.identity(), g.settings());
+    g.reset();
+    g.add_link(1, s, false);
+    let i = g.links.len() - 1;
+    let taken = {
+        let Inner { id, links, meta, inbox, saved, .. } = &mut *g;
+        let contacts = &saved.as_ref()?.contacts;
+        let Link { sess, rtc, id: lid, member, peer, .. } = &mut links[i];
+        let mut out = Out { rtc: rtc.as_ref(), tor: Some(wire), meta, inbox, peer, link: *lid, member: *member };
+        sess.tor_accept(id, now, frame, |k| contacts.get(k).is_some(), &mut |e| on_event(&mut out, e)) == Ok(true)
+    };
+    if !taken {
+        g.links.pop();
+    }
+    taken.then_some(i)
+}
+
+/// The identity changed (sign-in, sign-out): host the new one's onion service, so invites and
+/// contacts reach it (§28.7). Before the first service is up, `start` hosts the current one.
+pub(crate) fn sync_identity(inner: &Shared) -> Result<(), ErrorCode> {
+    let rehost = {
+        let g = inner.borrow();
+        let t = &g.tor;
+        (!t.onion.is_empty() && t.onion != onion_address(&g.identity().onion_pk())).then(|| t.tor.clone()).flatten()
+    };
+    match rehost {
+        Some(tor) => host(inner, &tor),
+        None => Ok(()),
+    }
 }
 
 /// Hosts the onion service of the tab's current identity (replacing the previous one).
@@ -303,17 +352,23 @@ async fn incoming(inner: Shared, s: DataStream) {
             let Link { sess, rtc, member, peer, .. } = &mut links[i];
             // Our reply (IK message 2) goes to this new stream.
             let mut out = Out { rtc: rtc.as_ref(), tor: Some(&wire), meta, inbox, peer, link: next, member: *member };
-            if sess.tor_accept(id, now, &buf[2..2 + n], &mut |e| on_event(&mut out, e)) == Ok(true) {
+            if sess.tor_accept(id, now, &buf[2..2 + n], |_| true, &mut |e| on_event(&mut out, e)) == Ok(true) {
                 taken = Some(i);
                 break;
             }
         }
-        taken.map(|i| {
-            let lid = g.new_path(i);
-            debug_assert_eq!(lid, next);
-            g.links[i].tor = Some(wire);
-            lid
-        })
+        match taken {
+            Some(i) => {
+                let lid = g.new_path(i);
+                debug_assert_eq!(lid, next);
+                g.links[i].tor = Some(wire);
+                Some(lid)
+            }
+            None => contact_host(&mut g, now, &buf[2..2 + n], &wire).map(|i| {
+                g.links[i].tor = Some(wire);
+                g.links[i].id
+            }),
+        }
     };
     // A stream for none of our chats is dropped unanswered (§28.4).
     if let Some(lid) = taken {

@@ -153,6 +153,14 @@ impl Contacts {
         Ok(())
     }
 
+    /// Stores the contact's onion service key (learned in a Tor chat, §28.7).
+    pub fn set_onion(&mut self, peer: &PeerId, onion_pk: [u8; 32]) -> Result<(), ContactError> {
+        let c = self.list.iter_mut().find(|c| c.peer_id == *peer).ok_or(ContactError::NotFound)?;
+        c.onion_pk = onion_pk;
+        c.flags |= cflags::HAS_ONION;
+        Ok(())
+    }
+
     pub fn set_verified(&mut self, peer: &PeerId) -> Result<(), ContactError> {
         let c = self.list.iter_mut().find(|c| c.peer_id == *peer).ok_or(ContactError::NotFound)?;
         c.flags |= cflags::VERIFIED;
@@ -231,6 +239,8 @@ mod tests {
         assert!(!c.get(&alice).unwrap().verified());
         c.set_verified(&alice).unwrap();
         c.save(alice, None, false, b"Alice W", 200).unwrap();
+        c.set_onion(&alice, [7; 32]).unwrap();
+        assert_eq!(c.set_onion(&PeerId([0xee; 32]), [7; 32]), Err(ContactError::NotFound));
         let a = c.get(&alice).unwrap();
         assert!(a.verified(), "verified never turns off by a save");
         assert_eq!((a.nick(), a.sign_pk, a.added_at), (&b"Alice W"[..], [9; 32], 100));

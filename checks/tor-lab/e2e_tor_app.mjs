@@ -8,7 +8,7 @@
 // its CSP names the lab broker instead of the real one, and the lab settings are injected as
 // `ephemTorLab` before the page loads (app.js `startTor`).
 import * as fs from 'node:fs';
-import { check, finish, launch, msgWith, problems, serve, watch } from '../e2e_lib.mjs';
+import { PASS, check, finish, launch, msgWith, problems, serve, watch } from '../e2e_lib.mjs';
 
 const env = Object.fromEntries(fs.readFileSync('/tmp/ephlab/lab.env', 'utf8').trim().split('\n').map((l) => l.split('=')));
 const lab = {
@@ -25,13 +25,24 @@ const base = `http://127.0.0.1:${srv.address().port}/app`;
 const browsers = [];
 const T = 180_000;
 
+/** Saves the tab's identity (contacts need one, §7.5); returns the key text. */
+async function saveIdentity(p, label) {
+  await p.click('#b-id-save');
+  await p.fill('#i-label', label);
+  await p.fill('#i-pass', PASS);
+  await p.fill('#i-pass2', PASS);
+  await Promise.all([p.waitForEvent('download'), p.click('#b-id-do-save')]);
+  return p.inputValue('#t-keytext');
+}
+
 async function open(who) {
   const b = await launch();
   browsers.push(b);
-  const ctx = await b.newContext();
+  const ctx = await b.newContext({ acceptDownloads: true });
   await ctx.addInitScript((c) => { globalThis.ephemTorLab = c; }, lab);
   const p = await ctx.newPage();
   watch(p, who);
+  p.on('dialog', (d) => d.accept(who === 'alice' ? 'Bob' : 'Alice'));
   p.on('console', (m) => { if (process.env.VERBOSE) console.log(`  ${who} |`, m.text()); });
   await p.goto(`${base}/tor.html`);
   return p;
@@ -60,6 +71,17 @@ try {
   await a.waitForFunction(() => /Reachable through Tor/.test(document.querySelector('#tor-state').textContent), null, { timeout: T });
   check('Alice: Tor up and her onion service hosted', true, `${Date.now() - t0} ms`);
 
+  // Both sign in with saved identities (for TOR-3 below). Alice also signs out and back in:
+  // her onion service follows the identity (hosted again).
+  const keyA = await saveIdentity(a, 'A');
+  await saveIdentity(b, 'B');
+  const handleA = await a.textContent('#me');
+  await a.click('#b-id-temp');
+  await a.click('#b-id-load');
+  await a.fill('#t-keyin', keyA);
+  await a.fill('#i-pass-in', PASS);
+  await a.click('#b-id-do-load');
+  await a.waitForFunction((h) => document.querySelector('#me').textContent === h, handleA, { timeout: 10_000 });
   await a.click('#b-invite');
   await a.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#t='), null, { timeout: 10_000 });
   const link = await a.inputValue('#v-code .link');
@@ -100,6 +122,22 @@ try {
     const again = await p.locator('#log li', { hasText: 'Reconnected through Tor' }).count();
     check(`${who} loses the stream: redial, queued message delivered`, again > before, `${Date.now() - t} ms`);
   }
+
+  // TOR-3 (§28.7): contacts store each other's onion; later Bob dials Alice without a code.
+  await a.click('#b-save-contact');
+  await b.click('#b-save-contact');
+  await b.click('#b-leave');
+  await a.waitForSelector('#v-note:not([hidden])', { timeout: T });
+  await b.click('#b-again');
+  const connect = b.locator('#contacts li', { hasText: 'Alice' }).locator('button', { hasText: 'Connect' });
+  check('contact saved from a Tor chat offers "Connect"', await connect.isVisible());
+  const t3 = Date.now();
+  await connect.click();
+  await Promise.all([a, b].map((p) => p.waitForSelector('#v-chat:not([hidden])', { timeout: T })));
+  await b.fill('#t-msg', 'called you');
+  await b.press('#t-msg', 'Enter');
+  await msgWith(a, 'them', 'called you').waitFor({ timeout: 60_000 });
+  check('Bob connects to contact Alice through Tor, no code', true, `${Date.now() - t3} ms`);
 
   // No chat traffic outside Tor: the only RTCPeerConnections are Snowflake's (to the lab proxy).
   check('no reconnect-code UI in Tor mode', await a.isHidden('#resume') && await b.isHidden('#resume'));

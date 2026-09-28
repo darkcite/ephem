@@ -478,6 +478,11 @@ impl App {
         self.inner.borrow().tor.onion.clone()
     }
 
+    /// Dials a contact's onion (§28.7): the chat opens when the contact's Tor tab accepts.
+    pub fn contact_connect(&self, peer_hex: &str) -> u32 {
+        status(peer_from_hex(peer_hex).ok_or(ErrorCode::NotAContact).and_then(|p| tor::call(&self.inner, p)))
+    }
+
     /// arti logs to the console at `level` (`"info"`, `"debug"`, …; diagnostics only).
     pub fn tor_log(&self, level: &str) {
         ephem_tor::web::tor_log(level);
@@ -568,6 +573,8 @@ impl App {
             Ok(())
         })();
         pass.fill(0);
+        #[cfg(feature = "tor")]
+        let res = res.and_then(|()| tor::sync_identity(&self.inner));
         status(res)
     }
 
@@ -576,10 +583,15 @@ impl App {
         if self.busy() {
             return ErrorCode::NotPermitted.code() as u32;
         }
-        let mut g = self.inner.borrow_mut();
-        g.id = Identity::generate();
-        g.saved = None;
-        g.prefs.settings.set_nick(&[]);
+        {
+            let mut g = self.inner.borrow_mut();
+            g.id = Identity::generate();
+            g.saved = None;
+            g.prefs.settings.set_nick(&[]);
+        }
+        #[cfg(feature = "tor")]
+        return status(tor::sync_identity(&self.inner));
+        #[cfg(not(feature = "tor"))]
         0
     }
 
@@ -616,10 +628,12 @@ impl App {
         let mut g = self.inner.borrow_mut();
         let Inner { links, saved, room, .. } = &mut *g;
         let r = match (links.first(), saved.as_mut()) {
-            (Some(l), Some(sv)) if room.is_none() && l.sess.ever_connected() && !l.sess.transfer() => sv
-                .contacts
-                .save(l.sess.remote(), Some(l.sess.peer_sign_pk()), l.sess.sas_confirmed(), nick.trim().as_bytes(), (now_ms() / 1000) as u32)
-                .map_err(contact_err),
+            (Some(l), Some(sv)) if room.is_none() && l.sess.ever_connected() && !l.sess.transfer() => {
+                let c = &mut sv.contacts;
+                let r = c.save(l.sess.remote(), Some(l.sess.peer_sign_pk()), l.sess.sas_confirmed(), nick.trim().as_bytes(), (now_ms() / 1000) as u32);
+                // A Tor chat also gives the contact's onion: "Connect" without a code (§28.7).
+                r.and_then(|()| if l.sess.tor() { c.set_onion(&l.sess.remote(), l.sess.peer_onion()) } else { Ok(()) }).map_err(contact_err)
+            }
             _ => Err(ErrorCode::NotPermitted),
         };
         drop(g);

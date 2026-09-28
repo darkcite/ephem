@@ -680,9 +680,9 @@ fn tor_invite_ik_handshake_and_redial() {
     act!(p.b, on_open(NOW_MS));
     let msg1 = p.b.out.frames.remove(0);
     let (mut w, mut s) = (Wire { frames: vec![] }, Seen::default());
-    assert_eq!(other.tor_accept(&p.a.id, NOW_MS, &msg1, &mut sink(&mut w, &mut s)), Ok(false), "not its invite");
+    assert_eq!(other.tor_accept(&p.a.id, NOW_MS, &msg1, |_| true, &mut sink(&mut w, &mut s)), Ok(false), "not its invite");
     let id = Identity::from_seed(&[1; 32]); // the host's identity (Identity is not Clone)
-    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &msg1)), Ok(true));
+    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &msg1, |_| true)), Ok(true));
     p.settle();
     assert_eq!(p.a.s.state(), State::Connected);
     assert_eq!(p.b.s.state(), State::Connected);
@@ -703,12 +703,43 @@ fn tor_invite_ik_handshake_and_redial() {
     fake.tor_dial(&intruder).unwrap();
     let (mut w, mut s) = (Wire { frames: vec![] }, Seen::default());
     fake.on_open(NOW_MS, &mut sink(&mut w, &mut s));
-    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &w.frames[0])), Ok(false), "only the pinned peer may resume");
+    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &w.frames[0], |_| true)), Ok(false), "only the pinned peer may resume");
     p.b.s.tor_dial(&p.b.id).unwrap();
     act!(p.b, on_open(NOW_MS));
     let msg1 = p.b.out.frames.remove(0);
-    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &msg1)), Ok(true));
+    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &msg1, |_| true)), Ok(true));
     p.settle();
     assert!(p.b.seen.resumed);
     assert_eq!(p.b.seen.chats.last().unwrap().1, b"while away", "queued message delivered after the redial");
+}
+
+/// Tor mode (§28.7): a contact dials the stored onion without an invite; the host accepts only
+/// keys in its contacts, and an invite host does not take a contact's stream.
+#[test]
+fn tor_contact_dial() {
+    let (ha, hb) = (Identity::from_seed(&[3; 32]), Identity::from_seed(&[4; 32]));
+    let (a_key, b_key) = (ha.peer_id(), hb.peer_id());
+    let host = Session::tor_contact_host(&ha, Settings::default());
+    let dialer = Session::tor_contact_dialer(&hb, a_key, ha.onion_pk(), Settings::default());
+    assert!(host.contact() && dialer.contact());
+    assert_eq!(dialer.peer_onion(), ha.onion_pk());
+    let mut p = Pair { a: Side { id: ha, s: Box::new(host), out: Wire { frames: vec![] }, seen: Seen::default() }, b: Side { id: hb, s: Box::new(dialer), out: Wire { frames: vec![] }, seen: Seen::default() }, now: NOW_MS };
+    p.b.s.tor_dial(&p.b.id).unwrap();
+    act!(p.b, on_open(NOW_MS));
+    let msg1 = p.b.out.frames.remove(0);
+    let id = Identity::from_seed(&[3; 32]);
+    let (mut w, mut s) = (Wire { frames: vec![] }, Seen::default());
+    let mut invite_host = Session::tor_host(&id, [0x71; 16], [0x72; 16], NOW_S + 300, Settings::default());
+    assert_eq!(invite_host.tor_accept(&id, NOW_MS, &msg1, |_| true, &mut sink(&mut w, &mut s)), Ok(false), "an invite does not take a contact's stream");
+    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &msg1, |k| *k != b_key)), Ok(false), "not a contact");
+    assert_eq!(p.a.s.state(), State::AwaitingAnswer);
+    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &msg1, |k| *k == b_key)), Ok(true));
+    p.settle();
+    assert_eq!((p.a.s.state(), p.b.s.state()), (State::Connected, State::Connected));
+    assert_eq!(p.a.seen.sas, p.b.seen.sas);
+    assert_eq!(p.a.s.remote(), b_key);
+    assert_eq!(p.a.s.peer_onion(), p.b.id.onion_pk());
+    act!(p.a, send_chat(NOW_MS, None, b"hi contact", None)).unwrap();
+    p.settle();
+    assert_eq!(p.b.seen.chats[0].1, b"hi contact");
 }

@@ -36,6 +36,8 @@ pub const READ_EVERY_MS: u64 = 1_000;
 pub const TYPING_EVERY_MS: u64 = 3_000;
 pub const TYPING_CLEAR_MS: u64 = 6_000;
 /// Largest plaintext that fits one frame.
+/// Noise prologue of a contact's Tor dial (§28.4), instead of the invite bytes.
+pub const CONTACT_PROLOGUE: &[u8] = b"p2pchat/contact";
 pub const MAX_PLAIN: usize = MAX_FRAME - HEADER_LEN - TAG_LEN;
 /// Identity transfer (§7.6): chunk size and the largest key file accepted.
 pub const IDENTITY_CHUNK: usize = 12 * 1024;
@@ -579,9 +581,38 @@ impl Session {
         s
     }
 
+    /// Tor mode, a contact dials (§28.7): no invite, the peer's keys come from the contact entry.
+    /// The prologue is [`CONTACT_PROLOGUE`] and the `invite_id` in message 1 is zero; the host
+    /// accepts the stream only from a key in its contacts.
+    pub fn tor_contact_dialer(id: &Identity, peer: PeerId, peer_onion: [u8; 32], settings: Settings) -> Self {
+        let mut s = Self::contact_blank(Role::Answerer, id, settings);
+        s.remote = peer;
+        s.peer_onion = peer_onion;
+        s.state = State::Gathering;
+        s
+    }
+
+    /// Tor mode, the host side of a contact dial: waits for one stream from a contact (its key
+    /// is checked by the `allow` of [`Self::tor_accept`]).
+    pub fn tor_contact_host(id: &Identity, settings: Settings) -> Self {
+        let mut s = Self::contact_blank(Role::Offerer, id, settings);
+        s.state = State::AwaitingAnswer;
+        s
+    }
+
+    fn contact_blank(role: Role, id: &Identity, settings: Settings) -> Self {
+        let mut s = Self::blank(role, id, Privacy::Default, false, settings);
+        s.tor = true;
+        s.onion_pk = id.onion_pk();
+        s.expires_at = u32::MAX;
+        s.invite[..CONTACT_PROLOGUE.len()].copy_from_slice(CONTACT_PROLOGUE);
+        s.invite_len = CONTACT_PROLOGUE.len() as u16;
+        s
+    }
+
     /// Re-encodes the host's Tor invite after a flag change.
     fn encode_tor_invite(&mut self) {
-        if !self.tor || self.role != Role::Offerer {
+        if !self.tor || self.role != Role::Offerer || self.contact() {
             return;
         }
         let code = Code {
@@ -628,6 +659,12 @@ impl Session {
         self.tor
     }
 
+    /// Tor mode: a contact dial (no invite, §28.7).
+    #[inline(always)]
+    pub fn contact(&self) -> bool {
+        self.tor && &self.invite[..self.invite_len as usize] == CONTACT_PROLOGUE
+    }
+
     /// The peer's onion service key (Tor mode; kept with a contact, §28.7).
     #[inline(always)]
     pub fn peer_onion(&self) -> [u8; 32] {
@@ -649,8 +686,9 @@ impl Session {
     /// Tor mode, the host: the first frame of an incoming stream. `Ok(true)`: this chat took
     /// the stream (reply sent; the chat is connected); `Ok(false)`: not this chat's (another
     /// invite, or a key other than the pinned peer's), try the next one. Every stream is
-    /// authenticated here, before any application data (§28.4).
-    pub fn tor_accept(&mut self, id: &Identity, now_ms: u64, frame: &[u8], sink: &mut impl FnMut(Event<'_>)) -> Result<bool, ErrorCode> {
+    /// authenticated here, before any application data (§28.4). `allow` decides on the
+    /// dialer's key of a first connection (contacts only, for a contact host).
+    pub fn tor_accept(&mut self, id: &Identity, now_ms: u64, frame: &[u8], allow: impl Fn(&PeerId) -> bool, sink: &mut impl FnMut(Event<'_>)) -> Result<bool, ErrorCode> {
         if !self.tor || self.role != Role::Offerer || self.state == State::Closed {
             return Ok(false);
         }
@@ -668,7 +706,7 @@ impl Session {
             _ => return Ok(false),
         }
         let Some(remote) = hs.remote_static() else { return Ok(false) };
-        if payload[..16] != self.invite_id || (self.ever_connected && remote != self.remote) || remote == self.local {
+        if payload[..16] != self.invite_id || (self.ever_connected && remote != self.remote) || remote == self.local || !allow(&remote) {
             return Ok(false);
         }
         self.drop_path();

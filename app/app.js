@@ -29,6 +29,7 @@ const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 const FLAG_GROUP = 2;
 const FLAG_TRANSFER = 4;
 const FLAG_OBSERVER = 8;
+const CONTACT_HAS_ONION = 2; // contact flags (crates/crypto/src/contacts.rs `cflags`)
 const ST = { NONE: 0, GATHERING: 1, AWAITING: 2, CONNECTING: 3, CONNECTED: 4, CLOSED: 5, SUSPENDED: 6 };
 const FRAG = { 1: 'i', 2: 'a', 3: 'r', 4: 'q', 5: 't' };
 const TTL_LABEL = { 5: '5 seconds', 30: '30 seconds', 60: '1 minute', 300: '5 minutes', 3600: '1 hour', 86400: '1 day' };
@@ -564,7 +565,7 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       const t = text(ptr, len);
       if (num === 2) {
         torReady = true;
-        $('tor-state').textContent = `Reachable through Tor while this tab is open (${t.slice(0, 8)}….onion).`;
+        $('tor-state').textContent = `Reachable through Tor while this tab is open (${t.slice(0, 8)}….onion): by your invites, and by your contacts when you are signed in.`;
         if (!$('v-start').hidden) status('Tor ready', 'ok');
       } else if (num === 3) {
         $('tor-state').textContent = `Tor failed: ${t}`;
@@ -897,7 +898,16 @@ function renderContacts() {
     del.onclick = () => {
       if (confirm(`Remove ${nick || handle} from your contacts?`) && app.remove_contact(hex) === 0) persist();
     };
-    li.append(name, rename, del);
+    li.append(name);
+    // Tor mode: a contact with an onion key is dialled directly, no code (§28.7).
+    if (TOR && Number(flags) & CONTACT_HAS_ONION) {
+      const call = document.createElement('button');
+      call.textContent = 'Connect';
+      call.className = 'primary';
+      call.onclick = () => connectContact(hex, nick || handle);
+      li.append(call);
+    }
+    li.append(rename, del);
     ul.append(li);
   }
   if (!rows.length) ul.innerHTML = '<li class="dim">No contacts yet. After a chat, use “＋ contact”.</li>';
@@ -1265,6 +1275,17 @@ function applyUpdate() {
 }
 
 // ---- Tor mode (§28) --------------------------------------------------------------------------
+function connectContact(hex, name) {
+  if (app.contact_connect(hex) !== 0) return;
+  room = null;
+  myIdx = 1;
+  status('connecting via Tor');
+  $('note-title').textContent = `Connecting to ${name} through Tor…`;
+  $('note-text').textContent = 'Their Ephem must be open in Tor mode, signed in, with no other chat. This usually takes 10–60 seconds.';
+  $('b-again').textContent = 'Cancel';
+  show('v-note');
+}
+
 // Test hook: the offline lab (checks/tor-lab) sets `ephemTorLab` before the page loads (its own
 // broker, bridge and Tor network). A page script cannot set it: the CSP allows only our files.
 function startTor() {
