@@ -36,10 +36,26 @@ need npm     "comes with Node.js"
 need python3 "Python >= 3.9"
 need cargo   "Rust via https://rustup.rs"
 need rustup  "Rust via https://rustup.rs"
-need clang   "needed to build ring for wasm32 (macOS: xcode-select --install; Debian/Ubuntu: apt install clang)"
 need gzip    "system package"
 [ "$MISSING" = 1 ] && { echo "Install the missing tools and re-run."; exit 2; }
 rustup target add wasm32-unknown-unknown >/dev/null
+
+# C code for wasm32 (only `ring`, used by Tor's TLS) needs an LLVM clang with the WebAssembly
+# backend. Apple's Xcode clang has none, so on macOS use Homebrew LLVM (brew install llvm).
+WASM_CC=""
+if [ "$(uname -s)" = Darwin ]; then
+  for d in "$(brew --prefix llvm 2>/dev/null)" /opt/homebrew/opt/llvm /usr/local/opt/llvm; do
+    [ -n "$d" ] && [ -x "$d/bin/clang" ] && { WASM_CC="$d/bin/clang"; WASM_AR="$d/bin/llvm-ar"; break; }
+  done
+elif command -v clang >/dev/null 2>&1; then
+  WASM_CC="$(command -v clang)"; WASM_AR="$(command -v llvm-ar || command -v ar)"
+fi
+if [ -n "$WASM_CC" ]; then
+  export CC_wasm32_unknown_unknown="$WASM_CC" AR_wasm32_unknown_unknown="$WASM_AR"
+else
+  echo "note: no LLVM clang with a wasm32 backend found; E1 (Tor build) will be skipped."
+  echo "      macOS: brew install llvm      Debian/Ubuntu: sudo apt install clang llvm"
+fi
 
 {
   echo "# Checkpoint report"
@@ -73,6 +89,26 @@ fi
 if [ "${NET:-1}" != 0 ]; then
   say "S8 / TS3: raw STUN over UDP (what a peer sees)"
   { echo "## S8 / TS3: raw STUN over UDP"; echo; python3 "$ROOT/stun_udp.py" "$LABEL"; echo; } | tee -a "$OUT/REPORT.md"
+fi
+
+# ---------------------------------------------------------------- C-P1 diagnostic (outside the browser)
+if [ "${NET:-1}" != 0 ]; then
+  say "C-P1 diagnostic: gateway status, redirects and CORS headers (curl)"
+  CID=bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi
+  {
+    echo "## C-P1 diagnostic (curl, Origin: http://127.0.0.1)"; echo
+    echo "| Gateway | HTTP | Redirect to | Access-Control-Allow-Origin | Content-Type |"; echo "|---|---|---|---|---|"
+    for gw in https://trustless-gateway.link https://ipfs.io https://dweb.link; do
+      H="$(curl -sS -m 20 -o /dev/null -D - -H 'Origin: http://127.0.0.1' -H 'Accept: application/vnd.ipld.car' "$gw/ipfs/$CID?format=car&dag-scope=entity" 2>&1 | tr -d '\r')"
+      code="$(echo "$H" | awk '/^HTTP/{c=$2} END{print c}')"
+      loc="$(echo "$H" | awk 'tolower($1)=="location:"{print $2}' | tail -1)"
+      acao="$(echo "$H" | awk 'tolower($1)=="access-control-allow-origin:"{print $2}' | tail -1)"
+      ctype="$(echo "$H" | awk 'tolower($1)=="content-type:"{$1=""; print}' | tail -1)"
+      [ -z "$code" ] && code="error: $(echo "$H" | head -1 | cut -c1-80)"
+      echo "| $gw | $code | ${loc:-–} | ${acao:-none} | ${ctype:-–} |"
+    done
+    echo
+  } | tee -a "$OUT/REPORT.md"
 fi
 
 # ---------------------------------------------------------------- browser checks
@@ -117,14 +153,16 @@ say "S5b: Argon2id timing in WASM (V8)"
 } | tee -a "$OUT/REPORT.md"
 
 # ---------------------------------------------------------------- E1 / G1: arti for wasm32
-if [ "${SKIP_ARTI:-0}" != 1 ]; then
+if [ "${SKIP_ARTI:-0}" != 1 ] && [ -z "$WASM_CC" ]; then
+  { echo "## E1 / G1: arti for wasm32"; echo; echo "SKIPPED: needs an LLVM clang with a wasm32 backend (macOS: \`brew install llvm\`)."; echo; } | tee -a "$OUT/REPORT.md"
+elif [ "${SKIP_ARTI:-0}" != 1 ]; then
   say "E1 / G1: arti-client (Tor) for wasm32 with the Tor-mode feature set (slow the first time)"
   if ( cd "$ROOT/rust/arti-wasm32" && RUSTFLAGS="$WASM_FLAGS" cargo build -q --release --target wasm32-unknown-unknown >"$OUT/arti.log" 2>&1 ); then
     R="PASS"
   else
     R="FAIL (first error: $(grep -m1 -E '^error' "$OUT/arti.log" | cut -c1-160))"
   fi
-  { echo "## E1 / G1: arti for wasm32"; echo; echo "| Check | Result |"; echo "|---|---|"; echo "| arti-client 0.46 + onion client/service, bridges, PT, rustls+ring | $R |"; echo; } | tee -a "$OUT/REPORT.md"
+  { echo "## E1 / G1: arti for wasm32"; echo; echo "| Check | Result |"; echo "|---|---|"; echo "| arti-client 0.46 + onion client/service, ephemeral keystore, bridges, PT, rustls+ring (no C except ring) | $R |"; echo; } | tee -a "$OUT/REPORT.md"
 fi
 
 # ---------------------------------------------------------------- manual checks

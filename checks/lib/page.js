@@ -150,8 +150,7 @@ window.C = (() => {
       const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 30000);
       const resp = await fetch(new URL('client', brokerUrl).toString(), { method: 'POST', body, signal: ctl.signal });
       clearTimeout(to);
-      out.httpStatus = resp.status;
-      out.acao = resp.headers.get('access-control-allow-origin');
+      out.httpStatus = resp.status; // a readable response proves the broker's CORS policy allows this origin
       const txt = await resp.text();
       out.steps.push(`broker responded ${resp.status} after ${ms()} ms`);
       let j = null; try { j = JSON.parse(txt); } catch (_) { out.brokerBody = txt.slice(0, 200); }

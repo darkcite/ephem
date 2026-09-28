@@ -15,7 +15,7 @@ mls = ["dep:openmls", "dep:openmls_rust_crypto", "dep:openmls_basic_credential"]
 [dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
-snow = { version = "0.10", optional = true, default-features = false, features = ["default-resolver", "std", "use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
+snow = { version = "0.10", optional = true, default-features = false, features = ["default-resolver", "use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
 argon2 = { version = "0.5", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 hkdf = { version = "0.12", optional = true }

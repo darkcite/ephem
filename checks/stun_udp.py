@@ -42,6 +42,8 @@ def probe(host: str, port: int, family: int) -> str:
     except socket.gaierror:
         return "no DNS record"
     addr = infos[0][4]
+    if family == socket.AF_INET6 and str(addr[0]).startswith("::ffff:"):
+        return "no IPv6 route (resolver returned only an IPv4-mapped address)"
     try:
         sock = socket.socket(family, socket.SOCK_DGRAM)
     except OSError as exc:
@@ -51,7 +53,10 @@ def probe(host: str, port: int, family: int) -> str:
     try:
         sock.sendto(struct.pack("!HHI", 0x0001, 0, MAGIC) + tid, addr)
         data = sock.recvfrom(2048)[0]
-        return xor_mapped(data, tid)
+        seen = xor_mapped(data, tid)
+        if family == socket.AF_INET6 and not seen.startswith("["):
+            return f"no IPv6 route (reply came over IPv4: {seen})"
+        return seen
     except OSError as exc:
         return f"no reply ({exc.__class__.__name__})"
     finally:
