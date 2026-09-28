@@ -96,6 +96,28 @@ impl Identity {
     pub fn seed(&self) -> &[u8; 32] {
         &self.seed
     }
+
+    /// Ed25519 signature with the identity's signing key (room state, §14.2). Setup path: the
+    /// signing key is re-derived from the seed and wiped after use.
+    pub fn sign(&self, msg: &[u8]) -> [u8; 64] {
+        use ed25519_dalek::Signer;
+        let mut ed = derive(&self.seed, b"p2pchat/ed25519");
+        let sig = ed25519_dalek::SigningKey::from_bytes(&ed).sign(msg).to_bytes();
+        ed.zeroize();
+        sig
+    }
+
+    /// X25519 of our static key with `peer` (sealed signalling, §14.4).
+    pub fn dh(&self, peer: &PeerId) -> [u8; 32] {
+        let xs = x25519_dalek::StaticSecret::from(self.x_secret);
+        *xs.diffie_hellman(&x25519_dalek::PublicKey::from(peer.0)).as_bytes()
+    }
+}
+
+/// Verifies an Ed25519 signature made by [`Identity::sign`].
+pub fn verify(sign_pk: &[u8; 32], msg: &[u8], sig: &[u8; 64]) -> bool {
+    let Ok(pk) = ed25519_dalek::VerifyingKey::from_bytes(sign_pk) else { return false };
+    pk.verify_strict(msg, &ed25519_dalek::Signature::from_bytes(sig)).is_ok()
 }
 
 #[cfg(test)]
@@ -115,6 +137,17 @@ mod tests {
         let l = a.peer_id().lock_name();
         assert!(l.starts_with(b"p2pchat-id-") && l[11..].iter().all(u8::is_ascii_hexdigit));
         assert_eq!(&l[11..17], &h[5..11], "same hash prefix as the handle");
+    }
+
+    #[test]
+    fn sign_verify_and_dh() {
+        let a = Identity::from_seed(&[1; 32]);
+        let b = Identity::from_seed(&[2; 32]);
+        let sig = a.sign(b"room state");
+        assert!(verify(&a.sign_pk(), b"room state", &sig));
+        assert!(!verify(&a.sign_pk(), b"room statE", &sig));
+        assert!(!verify(&b.sign_pk(), b"room state", &sig));
+        assert_eq!(a.dh(&b.peer_id()), b.dh(&a.peer_id()), "static-static DH is symmetric");
     }
 
     #[test]

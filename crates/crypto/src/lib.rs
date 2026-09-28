@@ -5,12 +5,15 @@
 //!   (ChaCha20-Poly1305 over the raw split keys, frame header as AAD, nonce = frame `seq`).
 //! - [`sas`]: short authentication string from the handshake hash.
 //! - [`keyfile`]: encrypted identity key file (Argon2id + XChaCha20-Poly1305).
+//! - [`contacts`]: the contacts table kept in the key file.
+//! - [`seal`]: sealed boxes between two static keys (signalling relayed by a room owner).
 
 pub mod contacts;
 pub mod identity;
 pub mod keyfile;
 pub mod noise;
 pub mod sas;
+pub mod seal;
 
 pub use identity::{Identity, PeerId};
 

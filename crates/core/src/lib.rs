@@ -5,7 +5,9 @@
 //! Deterministic, so it is tested natively by running two sessions against each other.
 
 pub mod messages;
+pub mod room;
 pub mod session;
 
 pub use messages::{MsgRef, TTL_CHOICES};
-pub use session::{Diag, Event, Privacy, Role, Session, Settings, State};
+pub use room::{Member, RoomRole, RoomState};
+pub use session::{Diag, Event, Privacy, Role, RoomLink, Session, Settings, State};

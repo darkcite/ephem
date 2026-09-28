@@ -156,7 +156,7 @@ fi
 
 # ---------------------------------------------------------------- browser checks
 if want app; then
-say "MVP-1 app: native tests + end-to-end chat in Chrome"
+say "App: native tests + end-to-end chat (MVP-1, MVP-2) and rooms (MVP-3) in Chrome"
 REPO="$(cd "$ROOT/.." && pwd)"
 if command -v cargo >/dev/null 2>&1; then
   NT=$( (cd "$REPO" && env -u CARGO_TARGET_DIR cargo test --workspace --quiet 2>&1) | tee "$OUT/app-native.log" | grep -E "^test result" | awk '{p+=$4; f+=$6} END {printf "%d passed, %d failed", p, f}')
@@ -165,7 +165,8 @@ else
 fi
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_app.mjs" 2>&1 | tee "$OUT/app-e2e.log"
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_mvp2.mjs" 2>&1 | tee "$OUT/app-e2e-mvp2.log"
-{ echo "## App"; echo; echo "Native tests: $NT"; echo; echo "### MVP-1"; echo '```'; cat "$OUT/app-e2e.log"; echo '```'; echo; echo "### MVP-2"; echo '```'; cat "$OUT/app-e2e-mvp2.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
+E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_room.mjs" 2>&1 | tee "$OUT/app-e2e-room.log"
+{ echo "## App"; echo; echo "Native tests: $NT"; echo; echo "### MVP-1"; echo '```'; cat "$OUT/app-e2e.log"; echo '```'; echo; echo "### MVP-2"; echo '```'; cat "$OUT/app-e2e-mvp2.log"; echo '```'; echo; echo "### MVP-3 rooms"; echo '```'; cat "$OUT/app-e2e-room.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
 fi
 
 if want browser; then

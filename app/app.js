@@ -6,15 +6,22 @@ import * as slots from './slots.js';
 
 const EV = { CODE: 1, CONNECTED: 2, HELLO: 3, CHAT: 4, DELIVERED: 5, DEGRADED: 6, ALIVE: 7, PEER_HIDDEN: 8, CLOSED: 9, ERROR: 10,
   PROGRESS: 11, PATH: 12, SETTING: 13, EDITED: 14, DELETED: 15, EXPIRED: 16, READ: 17, TYPING: 18, SUSPENDED: 19,
-  REACTION: 20, PEER_READY: 21, IDENTITY_SENT: 22, IDENTITY_RECEIVED: 23 };
+  REACTION: 20, PEER_READY: 21, IDENTITY_SENT: 22, IDENTITY_RECEIVED: 23, ROOM: 24, ROOM_CLOSED: 25 };
+// Meta block offsets (crates/wasm/src/lib.rs `meta`).
+const META = { TTL: 0, HAS_REPLY: 4, SENDER: 5, REPLY_SEQ: 8, RESUMED: 0, MEMBER: 16, LEN: 24 };
+const PENDING = 0xff;           // member index of a joiner the owner has not admitted yet
+const OWNER = 0;
+const ROLE = ['owner', 'member', 'observer'];
 const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+const FLAG_GROUP = 2;
 const FLAG_TRANSFER = 4;
+const FLAG_OBSERVER = 8;
 const ST = { NONE: 0, GATHERING: 1, AWAITING: 2, CONNECTING: 3, CONNECTED: 4, CLOSED: 5, SUSPENDED: 6 };
 const FRAG = { 1: 'i', 2: 'a', 3: 'r', 4: 'q' };
 const TTL_LABEL = { 5: '5 seconds', 30: '30 seconds', 60: '1 minute', 300: '5 minutes', 3600: '1 hour', 86400: '1 day' };
 const TTL_SHORT = { 5: '5s', 30: '30s', 60: '1m', 300: '5m', 3600: '1h', 86400: '1d' };
 // ErrorCode values (§19) for negative return values.
-const ERR = { 0x23: 'E_DUPLICATE_SESSION', 0x24: 'E_NOT_A_CONTACT', 0x01: 'E_INVALID_INVITE', 0x02: 'E_EXPIRED_INVITE', 0x03: 'E_INVITE_CONSUMED', 0x04: 'E_ANSWER_MISMATCH', 0x10: 'E_INVALID_ROOM',
+const ERR = { 0x11: 'E_ROOM_FULL', 0x12: 'E_ROOM_DISPOSED', 0x13: 'E_NOT_OWNER', 0x23: 'E_DUPLICATE_SESSION', 0x24: 'E_NOT_A_CONTACT', 0x01: 'E_INVALID_INVITE', 0x02: 'E_EXPIRED_INVITE', 0x03: 'E_INVITE_CONSUMED', 0x04: 'E_ANSWER_MISMATCH', 0x10: 'E_INVALID_ROOM',
   0x20: 'E_AUTH_FAILED', 0x21: 'E_CRYPTO_FAILED', 0x22: 'E_SAS_REJECTED', 0x30: 'E_ICE_FAILED', 0x31: 'E_NO_DIRECT_PATH', 0x32: 'E_RELAY_REJECTED',
   0x35: 'E_PEER_OFFLINE', 0x40: 'E_PROTOCOL_MISMATCH', 0x41: 'E_MESSAGE_TOO_LARGE', 0x42: 'E_BACKPRESSURE', 0x43: 'E_NOT_PERMITTED', 0x60: 'E_KEYFILE_INVALID' };
 const MESSAGES = {
@@ -38,7 +45,12 @@ const MESSAGES = {
   E_BROWSER_UNSUPPORTED: 'This browser does not support WebRTC data channels.',
   E_DUPLICATE_SESSION: 'This identity is already open in another tab. Close it there first.',
   E_NOT_A_CONTACT: 'That contact does not exist any more.',
+  E_ROOM_FULL: 'The room is full (16 people).',
+  E_ROOM_DISPOSED: 'The owner closed the room. Nothing was stored.',
+  E_NOT_OWNER: 'Only the room owner can do that.',
 };
+// In a room, a member's link to the owner ending means the room is gone for it.
+const ROOM_MESSAGES = { E_PEER_OFFLINE: 'E_ROOM_DISPOSED', E_NOT_PERMITTED: 'You were removed from the room. Nothing was stored.' };
 
 const $ = (id) => document.getElementById(id);
 const dec = new TextDecoder();
@@ -47,7 +59,7 @@ let wasm, app;
 let metaPtr = 0;               // event side-channel block (never moves: boxed at start)
 let chatOpen = false;          // a chat view is live (connected at least once)
 let codeExpires = 0;           // ms, for the countdown of the code on screen
-let composing = null;          // { mode: 'reply' | 'edit', mine, seq }
+let composing = null;          // { mode: 'reply' | 'edit', sender, seq }
 let readSent = 0;
 let typingTimer = 0;
 let scanStop = null;
@@ -58,14 +70,22 @@ let transferring = null;       // identity transfer (§7.6): 'receiver' (new dev
 let xferDone = false;
 let receivedBlob = null;       // the received key file, still passphrase-encrypted
 let peerNick = '';             // what the peer calls itself (HELLO); never authentication
-const msgs = new Map();        // 'm:<seq>' (mine) / 't:<seq>' (theirs) → { li, body, tick, text, meta }
+let myIdx = 0;                 // our member index: messages are identified by (sender, seq)
+let room = null;               // { owner, role, confirmed } while in a room (§14)
+const names = new Map();       // room member index → display name
+const deliveredBy = new Map(); // room member index → cumulative delivered seq of our messages
+const removedByMe = new Set(); // owner: members just removed (no "no longer in the room" line)
+const msgs = new Map();        // '<sender>:<seq>' → { li, body, tick, text, meta, sender, seq, mine }
 const visibleTheirs = new Set();
 
 const later = (fn) => queueMicrotask(fn);
 const mem = (ptr, len) => new Uint8Array(wasm.memory.buffer, ptr, len);
 const text = (ptr, len) => dec.decode(mem(ptr, len));
 const baseUrl = () => location.origin + location.pathname;
-const keyOf = (mine, seq) => `${mine ? 'm' : 't'}:${seq}`;
+const keyOf = (sender, seq) => `${sender}:${seq}`;
+const metaView = () => new DataView(wasm.memory.buffer, metaPtr, META.LEN);
+const member = () => metaView().getUint8(META.MEMBER);
+const nameOf = (idx) => (idx === myIdx ? 'You' : names.get(idx) || (room ? `member ${idx}` : 'Peer'));
 const errName = (neg) => ERR[-neg] || `error 0x${(-neg).toString(16)}`;
 const b64u = (u8) => btoa(String.fromCharCode(...u8)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const unb64u = (s) => {
@@ -121,21 +141,28 @@ function sysLine(t) {
   if (follow) toBottom();
 }
 
-function quoteText(mine, seq) {
-  const m = msgs.get(keyOf(mine, seq));
+function quoteText(sender, seq) {
+  const m = msgs.get(keyOf(sender, seq));
   if (!m || m.deleted) return 'Message unavailable';
-  return (mine ? 'You: ' : 'Peer: ') + m.text.slice(0, 80);
+  return `${nameOf(sender)}: ${m.text.slice(0, 80)}`;
 }
 
-function addMessage(mine, seq, body, ttl, reply) {
+function addMessage(sender, seq, body, ttl, reply) {
+  const mine = sender === myIdx;
   const li = document.createElement('li');
   li.className = mine ? 'me' : 'them';
-  li.dataset.key = keyOf(mine, seq);
+  li.dataset.key = keyOf(sender, seq);
+  if (room && !mine) {
+    const who = document.createElement('span');
+    who.className = 'who';
+    who.textContent = nameOf(sender);
+    li.append(who);
+  }
   if (reply) {
     const q = document.createElement('span');
     q.className = 'quote';
-    q.dataset.ref = keyOf(reply.mine, reply.seq);
-    q.textContent = quoteText(reply.mine, reply.seq);
+    q.dataset.ref = keyOf(reply.sender, reply.seq);
+    q.textContent = quoteText(reply.sender, reply.seq);
     li.append(q);
   }
   const b = document.createElement('span');
@@ -157,13 +184,23 @@ function addMessage(mine, seq, body, ttl, reply) {
   const reacts = document.createElement('span');
   reacts.className = 'reacts';
   li.append(reacts);
-  const m = { li, body: b, tick, meta, reacts, text: body, mine, seq, deleted: false, level: 0, reaction: { me: '', peer: '' } };
+  const m = { li, body: b, tick, meta, reacts, text: body, sender, mine, seq, deleted: false, level: 0, reactions: new Map() };
   msgs.set(li.dataset.key, m);
   const follow = mine || atBottom();
   $('log').append(li);
   if (follow) toBottom();
-  if (!mine) io.observe(li);
+  if (!mine && !room) io.observe(li);
+  if (mine && room) roomTick(m);
   return m;
+}
+
+// Room delivery: "✓ k/N", N = the other members now in the room (§14.3).
+function roomTick(m) {
+  const others = [...names.keys()].filter((i) => i !== myIdx);
+  const k = others.filter((i) => (deliveredBy.get(i) || 0) >= m.seq).length;
+  m.tick.textContent = others.length ? `✓ ${k}/${others.length}` : '🕓';
+  m.tick.title = others.length ? `Delivered to ${k} of ${others.length}` : 'Nobody else in the room yet';
+  m.tick.classList.toggle('ok', others.length > 0 && k === others.length);
 }
 
 function setTick(upto, level) {
@@ -178,8 +215,8 @@ function setTick(upto, level) {
 
 // Re-renders every quote of message `key` (after an edit, a delete or an expiry).
 function refreshQuotes(key) {
-  const [mine, seq] = [key[0] === 'm', Number(key.slice(2))];
-  for (const q of document.querySelectorAll(`.quote[data-ref="${key}"]`)) q.textContent = quoteText(mine, seq);
+  const [sender, seq] = key.split(':').map(Number);
+  for (const q of document.querySelectorAll(`.quote[data-ref="${key}"]`)) q.textContent = quoteText(sender, seq);
 }
 
 function markDeleted(key, label) {
@@ -216,10 +253,14 @@ function toggleActions(m) {
     b.onclick = (e) => { e.stopPropagation(); acts.remove(); fn(); };
     acts.append(b);
   };
-  add('Reply', () => startComposing('reply', m));
-  add('React', () => showPicker(m));
+  const observer = room?.role === 2;
+  if (!observer) {
+    add('Reply', () => startComposing('reply', m));
+    add('React', () => showPicker(m));
+  }
   if (m.mine) add('Edit', () => startComposing('edit', m));
-  add(m.mine ? 'Delete for everyone' : 'Delete for me', () => deleteMessage(m));
+  if (room?.owner && !m.mine) add('Delete for everyone', () => deleteMessage(m, true));
+  add(m.mine ? 'Delete for everyone' : 'Delete for me', () => deleteMessage(m, false));
   add('Copy', () => navigator.clipboard?.writeText(m.text).catch(() => {}));
   m.li.append(acts);
 }
@@ -227,10 +268,10 @@ function toggleActions(m) {
 // One reaction per person per message; the latest wins, empty removes (§11.7).
 function renderReactions(m) {
   m.reacts.replaceChildren();
-  for (const [who, e] of [['you', m.reaction.me], ['peer', m.reaction.peer]]) {
+  for (const [by, e] of m.reactions) {
     if (!e) continue;
     const t = document.createElement('span');
-    t.textContent = `${e} ${who}`;
+    t.textContent = `${e} ${by === myIdx ? 'you' : room ? nameOf(by) : 'peer'}`;
     m.reacts.append(t);
   }
 }
@@ -247,9 +288,9 @@ function showPicker(m) {
       ev.stopPropagation();
       picker.remove();
       const emoji = e === '✕' ? '' : e;
-      const r = app.react(m.mine, m.seq, writeText(emoji));
+      const r = app.react(m.sender, m.seq, writeText(emoji));
       if (r < 0) return error(errName(r));
-      m.reaction.me = emoji;
+      m.reactions.set(myIdx, emoji);
       renderReactions(m);
     };
     picker.append(b);
@@ -261,8 +302,8 @@ function showPicker(m) {
 const oneGrapheme = (s) => !s || !globalThis.Intl?.Segmenter || [...new Intl.Segmenter().segment(s)].length === 1;
 
 function startComposing(mode, m) {
-  composing = { mode, mine: m.mine, seq: m.seq };
-  $('composing-text').textContent = mode === 'edit' ? 'Editing your message' : 'Reply to ' + quoteText(m.mine, m.seq);
+  composing = { mode, sender: m.sender, seq: m.seq };
+  $('composing-text').textContent = mode === 'edit' ? 'Editing your message' : 'Reply to ' + quoteText(m.sender, m.seq);
   $('composing').hidden = false;
   if (mode === 'edit') $('t-msg').value = m.text;
   $('t-msg').focus();
@@ -273,11 +314,15 @@ function stopComposing() {
   $('composing').hidden = true;
 }
 
-function deleteMessage(m) {
-  const r = app.delete(m.mine, m.seq);
+// Ours: for everyone. Someone else's: for me only, or for everyone by the room owner.
+function deleteMessage(m, moderate) {
+  if (!m.mine && !moderate) {
+    if (!room?.owner) app.delete(m.sender, m.seq); // local only: drops its self-destruct timer (an owner's call would moderate)
+    return removeMessage(m.li.dataset.key);
+  }
+  const r = app.delete(m.sender, m.seq);
   if (r < 0) return error(errName(r));
-  if (m.mine) markDeleted(m.li.dataset.key, 'You deleted this message');
-  else removeMessage(m.li.dataset.key);
+  markDeleted(m.li.dataset.key, m.mine ? 'You deleted this message' : 'You removed this message');
 }
 
 // Read receipts: a message counts as read when it is on screen and the page is visible (§11.7).
@@ -291,10 +336,19 @@ function flushRead() {
 }
 
 // ---- events from Rust ----------------------------------------------------------------------
+// Every event names the link it came from (meta MEMBER: the peer's member index). In a 1:1 chat
+// there is one link; in a room the member's link to the owner plays that part (the "primary").
+const primary = (idx) => !room || (!room.owner && idx === OWNER);
+
 globalThis.ephemEvent = (kind, num, ptr, len) => {
+  const from = member();
   switch (kind) {
     case EV.CODE: {
       const code = text(ptr, len);
+      if (room?.owner && num === 1) {
+        showRoomInvite(code);
+        break;
+      }
       codeExpires = num === 1 || num === 3 ? Date.now() + Number($('s-ttl').value) * 1000 : 0;
       if (num <= 2) showCode(num, code);
       else showResumeCode(num, code);
@@ -302,11 +356,19 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       break;
     }
     case EV.PROGRESS:
-      status(['', 'gathering', 'connecting', 'handshake'][num] || '');
+      if (primary(from)) status(['', 'gathering', 'connecting', 'handshake'][num] || '');
       break;
     case EV.CONNECTED: {
       const b = mem(ptr, len);
-      const resumed = new DataView(wasm.memory.buffer, metaPtr, 16).getUint8(0) === 1;
+      const resumed = metaView().getUint8(META.RESUMED) === 1;
+      if (!primary(from)) {
+        if (room.owner && from === PENDING) {
+          hideRoomInvite();
+          sysLine('Someone answered your invite. Admitting them to the room…');
+        }
+        later(renderRoom);
+        break;
+      }
       status('connected', 'ok');
       codeExpires = 0;
       if (resumed) {
@@ -323,8 +385,12 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
         later(() => showTransfer(digits, emoji));
         break;
       }
+      if (!room) myIdx = from === 0 ? 1 : 0; // 1:1: the offerer is 0, the answerer 1
       $('sas-digits').textContent = digits;
       $('sas-emoji').textContent = emoji;
+      $('sas-help').textContent = room
+        ? 'Compare it with the room owner on another channel, for example a call. It proves the room (and its member list) comes from them.'
+        : 'Compare it with your peer on another channel, for example a call. If it differs, someone may be in the middle.';
       $('peer').textContent = handle;
       $('peer').dataset.handle = handle;
       $('imp-warn').hidden = true;
@@ -332,22 +398,15 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       $('sas').classList.remove('optional');
       $('verified').textContent = 'unverified';
       $('verified').className = 'pill';
-      $('log').replaceChildren();
-      msgs.clear();
-      visibleTheirs.clear();
-      readSent = 0;
-      stopComposing();
-      $('resume').hidden = true;
-      $('diag').hidden = true;
-      $('s-chat-ttl').value = '0';
-      chatOpen = true;
-      sysLine('Connected directly. Messages are end-to-end encrypted and exist only in these two tabs.');
-      show('v-chat');
-      later(() => { renderPeer(); $('t-msg').focus(); });
+      openChat(room ? 'Connected to the room owner. The member list arrives next.' : 'Connected directly. Messages are end-to-end encrypted and exist only in these two tabs.');
       break;
     }
     case EV.HELLO: {
       if (transferring) break;
+      if (!primary(from)) {
+        later(renderRoom);
+        break;
+      }
       peerNick = text(ptr, len);
       // Both codes scanned in person: the SAS is shown but not prompted (§10.4).
       if (num === 1 && $('verified').textContent === 'unverified') {
@@ -355,13 +414,15 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
         $('verified').textContent = 'met in person';
       }
       later(renderPeer);
+      if (room) later(renderRoom);
       break;
     }
     case EV.REACTION: {
-      const m = msgs.get(keyOf(num > 0, Math.abs(num)));
+      const mv = metaView();
+      const m = msgs.get(keyOf(mv.getUint8(META.SENDER), num));
       const e = text(ptr, len);
       if (m && !m.deleted && oneGrapheme(e)) {
-        m.reaction.peer = e;
+        m.reactions.set(from, e);
         renderReactions(m);
       }
       break;
@@ -383,25 +444,31 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       later(() => { app.close(); $('i-xfer-pass').focus(); });
       break;
     case EV.CHAT: {
-      const meta = new DataView(wasm.memory.buffer, metaPtr, 16);
-      const ttl = meta.getUint32(0, true);
-      const reply = meta.getUint8(4) ? { mine: meta.getUint8(5) === 1, seq: meta.getFloat64(8, true) } : null;
-      addMessage(false, num, text(ptr, len), ttl, reply);
-      $('peer-state').textContent = '';
+      const mv = metaView();
+      const ttl = mv.getUint32(META.TTL, true);
+      const reply = mv.getUint8(META.HAS_REPLY) ? { sender: mv.getUint8(META.SENDER), seq: mv.getFloat64(META.REPLY_SEQ, true) } : null;
+      addMessage(from, num, text(ptr, len), ttl, reply);
+      if (!room) $('peer-state').textContent = '';
       break;
     }
     case EV.DELIVERED:
-      setTick(num, 1);
+      if (!room) {
+        setTick(num, 1);
+        break;
+      }
+      deliveredBy.set(from, Math.max(num, deliveredBy.get(from) || 0));
+      for (const m of msgs.values()) if (m.mine && !m.deleted && m.seq <= num) roomTick(m);
       break;
     case EV.READ:
       setTick(num, 2);
       break;
     case EV.SETTING:
       $('s-chat-ttl').value = String(num);
-      sysLine(num ? `Your peer set messages to disappear after ${TTL_LABEL[num]}.` : 'Your peer turned off disappearing messages.');
+      if (room) sysLine(num ? `The owner set messages to disappear after ${TTL_LABEL[num]}.` : 'The owner turned off disappearing messages.');
+      else sysLine(num ? `Your peer set messages to disappear after ${TTL_LABEL[num]}.` : 'Your peer turned off disappearing messages.');
       break;
     case EV.EDITED: {
-      const m = msgs.get(keyOf(false, num));
+      const m = msgs.get(keyOf(from, num));
       if (m && !m.deleted) {
         m.text = text(ptr, len);
         m.body.textContent = m.text;
@@ -410,43 +477,64 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       }
       break;
     }
-    case EV.DELETED:
-      markDeleted(keyOf(num > 0, Math.abs(num)), 'Message deleted');
+    case EV.DELETED: {
+      const sender = metaView().getUint8(META.SENDER);
+      markDeleted(keyOf(sender, num), sender !== from && from === OWNER ? 'Removed by the room owner' : 'Message deleted');
       break;
+    }
     case EV.EXPIRED:
-      removeMessage(keyOf(num > 0, Math.abs(num)));
+      removeMessage(keyOf(metaView().getUint8(META.SENDER), num));
       break;
     case EV.TYPING:
       $('peer-state').textContent = num ? 'typing…' : '';
       break;
     case EV.DEGRADED:
+      if (!primary(from)) break;
       status('no response', 'bad');
-      $('peer-state').textContent = 'connection problem…';
+      $('peer-state').textContent = room ? 'owner not responding…' : 'connection problem…';
       break;
     case EV.ALIVE:
+      if (!primary(from)) break;
       status('connected', 'ok');
       $('peer-state').textContent = '';
       break;
     case EV.PEER_HIDDEN:
-      $('peer-state').textContent = num ? 'in background' : '';
+      if (!room) $('peer-state').textContent = num ? 'in background' : '';
       break;
     case EV.PATH:
+      if (!primary(from)) break;
       pathText = text(ptr, len);
       renderPath();
       break;
     case EV.SUSPENDED:
+      if (!primary(from)) {
+        later(renderRoom);
+        break;
+      }
       status('disconnected', 'bad');
-      $('peer-state').textContent = '';
+      $('peer-state').textContent = room ? 'owner unreachable' : '';
       if (chatOpen) {
         $('resume').hidden = false;
         $('resume').querySelector('.codebox').hidden = true;
-        sysLine('Direct path lost. Share a reconnect code to continue.');
+        sysLine(room ? 'Direct path to the room owner lost. Share a reconnect code with the owner to continue.' : 'Direct path lost. Share a reconnect code to continue.');
       }
       break;
     case EV.CLOSED: {
       const name = text(ptr, len);
+      if (room && !primary(from)) {
+        later(renderRoom);
+        break;
+      }
       status('closed', 'bad');
-      if (!xferDone) later(() => ended(name));
+      if (!xferDone) later(() => ended(room ? ROOM_MESSAGES[name] || name : name));
+      break;
+    }
+    case EV.ROOM:
+      later(renderRoom);
+      break;
+    case EV.ROOM_CLOSED: {
+      const name = text(ptr, len);
+      if (room) later(() => ended(ROOM_MESSAGES[name] || name));
       break;
     }
     case EV.ERROR:
@@ -481,8 +569,108 @@ function showResumeCode(kind, code) {
   status(kind === 3 ? 'waiting for answer' : 'waiting for peer');
 }
 
+// The chat view, fresh: a 1:1 chat or a room (member: once its owner link is up).
+function openChat(line) {
+  $('log').replaceChildren();
+  msgs.clear();
+  visibleTheirs.clear();
+  deliveredBy.clear();
+  readSent = 0;
+  stopComposing();
+  $('resume').hidden = true;
+  $('diag').hidden = true;
+  $('s-chat-ttl').value = '0';
+  // Rooms: only the owner sets the timer; observers only read (§11.7).
+  $('s-chat-ttl').disabled = !!room && !room.owner;
+  $('f-send').hidden = room?.role === 2;
+  $('room').hidden = !room;
+  chatOpen = true;
+  sysLine(line);
+  show('v-chat');
+  later(() => { renderPeer(); if (room) renderRoom(); $('t-msg').focus(); });
+}
+
+// A used or withdrawn invite must never be picked up again.
+function hideRoomInvite() {
+  const box = $('room-invite');
+  box.hidden = true;
+  box.querySelector('.link').value = '';
+  box.querySelector('.qr').replaceChildren();
+}
+
+function showRoomInvite(code) {
+  renderCodeBox($('room-invite').querySelector('.codebox'), 1, code);
+  $('t-room-answer').value = '';
+  $('room-invite').hidden = false;
+}
+
+// Members, their roles and our direct link to each (§14); the owner can remove members.
+function renderRoom() {
+  if (!room) return;
+  const [me, role, , version, confirmed] = app.room_info().split('\t').map(Number);
+  if (Number.isNaN(me)) return;
+  myIdx = me;
+  room.role = role;
+  room.confirmed = confirmed === 1;
+  const rows = app.room_members().split('\n').filter(Boolean).map((l) => l.split('\t'));
+  const before = new Map(names);
+  names.clear();
+  for (const [idx, , handle, , nick] of rows) names.set(Number(idx), nick ? `${nick} (${handle})` : handle);
+  // Departures, whatever the path (left, removed, link lost for good), from the signed state.
+  for (const [idx, name] of before) if (!names.has(idx) && !removedByMe.delete(idx)) sysLine(`${name} is no longer in the room.`);
+  const ul = $('members');
+  ul.replaceChildren();
+  const LINK = { me: 'you', connected: 'direct', connecting: 'connecting…', suspended: 'reconnecting…', 'no-path': 'no direct path', none: 'not connected' };
+  for (const [idx, r, , link, , sas] of rows) {
+    const i = Number(idx);
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'grow';
+    name.innerHTML = '<b></b> <span class="role"></span> <span></span> <span class="dim"></span>';
+    name.querySelector('b').textContent = i === myIdx ? names.get(i) + ' (you)' : names.get(i);
+    name.querySelector('.role').textContent = ROLE[Number(r)];
+    const st = name.children[2];
+    st.textContent = link === 'me' ? '' : LINK[link] || link;
+    st.className = link === 'connected' ? 'link-ok' : link === 'no-path' || link === 'suspended' ? 'link-bad' : 'dim';
+    // The owner compares each member's safety code with that member (§10.4).
+    if (room.owner && i !== myIdx && sas !== '0') name.querySelector('.dim').textContent = `SAS ${sas.padStart(6, '0').replace(/(\d{3})(\d{3})/, '$1 $2')}`;
+    li.append(name);
+    if (room.owner && i !== OWNER) {
+      const rm = document.createElement('button');
+      rm.textContent = 'Remove';
+      rm.onclick = () => {
+        if (!confirm(`Remove ${names.get(i)} from the room?`)) return;
+        removedByMe.add(i);
+        if (app.room_remove(i) === 0) sysLine(`You removed ${names.get(i)}.`);
+        else removedByMe.delete(i);
+      };
+      li.append(rm);
+    }
+    ul.append(li);
+  }
+  $('room-count').textContent = `${rows.length} / 16`;
+  $('room-role').textContent = ROLE[role] || '';
+  $('room-owner').hidden = !room.owner;
+  $('f-send').hidden = role === 2;
+  const others = rows.length - 2;
+  // Joined as the only member: the invite prompt already said every future member sees our IP.
+  if (!room.owner && !room.confirmed && version > 0 && others <= 0) {
+    room.confirmed = true;
+    app.room_connect();
+  }
+  $('room-confirm').hidden = room.owner || room.confirmed || version === 0 || others <= 0;
+  $('room-confirm-text').textContent = `Connect directly to ${others} other member${others === 1 ? '' : 's'}? Each of them will see your IP address, and you theirs (Ephem never uses a relay).`;
+  for (const m of msgs.values()) if (m.mine && !m.deleted) roomTick(m);
+}
+
 // Contact name, verification and the impersonation warning in the chat header (§7.5).
 function renderPeer() {
+  if (room) {
+    $('b-save-contact').hidden = true;
+    $('imp-warn').hidden = true;
+    if (!room.owner) $('peer').textContent = `Room of ${$('peer').dataset.handle || 'the owner'}${peerNick ? ` “${peerNick}”` : ''}`;
+    return;
+  }
   const [flags, nick] = (app.peer_contact() || '').split('\t');
   const handle = $('peer').dataset.handle || '';
   const contact = flags !== undefined && flags !== '';
@@ -527,11 +715,14 @@ function endTransfer() {
 function ended(name) {
   if (transferring) transferring = null;
   const wasChat = chatOpen;
+  const wasRoom = !!room;
   chatOpen = false;
+  room = null;
+  names.clear();
   msgs.clear();
   visibleTheirs.clear();
   $('log').replaceChildren();
-  $('note-title').textContent = wasChat ? 'Chat ended' : 'Could not connect';
+  $('note-title').textContent = wasChat ? (wasRoom ? 'Room closed' : 'Chat ended') : 'Could not connect';
   $('note-text').textContent = MESSAGES[name] || name;
   $('b-again').hidden = false;
   show('v-note');
@@ -540,6 +731,12 @@ function ended(name) {
 function reset() {
   later(() => app.close());
   chatOpen = false;
+  room = null;
+  names.clear();
+  removedByMe.clear();
+  for (const id of ['room', 'room-invite', 'room-confirm']) $(id).hidden = true;
+  $('s-chat-ttl').disabled = false;
+  $('f-send').hidden = false;
   codeExpires = 0;
   $('t-code').value = '';
   $('t-answer').value = '';
@@ -715,8 +912,21 @@ function applyCode(raw, scanned) {
     if (!confirm(`This code asks for your identity “${app.identity_label()}”. Only continue if the other device is yours. Continue?`)) return;
     transferring = 'sender';
   }
+  const group = (info & 0xff) === 1 && (info >> 8) & FLAG_GROUP;
+  if (group) {
+    // Rooms connect everyone directly: every member sees every other member's IP (§29.2).
+    const observer = (info >> 8) & FLAG_OBSERVER;
+    if (!confirm(`This is an invite to a room${observer ? ', as a read-only observer' : ''}. Every member of the room will see your IP address, and you theirs (direct connections, never a relay). Join?`)) return;
+  }
   applyPrefs();
-  if (app.apply_code(v, scanned) !== 0 && transferring === 'sender') transferring = null;
+  if (app.apply_code(v, scanned) !== 0) {
+    if (transferring === 'sender') transferring = null;
+    return;
+  }
+  if ((info & 0xff) === 1) {
+    room = group ? { owner: false, role: (info >> 8) & FLAG_OBSERVER ? 2 : 1, confirmed: false } : null;
+    myIdx = 1;
+  }
 }
 
 async function copyLink(box) {
@@ -749,7 +959,7 @@ function send(ev) {
   if (composing?.mode === 'edit') {
     const r = app.edit(composing.seq, n);
     if (r < 0) return error(errName(r));
-    const m = msgs.get(keyOf(true, composing.seq));
+    const m = msgs.get(keyOf(myIdx, composing.seq));
     if (m) {
       m.text = msg;
       m.body.textContent = msg;
@@ -758,9 +968,9 @@ function send(ev) {
     }
   } else {
     const reply = composing?.mode === 'reply' ? composing : null;
-    const seq = app.send(n, reply?.mine ?? false, reply?.seq ?? 0);
+    const seq = app.send(n, reply?.sender ?? 0, reply?.seq ?? 0);
     if (seq < 0) return error(errName(seq));
-    addMessage(true, seq, msg, app.chat_ttl(), reply && { mine: reply.mine, seq: reply.seq });
+    addMessage(myIdx, seq, msg, app.chat_ttl(), reply && { sender: reply.sender, seq: reply.seq });
   }
   stopComposing();
   box.value = '';
@@ -1013,7 +1223,7 @@ function applyUpdate() {
 // ---- boot ----------------------------------------------------------------------------------
 const io = new IntersectionObserver((entries) => {
   for (const e of entries) {
-    const seq = Number(e.target.dataset.key.slice(2));
+    const seq = Number(e.target.dataset.key.split(':')[1]);
     if (e.isIntersecting) visibleTheirs.add(seq);
     else visibleTheirs.delete(seq);
   }
@@ -1043,10 +1253,31 @@ async function main() {
   $('b-again').onclick = reset;
   $('b-scan-cancel').onclick = () => scanStop?.();
   $('b-leave').onclick = () => {
+    if (room?.owner && names.size > 1 && !confirm('Close the room for everyone?')) return;
+    const note = room ? (room.owner ? 'You closed the room. Nothing was stored.' : 'You left the room. Nothing was stored.') : 'You left the chat. Nothing was stored.';
     later(() => app.close());
     ended('E_PEER_OFFLINE');
-    $('note-text').textContent = 'You left the chat. Nothing was stored.';
+    $('note-text').textContent = note;
   };
+  $('b-room').onclick = () => {
+    applyPrefs();
+    room = { owner: true, role: 0, confirmed: true };
+    myIdx = OWNER;
+    app.create_room();
+    $('sas').hidden = true;
+    $('peer').textContent = 'Your room';
+    $('peer').dataset.handle = '';
+    $('verified').textContent = 'owner';
+    $('verified').className = 'pill ok';
+    status('room open', 'ok');
+    openChat('Room created. Invite members one at a time; everyone connects directly to everyone else.');
+  };
+  $('b-room-invite').onclick = () => { hideRoomInvite(); applyPrefs(); app.room_invite(false, Number($('s-ttl').value)); };
+  $('b-room-observer').onclick = () => { hideRoomInvite(); applyPrefs(); app.room_invite(true, Number($('s-ttl').value)); };
+  $('b-room-answer').onclick = () => applyCode($('t-room-answer').value, false);
+  $('b-scan-room').onclick = () => scan((t) => applyCode(t, true));
+  $('b-room-connect').onclick = () => { app.room_connect(); renderRoom(); };
+  $('b-room-decline').onclick = () => $('b-leave').click();
   $('b-sas-ok').onclick = () => {
     $('sas').hidden = true;
     $('verified').textContent = 'verified';

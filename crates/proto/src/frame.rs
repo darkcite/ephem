@@ -77,6 +77,12 @@ pub mod rtype {
     pub const IDENTITY_CHUNK: u8 = 0x40;
     /// Identity transfer: the receiving device's user confirmed the SAS. Empty body.
     pub const IDENTITY_READY: u8 = 0x41;
+    /// Rooms (§14): owner-signed room state (owner → member).
+    pub const ROOM_STATE: u8 = 0x30;
+    /// Rooms: `from u8, to u8, sealed box`, forwarded by the owner (§14.4).
+    pub const ROOM_SIGNAL: u8 = 0x31;
+    /// Rooms: a member leaves (member → owner, a proposal). Empty body.
+    pub const ROOM_LEAVE: u8 = 0x32;
 }
 
 /// Record flags.

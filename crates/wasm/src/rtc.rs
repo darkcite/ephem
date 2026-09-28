@@ -3,12 +3,13 @@
 //! allocate on the Rust side; the one RX copy (JS `ArrayBuffer` → wasm RX slot) is documented
 //! in §11.6.
 
-use crate::{Inner, Shared, emit, emit_err, ev, now_ms, sink};
+
+use crate::{Inner, Shared, emit, emit_err, ev, meta, now_ms, on_link, room};
 use core::cell::{Cell, RefCell};
 use ephem_core::{Privacy, State};
-use ephem_proto::code::IceParams;
 use ephem_proto::ErrorCode;
 use ephem_proto::b64url;
+use ephem_proto::code::{IceParams, MAX_CODE_LEN};
 use ephem_proto::frame::MAX_FRAME;
 use ephem_proto::sdp::MAX_SDP_LEN;
 use js_sys::{ArrayBuffer, Promise, Uint8Array};
@@ -43,11 +44,13 @@ pub enum Step {
     Answer,
 }
 
+/// The RTCPeerConnection of one link path. Its callbacks carry the path's link id: once the link
+/// takes a new path (or is gone) they find nothing and do nothing.
 pub(crate) struct Rtc {
     pc: RtcPeerConnection,
     /// For callbacks and async work spawned from inside a core event (§13 T1).
     weak: Weak<RefCell<Inner>>,
-    generation: u32,
+    id: u32,
     srflx_at: Rc<Cell<f64>>,
     /// Perfect negotiation (§13): an in-band re-offer of ours is in flight.
     making_offer: Cell<bool>,
@@ -75,14 +78,11 @@ impl Rtc {
 
     /// The peer's in-band re-offer / re-answer (§13 T1). Runs after the current core call returns.
     pub fn on_signal(&self, offer: bool, ice: IceParams) {
-        let (weak, generation) = (self.weak.clone(), self.generation);
+        let (weak, id) = (self.weak.clone(), self.id);
         wasm_bindgen_futures::spawn_local(async move {
             let Some(inner) = weak.upgrade() else { return };
-            if let Err(e) = handle_signal(&inner, generation, offer, ice).await {
-                let mut g = inner.borrow_mut();
-                if g.generation == generation {
-                    lost(&mut g, e);
-                }
+            if let Err(e) = handle_signal(&inner, id, offer, ice).await {
+                fail(&inner, id, e);
             }
         });
     }
@@ -112,33 +112,42 @@ impl Rtc {
     }
 }
 
-/// Runs `f` on the live link of `generation`; stale callbacks are ignored.
-fn with_link(weak: &Weak<RefCell<Inner>>, generation: u32, f: impl FnOnce(&mut Inner)) {
+/// Runs `f` on the link whose current path is `id`; stale callbacks are ignored.
+fn with_link(weak: &Weak<RefCell<Inner>>, id: u32, f: impl FnOnce(&mut Inner, usize)) {
     let Some(inner) = weak.upgrade() else { return };
     let mut g = inner.borrow_mut();
-    if g.generation == generation && g.sess.is_some() && g.rtc.is_some() {
-        f(&mut g);
+    if let Some(i) = g.find(id).filter(|i| g.links[*i].rtc.is_some()) {
+        f(&mut g, i);
     }
 }
 
-/// The path is gone: before the first connection the chat ends with `e`; afterwards it is
-/// suspended and waits for a reconnect code (§13 T3).
-fn lost(g: &mut Inner, e: ErrorCode) {
-    let Inner { sess, rtc, meta, .. } = g;
-    if let (Some(s), Some(r)) = (sess.as_mut(), rtc.as_ref()) {
-        s.path_lost(now_ms(), e, &mut sink(r, meta));
+/// The path of link `i` is gone: before the first connection the link ends with `e`; afterwards
+/// it is suspended and waits for a reconnect code (§13 T3, or T2 in a room).
+fn lost(g: &mut Inner, i: usize, e: ErrorCode) {
+    let now = now_ms();
+    on_link!(g, i, |s, k, _t| s.path_lost(now, e, &mut k));
+}
+
+/// A protocol violation on the path ends the link.
+fn abort(g: &mut Inner, i: usize, e: ErrorCode) {
+    on_link!(g, i, |s, k, _t| s.abort(e, &mut k));
+}
+
+/// An async step of path `id` failed.
+fn fail(inner: &Shared, id: u32, e: ErrorCode) {
+    let mut g = inner.borrow_mut();
+    if let Some(i) = g.find(id) {
+        lost(&mut g, i, e);
     }
 }
 
-/// A protocol violation on the path ends the chat.
-fn abort(g: &mut Inner, e: ErrorCode) {
-    let Inner { sess, rtc, meta, .. } = g;
-    if let (Some(s), Some(r)) = (sess.as_mut(), rtc.as_ref()) {
-        s.abort(e, &mut sink(r, meta));
-    }
+/// PROGRESS of link `i` (meta carries its member index).
+fn progress(g: &mut Inner, i: usize, n: f64) {
+    g.meta[meta::MEMBER] = g.links[i].member;
+    emit(ev::PROGRESS, n, &[]);
 }
 
-fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f64>>) -> Result<Rtc, JsValue> {
+fn build(inner: &Shared, id: u32, privacy: Privacy, srflx_at: Rc<Cell<f64>>) -> Result<Rtc, JsValue> {
     let srflx = srflx_at.clone();
     let cfg = RtcConfiguration::new();
     let servers = js_sys::Array::new();
@@ -176,9 +185,9 @@ fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f6
     let (w, pc2) = (weak.clone(), pc.clone());
     let on_state = Closure::<dyn FnMut()>::new(move || {
         if pc2.connection_state() == RtcPeerConnectionState::Failed {
-            with_link(&w, generation, |g| {
-                let connected = g.sess.as_ref().is_some_and(|s| s.state() == State::Connected);
-                lost(g, if connected { ErrorCode::IceFailed } else { ErrorCode::NoDirectPath });
+            with_link(&w, id, |g, i| {
+                let connected = g.links[i].sess.state() == State::Connected;
+                lost(g, i, if connected { ErrorCode::IceFailed } else { ErrorCode::NoDirectPath });
             });
         }
     });
@@ -197,7 +206,7 @@ fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f6
             if pc3.ice_connection_state() == RtcIceConnectionState::Disconnected
                 && let Some(inner) = w.upgrade()
             {
-                restart(inner, generation);
+                restart(inner, id);
             }
         });
     });
@@ -205,12 +214,10 @@ fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f6
 
     let w = weak.clone();
     let on_open = Closure::<dyn FnMut()>::new(move || {
-        with_link(&w, generation, |g| {
-            emit(ev::PROGRESS, 3.0, &[]);
-            let Inner { sess, rtc, meta, .. } = g;
-            if let (Some(s), Some(r)) = (sess.as_mut(), rtc.as_ref()) {
-                s.on_open(now_ms(), &mut sink(r, meta));
-            }
+        with_link(&w, id, |g, i| {
+            progress(g, i, 3.0);
+            let now = now_ms();
+            on_link!(g, i, |s, k, _t| s.on_open(now, &mut k));
         });
     });
     dc.set_onopen(Some(on_open.as_ref().unchecked_ref()));
@@ -220,29 +227,34 @@ fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f6
         let Ok(buf) = e.data().dyn_into::<ArrayBuffer>() else { return };
         let view = Uint8Array::new(&buf);
         let len = view.length() as usize;
-        with_link(&w, generation, |g| {
+        with_link(&w, id, |g, i| {
             if len > MAX_FRAME {
-                abort(g, ErrorCode::MessageTooLarge);
+                abort(g, i, ErrorCode::MessageTooLarge);
                 return;
             }
-            let Inner { sess, rtc, rx, meta, .. } = g;
-            if let (Some(s), Some(r)) = (sess.as_mut(), rtc.as_ref()) {
-                // The single documented RX copy (§11.6): JS ArrayBuffer → preallocated wasm slot.
-                view.copy_to(&mut rx[..len]);
-                s.on_frame(now_ms(), &mut rx[..len], &mut sink(r, meta));
-            }
+            let now = now_ms();
+            let Inner { links, meta, inbox, rx, .. } = g;
+            let crate::Link { sess, rtc, id, member, peer, .. } = &mut links[i];
+            // The single documented RX copy (§11.6): JS ArrayBuffer → preallocated wasm slot.
+            view.copy_to(&mut rx[..len]);
+            let mut out = crate::Out { rtc: rtc.as_ref(), meta, inbox, peer, link: *id, member: *member };
+            sess.on_frame(now, &mut rx[..len], &mut |e| crate::on_event(&mut out, e));
         });
+        // Room records the frame carried (§14), handled with the borrow released.
+        if let Some(inner) = w.upgrade() {
+            room::drain(&inner);
+        }
     });
     dc.set_onmessage(Some(on_msg.as_ref().unchecked_ref()));
 
     let w = weak.clone();
-    let on_close = Closure::<dyn FnMut()>::new(move || with_link(&w, generation, |g| lost(g, ErrorCode::IceFailed)));
+    let on_close = Closure::<dyn FnMut()>::new(move || with_link(&w, id, |g, i| lost(g, i, ErrorCode::IceFailed)));
     dc.set_onclose(Some(on_close.as_ref().unchecked_ref()));
 
     Ok(Rtc {
         pc,
         weak,
-        generation,
+        id,
         srflx_at: srflx,
         making_offer: Cell::new(false),
         restarts: Cell::new(0),
@@ -258,10 +270,10 @@ fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f6
     })
 }
 
-/// Creates the RTCPeerConnection for the current session and runs offer or answer negotiation.
-pub(crate) fn start(inner: Shared, generation: u32, privacy: Privacy, step: Step) {
+/// Creates the RTCPeerConnection for path `id` and runs offer or answer negotiation.
+pub(crate) fn start(inner: Shared, id: u32, privacy: Privacy, step: Step) {
     let srflx_at = Rc::new(Cell::new(0.0));
-    let rtc = match build(&inner, generation, privacy, srflx_at.clone()) {
+    let rtc = match build(&inner, id, privacy, srflx_at.clone()) {
         Ok(r) => r,
         Err(_) => {
             emit_err(ev::ERROR, ErrorCode::BrowserUnsupported);
@@ -269,46 +281,46 @@ pub(crate) fn start(inner: Shared, generation: u32, privacy: Privacy, step: Step
         }
     };
     let pc = rtc.pc.clone();
-    inner.borrow_mut().rtc = Some(rtc);
-    emit(ev::PROGRESS, 1.0, &[]);
+    {
+        let mut g = inner.borrow_mut();
+        let Some(i) = g.find(id) else {
+            rtc.close();
+            return;
+        };
+        g.links[i].rtc = Some(rtc);
+        progress(&mut g, i, 1.0);
+    }
     wasm_bindgen_futures::spawn_local(async move {
-        if let Err(e) = negotiate(&inner, generation, &pc, &srflx_at, step).await {
-            let mut g = inner.borrow_mut();
-            if g.generation == generation {
-                lost(&mut g, e);
-            }
+        if let Err(e) = negotiate(&inner, id, &pc, &srflx_at, step).await {
+            fail(&inner, id, e);
         }
     });
 }
 
-/// Alice: sets Bob's answer (already validated by the core) as the remote description.
-pub(crate) fn apply_answer(inner: Shared, generation: u32) {
+/// Offerer: sets the answer (already validated by the core) as the remote description.
+pub(crate) fn apply_answer(inner: Shared, id: u32) {
     wasm_bindgen_futures::spawn_local(async move {
         let res = async {
-            let (pc, desc) = remote_description(&inner, generation, RtcSdpType::Answer)?;
+            let (pc, desc) = remote_description(&inner, id, RtcSdpType::Answer)?;
             wait(pc.set_remote_description(&desc)).await?;
-            emit(ev::PROGRESS, 2.0, &[]);
+            let mut g = inner.borrow_mut();
+            if let Some(i) = g.find(id) {
+                progress(&mut g, i, 2.0);
+            }
             Ok(())
         };
         if let Err(e) = res.await {
-            let mut g = inner.borrow_mut();
-            if g.generation == generation {
-                lost(&mut g, e);
-            }
+            fail(&inner, id, e);
         }
     });
 }
 
-fn remote_description(inner: &Shared, generation: u32, ty: RtcSdpType) -> Result<(RtcPeerConnection, RtcSessionDescriptionInit), ErrorCode> {
+fn remote_description(inner: &Shared, id: u32, ty: RtcSdpType) -> Result<(RtcPeerConnection, RtcSessionDescriptionInit), ErrorCode> {
     let g = inner.borrow();
-    if g.generation != generation {
-        return Err(ErrorCode::NotPermitted);
-    }
-    let (Some(s), Some(r)) = (g.sess.as_ref(), g.rtc.as_ref()) else {
-        return Err(ErrorCode::NotPermitted);
-    };
+    let l = g.find(id).map(|i| &g.links[i]).ok_or(ErrorCode::NotPermitted)?;
+    let r = l.rtc.as_ref().ok_or(ErrorCode::NotPermitted)?;
     let mut sdp = [0u8; MAX_SDP_LEN];
-    let text = s.remote_sdp(&mut sdp)?;
+    let text = l.sess.remote_sdp(&mut sdp)?;
     Ok((r.pc.clone(), description(ty, text)))
 }
 
@@ -347,11 +359,11 @@ async fn gather(pc: &RtcPeerConnection, srflx_at: &Cell<f64>) {
     }
 }
 
-async fn negotiate(inner: &Shared, generation: u32, pc: &RtcPeerConnection, srflx_at: &Cell<f64>, step: Step) -> Result<(), ErrorCode> {
+async fn negotiate(inner: &Shared, id: u32, pc: &RtcPeerConnection, srflx_at: &Cell<f64>, step: Step) -> Result<(), ErrorCode> {
     let local_ty = match step {
         Step::Offer => RtcSdpType::Offer,
         Step::Answer => {
-            let (_, desc) = remote_description(inner, generation, RtcSdpType::Offer)?;
+            let (_, desc) = remote_description(inner, id, RtcSdpType::Offer)?;
             wait(pc.set_remote_description(&desc)).await?;
             RtcSdpType::Answer
         }
@@ -363,21 +375,35 @@ async fn negotiate(inner: &Shared, generation: u32, pc: &RtcPeerConnection, srfl
     .await?;
     let local_sdp = set_local(pc, local_ty, &local, srflx_at).await?;
 
-    let (ptr, n, kind) = {
+    // The code is copied out of the session (≤ MAX_CODE_LEN bytes, stack) so the room layer can
+    // seal it after the borrow ends.
+    let mut code = [0u8; MAX_CODE_LEN];
+    let (n, via_owner, i) = {
         let mut g = inner.borrow_mut();
-        if g.generation != generation {
-            return Ok(());
-        }
-        let Inner { id, sess, scratch, .. } = &mut *g;
-        let code = sess.as_mut().ok_or(ErrorCode::NotPermitted)?.build_code(id, &local_sdp)?;
-        let kind = code.get(1).copied().unwrap_or(0);
-        let n = b64url::encode(code, &mut scratch[..]).map_err(|_| ErrorCode::InvalidInvite)?;
-        (scratch.as_ptr() as u32, n as u32, kind)
+        let Some(i) = g.find(id) else { return Ok(()) };
+        let Inner { id: me, links, .. } = &mut *g;
+        let c = links[i].sess.build_code(me, &local_sdp)?;
+        code[..c.len()].copy_from_slice(c);
+        (c.len(), links[i].via_owner, i)
     };
-    // Emitted after the borrow ends; the scratch buffer is stable (boxed at start).
-    crate::js_event(ev::CODE, kind as f64, ptr, n);
+    if via_owner {
+        // Introduction or T2 inside a room: sealed to the member, relayed by the owner (§14.4).
+        room::relay_code(inner, id, &code[..n])?;
+    } else {
+        let mut g = inner.borrow_mut();
+        let kind = code[1];
+        let len = b64url::encode(&code[..n], &mut g.scratch[..]).map_err(|_| ErrorCode::InvalidInvite)?;
+        g.meta[meta::MEMBER] = g.links[i].member;
+        let ptr = g.scratch.as_ptr() as u32;
+        drop(g);
+        // Emitted after the borrow ends; the scratch buffer is stable (boxed at start).
+        crate::js_event(ev::CODE, kind as f64, ptr, len as u32);
+    }
     if step == Step::Answer {
-        emit(ev::PROGRESS, 2.0, &[]);
+        let mut g = inner.borrow_mut();
+        if let Some(i) = g.find(id) {
+            progress(&mut g, i, 2.0);
+        }
     }
     Ok(())
 }
@@ -385,46 +411,53 @@ async fn negotiate(inner: &Shared, generation: u32, pc: &RtcPeerConnection, srfl
 /// Seconds between getStats checks while connected.
 const STATS_EVERY_S: u8 = 5;
 
-/// §9.2 point 3 and §18: reads the selected candidate pair. A relay on either side closes the
-/// chat with `E_RELAY_REJECTED`; otherwise the pair is reported (PATH) when it changes.
-/// Diagnostics path: runs every few seconds, allocations here are acceptable.
-pub(crate) fn check_path(inner: Shared) {
-    let (pc, generation) = {
+/// §9.2 point 3 and §18: reads the selected candidate pair of every link. A relay on either side
+/// closes that link with `E_RELAY_REJECTED`; otherwise the pair is reported (PATH) when it
+/// changes. Diagnostics path: runs every few seconds, allocations here are acceptable.
+pub(crate) fn check_paths(inner: &Shared) {
+    let due: Vec<(RtcPeerConnection, u32)> = {
         let g = inner.borrow();
-        let Some(r) = g.rtc.as_ref() else { return };
-        let left = r.stats_in.get();
-        if left > 0 {
-            r.stats_in.set(left - 1);
-            return;
-        }
-        r.stats_in.set(STATS_EVERY_S);
-        (r.pc.clone(), g.generation)
+        g.links
+            .iter()
+            .filter_map(|l| {
+                let r = l.rtc.as_ref()?;
+                let left = r.stats_in.get();
+                if left > 0 {
+                    r.stats_in.set(left - 1);
+                    return None;
+                }
+                r.stats_in.set(STATS_EVERY_S);
+                Some((r.pc.clone(), l.id))
+            })
+            .collect()
     };
-    wasm_bindgen_futures::spawn_local(async move {
-        let Ok(report) = JsFuture::from(pc.get_stats()).await else { return };
-        let Some((text, relay)) = selected_pair(report.unchecked_ref()) else { return };
-        let mut g = inner.borrow_mut();
-        if g.generation != generation {
-            return;
-        }
-        if relay {
-            emit(ev::PATH, 1.0, text.as_bytes());
-            abort(&mut g, ErrorCode::RelayRejected);
-            return;
-        }
-        let changed = g.rtc.as_ref().is_some_and(|r| {
-            let mut last = r.path.borrow_mut();
-            let c = *last != text;
-            if c {
-                last.clone_from(&text);
+    for (pc, id) in due {
+        let inner = inner.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let Ok(report) = JsFuture::from(pc.get_stats()).await else { return };
+            let Some((text, relay)) = selected_pair(report.unchecked_ref()) else { return };
+            let mut g = inner.borrow_mut();
+            let Some(i) = g.find(id) else { return };
+            g.meta[meta::MEMBER] = g.links[i].member;
+            if relay {
+                emit(ev::PATH, 1.0, text.as_bytes());
+                abort(&mut g, i, ErrorCode::RelayRejected);
+                return;
             }
-            c
+            let changed = g.links[i].rtc.as_ref().is_some_and(|r| {
+                let mut last = r.path.borrow_mut();
+                let c = *last != text;
+                if c {
+                    last.clone_from(&text);
+                }
+                c
+            });
+            drop(g);
+            if changed {
+                emit(ev::PATH, 0.0, text.as_bytes());
+            }
         });
-        drop(g);
-        if changed {
-            emit(ev::PATH, 0.0, text.as_bytes());
-        }
-    });
+    }
 }
 
 fn field(o: &JsValue, k: &str) -> Option<JsValue> {
@@ -491,14 +524,15 @@ async fn set_local(pc: &RtcPeerConnection, ty: RtcSdpType, created: &JsValue, sr
     pc.local_description().map(|d| d.sdp()).ok_or(ErrorCode::IceFailed)
 }
 
+
 /// Our side of an in-band ICE restart (§13 T1): re-offer with new credentials over the channel.
 /// Triggered by a path stuck in `disconnected`, a network change, or the diagnostics button.
-pub(crate) fn restart(inner: Shared, generation: u32) {
+pub(crate) fn restart(inner: Shared, id: u32) {
     let (pc, srflx) = {
         let g = inner.borrow();
-        let connected = g.sess.as_ref().is_some_and(|s| s.state() == State::Connected);
-        match g.rtc.as_ref() {
-            Some(r) if g.generation == generation && connected && !r.making_offer.get() => {
+        let Some(l) = g.find(id).map(|i| &g.links[i]) else { return };
+        match l.rtc.as_ref() {
+            Some(r) if l.sess.state() == State::Connected && !r.making_offer.get() => {
                 r.making_offer.set(true);
                 r.restarts.set(r.restarts.get() + 1);
                 (r.pc.clone(), r.srflx_at.clone())
@@ -513,19 +547,14 @@ pub(crate) fn restart(inner: Shared, generation: u32) {
             let offer = wait(pc.create_offer_with_rtc_offer_options(&opts)).await?;
             let sdp = set_local(&pc, RtcSdpType::Offer, &offer, &srflx).await?;
             let mut g = inner.borrow_mut();
-            if g.generation != generation {
-                return Ok(());
-            }
-            let Inner { sess, rtc, meta, .. } = &mut *g;
-            match (sess.as_mut(), rtc.as_ref()) {
-                (Some(s), Some(r)) => s.signal(now_ms(), true, &sdp, &mut sink(r, meta)),
-                _ => Ok(()),
-            }
+            let Some(i) = g.find(id) else { return Ok(()) };
+            let now = now_ms();
+            on_link!(g, i, |s, k, _t| s.signal(now, true, &sdp, &mut k))
         };
         let r = res.await;
         let g = inner.borrow();
-        if let Some(rtc) = g.rtc.as_ref().filter(|_| g.generation == generation)
-            && r.is_err()
+        if r.is_err()
+            && let Some(rtc) = g.find(id).and_then(|i| g.links[i].rtc.as_ref())
         {
             rtc.making_offer.set(false);
         }
@@ -535,21 +564,20 @@ pub(crate) fn restart(inner: Shared, generation: u32) {
 /// Applies the peer's re-offer (answering it) or re-answer (§13 T1), with the perfect-negotiation
 /// rule for glare: the polite peer (greater `PeerId`) rolls back its own offer, the other ignores
 /// the colliding one.
-async fn handle_signal(inner: &Shared, generation: u32, offer: bool, ice: IceParams) -> Result<(), ErrorCode> {
+async fn handle_signal(inner: &Shared, id: u32, offer: bool, ice: IceParams) -> Result<(), ErrorCode> {
     let (pc, srflx, desc, polite, colliding) = {
         let mut g = inner.borrow_mut();
-        if g.generation != generation {
-            return Ok(());
-        }
-        let polite = g.sess.as_ref().is_some_and(|s| g.id.peer_id() > s.remote());
-        let Inner { sess, rtc, .. } = &mut *g;
-        let (Some(s), Some(r)) = (sess.as_mut(), rtc.as_ref()) else { return Ok(()) };
+        let Some(i) = g.find(id) else { return Ok(()) };
+        let me = g.id.peer_id();
+        let crate::Link { sess, rtc, .. } = &mut g.links[i];
+        let Some(r) = rtc.as_ref() else { return Ok(()) };
+        let polite = me > sess.remote();
         let colliding = offer && r.making_offer.get();
         if colliding && !polite {
             return Ok(());
         }
         let mut sdp = [0u8; MAX_SDP_LEN];
-        let text = s.render_signal(&ice, offer, &mut sdp)?;
+        let text = sess.render_signal(&ice, offer, &mut sdp)?;
         let ty = if offer { RtcSdpType::Offer } else { RtcSdpType::Answer };
         (r.pc.clone(), r.srflx_at.clone(), description(ty, text), polite, colliding)
     };
@@ -559,7 +587,7 @@ async fn handle_signal(inner: &Shared, generation: u32, offer: bool, ice: IcePar
     wait(pc.set_remote_description(&desc)).await?;
     if !offer {
         let g = inner.borrow();
-        if let Some(r) = g.rtc.as_ref().filter(|_| g.generation == generation) {
+        if let Some(r) = g.find(id).and_then(|i| g.links[i].rtc.as_ref()) {
             r.making_offer.set(false);
         }
         return Ok(());
@@ -567,15 +595,10 @@ async fn handle_signal(inner: &Shared, generation: u32, offer: bool, ice: IcePar
     let answer = wait(pc.create_answer()).await?;
     let sdp = set_local(&pc, RtcSdpType::Answer, &answer, &srflx).await?;
     let mut g = inner.borrow_mut();
-    if g.generation != generation {
-        return Ok(());
-    }
-    if colliding && let Some(r) = g.rtc.as_ref() {
+    let Some(i) = g.find(id) else { return Ok(()) };
+    if colliding && let Some(r) = g.links[i].rtc.as_ref() {
         r.making_offer.set(false);
     }
-    let Inner { sess, rtc, meta, .. } = &mut *g;
-    match (sess.as_mut(), rtc.as_ref()) {
-        (Some(s), Some(r)) => s.signal(now_ms(), false, &sdp, &mut sink(r, meta)),
-        _ => Ok(()),
-    }
+    let now = now_ms();
+    on_link!(g, i, |s, k, _t| s.signal(now, false, &sdp, &mut k))
 }

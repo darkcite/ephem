@@ -24,14 +24,6 @@ export class App {
         return ret >>> 0;
     }
     /**
-     * Whether the current chat has ever been connected (i.e. it can be resumed).
-     * @returns {boolean}
-     */
-    chat_active() {
-        const ret = wasm.app_chat_active(this.__wbg_ptr);
-        return ret !== 0;
-    }
-    /**
      * The chat's self-destruct timer in seconds (0 = off).
      * @returns {number}
      */
@@ -40,14 +32,15 @@ export class App {
         return ret >>> 0;
     }
     /**
-     * Leaves the chat (GOODBYE), closes the connection, wipes session keys and messages.
+     * Leaves the chat or room (a member first tells the owner; GOODBYE on every link), wipes
+     * session keys and messages.
      */
     close() {
         wasm.app_close(this.__wbg_ptr);
     }
     /**
-     * Whether this tab can use the code (for the tab hand-off, §8.7): an answer to our open
-     * invite, or a reconnect code for our chat. Never has side effects.
+     * Whether this tab can use the code (for the tab hand-off, §8.7): an answer to one of our
+     * open invites, or a reconnect code for one of our links. Never has side effects.
      * @param {string} text
      * @returns {boolean}
      */
@@ -59,7 +52,7 @@ export class App {
     }
     /**
      * `kind | flags << 8` of a code without applying it (0 if it is not a valid code), so the UI
-     * can ask before answering an identity-transfer invite.
+     * can ask before answering an identity-transfer or room invite.
      * @param {string} text
      * @returns {number}
      */
@@ -70,8 +63,9 @@ export class App {
         return ret >>> 0;
     }
     /**
-     * The user confirmed the SAS (§10.4): marks a contact verified; on an identity transfer
-     * (§7.6) it releases the key file (sender) or tells the sender (receiver).
+     * The user confirmed the SAS of the 1:1 chat or of the link to the room owner (§10.4):
+     * marks a contact verified; on an identity transfer (§7.6) it releases the key file
+     * (sender) or tells the sender (receiver).
      * @returns {number}
      */
     confirm_sas() {
@@ -99,20 +93,26 @@ export class App {
         }
     }
     /**
-     * Alice: new chat and invite. Emits CODE(1).
+     * Alice: new 1:1 chat and invite. Emits CODE(1).
      * @param {number} ttl_s
      */
     create_invite(ttl_s) {
         wasm.app_create_invite(this.__wbg_ptr, ttl_s);
     }
     /**
-     * T3: a reconnect code for the current chat (§13). Emits CODE(3).
+     * T3: a reconnect code for the 1:1 chat or for the link to the room owner (§13). Emits CODE(3).
      * @param {number} ttl_s
      * @returns {number}
      */
     create_resume(ttl_s) {
         const ret = wasm.app_create_resume(this.__wbg_ptr, ttl_s);
         return ret >>> 0;
+    }
+    /**
+     * Creates a room owned by us (everything else is closed). Invite members next.
+     */
+    create_room() {
+        wasm.app_create_room(this.__wbg_ptr);
     }
     /**
      * New device (§7.6): an invite asking another device for its identity. Emits CODE(1).
@@ -122,17 +122,18 @@ export class App {
         wasm.app_create_transfer_invite(this.__wbg_ptr, ttl_s);
     }
     /**
-     * Deletes a message: ours for everyone, the peer's for me only. Returns 0 or -error code.
-     * @param {boolean} mine
+     * Deletes a message: ours for everyone; someone else's for me only, or for everyone by the
+     * room owner (moderation). Returns 0 or -error code.
+     * @param {number} sender
      * @param {number} seq
      * @returns {number}
      */
-    delete(mine, seq) {
-        const ret = wasm.app_delete(this.__wbg_ptr, mine, seq);
+    delete(sender, seq) {
+        const ret = wasm.app_delete(this.__wbg_ptr, sender, seq);
         return ret;
     }
     /**
-     * Diagnostics (§18): core counters and connection states, one `·`-separated line each.
+     * Diagnostics (§18) of the 1:1 chat or of the link to the room owner (else the first link).
      * @returns {string}
      */
     diag() {
@@ -152,8 +153,9 @@ export class App {
         }
     }
     /**
-     * Drops the network path without leaving the chat, as a network change would. Diagnostics
-     * ("Simulate network loss"): both sides then go through the reconnect flow (§13 T3).
+     * Drops network paths without leaving, as a network change would. Diagnostics ("Simulate
+     * network loss"): the 1:1 chat's path (both sides then go through T3), or in a room the
+     * member's direct links to the other members (they come back by T2 through the owner).
      */
     drop_path() {
         wasm.app_drop_path(this.__wbg_ptr);
@@ -169,7 +171,7 @@ export class App {
         return ret;
     }
     /**
-     * Our public addresses as the peer sees them (srflx candidates of our last code), one per
+     * Our public addresses as the peers see them (srflx candidates of our codes), one per
      * line as `v4 1.2.3.4` / `v6 2001:db8::1` (§29.2 "what your peer sees").
      * @returns {string}
      */
@@ -230,7 +232,7 @@ export class App {
         }
     }
     /**
-     * If the peer calls itself by a verified contact's nickname with a different key, that
+     * If the 1:1 peer calls itself by a verified contact's nickname with a different key, that
      * contact's nickname ("This is not the Alice you verified", §7.5); otherwise empty.
      * @param {string} nick
      * @returns {string}
@@ -254,7 +256,14 @@ export class App {
         }
     }
     /**
-     * Whether the current chat is an identity transfer (§7.6).
+     * @returns {boolean}
+     */
+    in_room() {
+        const ret = wasm.app_in_room(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * Whether the 1:1 chat is an identity transfer (§7.6).
      * @returns {boolean}
      */
     is_transfer() {
@@ -296,7 +305,7 @@ export class App {
         }
     }
     /**
-     * The user has seen the peer's messages up to `seq`.
+     * The user has seen the 1:1 peer's messages up to `seq`.
      * @param {number} seq
      */
     mark_read(seq) {
@@ -309,6 +318,22 @@ export class App {
     meta_ptr() {
         const ret = wasm.app_meta_ptr(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * Our member index (1:1: our PeerIdx), for message identities `(sender, seq)`.
+     * @returns {number}
+     */
+    my_idx() {
+        const ret = wasm.app_my_idx(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Our role: 0 owner, 1 member, 2 observer (1:1: member).
+     * @returns {number}
+     */
+    my_role() {
+        const ret = wasm.app_my_role(this.__wbg_ptr);
+        return ret;
     }
     /**
      * Starts with a fresh temporary identity (§7.2 default).
@@ -348,7 +373,7 @@ export class App {
         }
     }
     /**
-     * The current peer as a contact: `flags \t nickname`, or empty if not a contact.
+     * The 1:1 peer as a contact: `flags \t nickname`, or empty if not a contact.
      * @returns {string}
      */
     peer_contact() {
@@ -368,15 +393,15 @@ export class App {
         }
     }
     /**
-     * Reacts to a message with the emoji written at `text_ptr()` (`len` = 0 removes our reaction).
-     * Returns 0 or -error code.
-     * @param {boolean} mine
+     * Reacts to `(sender, seq)` with the emoji written at `text_ptr()` (`len` = 0 removes our
+     * reaction). Returns 0 or -error code.
+     * @param {number} sender
      * @param {number} seq
      * @param {number} len
      * @returns {number}
      */
-    react(mine, seq, len) {
-        const ret = wasm.app_react(this.__wbg_ptr, mine, seq, len);
+    react(sender, seq, len) {
+        const ret = wasm.app_react(this.__wbg_ptr, sender, seq, len);
         return ret;
     }
     /**
@@ -420,14 +445,81 @@ export class App {
         }
     }
     /**
-     * In-band ICE restart (§13 T1): diagnostics button, or the network changed (`online`,
-     * `navigator.connection` change). The channel carries the new credentials.
+     * In-band ICE restart (§13 T1) of every connected link: diagnostics button, or the network
+     * changed (`online`, `navigator.connection` change).
      */
     restart_ice() {
         wasm.app_restart_ice(this.__wbg_ptr);
     }
     /**
-     * Saves the peer of the current chat as a contact (verified if the SAS was confirmed).
+     * Member: the user accepted that every member will see its IP address (§29.2):
+     * start the links to the other members.
+     */
+    room_connect() {
+        wasm.app_room_connect(this.__wbg_ptr);
+    }
+    /**
+     * `my_idx \t my_role \t owner(0/1) \t version \t confirmed(0/1)`, or empty outside a room.
+     * @returns {string}
+     */
+    room_info() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.app_room_info(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Owner: an invite for one more member (or read-only observer). Emits CODE(1).
+     * @param {boolean} observer
+     * @param {number} ttl_s
+     * @returns {number}
+     */
+    room_invite(observer, ttl_s) {
+        const ret = wasm.app_room_invite(this.__wbg_ptr, observer, ttl_s);
+        return ret >>> 0;
+    }
+    /**
+     * One line per member: `idx \t role(0 owner,1 member,2 observer) \t handle \t link \t nick`,
+     * where link is `me`, `connected`, `connecting`, `suspended` or `none`.
+     * @returns {string}
+     */
+    room_members() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.app_room_members(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Owner: removes a member (it gets a state without itself, then GOODBYE).
+     * @param {number} member
+     * @returns {number}
+     */
+    room_remove(member) {
+        const ret = wasm.app_room_remove(this.__wbg_ptr, member);
+        return ret >>> 0;
+    }
+    /**
+     * Saves the peer of the 1:1 chat as a contact (verified if the SAS was confirmed).
      * @param {string} nick
      * @returns {number}
      */
@@ -495,14 +587,14 @@ export class App {
     }
     /**
      * Sends `len` bytes previously written at `text_ptr()`. `reply_seq` = 0 for no reply,
-     * otherwise the quoted message (`reply_mine` = it is ours). Returns chat_seq or -error code.
+     * otherwise the quoted message `(reply_sender, reply_seq)`. Returns chat_seq or -error code.
      * @param {number} len
-     * @param {boolean} reply_mine
+     * @param {number} reply_sender
      * @param {number} reply_seq
      * @returns {number}
      */
-    send(len, reply_mine, reply_seq) {
-        const ret = wasm.app_send(this.__wbg_ptr, len, reply_mine, reply_seq);
+    send(len, reply_sender, reply_seq) {
+        const ret = wasm.app_send(this.__wbg_ptr, len, reply_sender, reply_seq);
         return ret;
     }
     /**
@@ -527,7 +619,8 @@ export class App {
         wasm.app_set_prefs(this.__wbg_ptr, privacy, drop_ipv6, read_receipts, typing);
     }
     /**
-     * Sets the chat's self-destruct timer. Returns the notice's chat_seq or -error code.
+     * Sets the chat's self-destruct timer (1:1: either person; room: the owner).
+     * Returns the notice's chat_seq or -error code.
      * @param {number} ttl_s
      * @returns {number}
      */
@@ -536,7 +629,8 @@ export class App {
         return ret;
     }
     /**
-     * 0 none, 1 gathering, 2 awaiting answer, 3 connecting, 4 connected, 5 closed, 6 suspended.
+     * 1:1 chat or link to the room owner: 0 none, 1 gathering, 2 awaiting answer,
+     * 3 connecting, 4 connected, 5 closed, 6 suspended. A room owner: 4.
      * @returns {number}
      */
     state() {
@@ -695,7 +789,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_603(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_685(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -767,7 +861,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_603_48(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_685_56(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -915,22 +1009,22 @@ function __wbg_get_imports() {
         },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 33, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_574);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_656);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000002: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 13, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_218);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_281);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000003: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("RTCPeerConnectionIceEvent")], shim_idx: 13, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_218_51);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_281_59);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000004: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 15, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_220);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_283);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000005: function(arg0, arg1) {
@@ -952,30 +1046,30 @@ function __wbg_get_imports() {
     };
 }
 
-function __wasm_bindgen_func_elem_220(arg0, arg1) {
-    wasm.__wasm_bindgen_func_elem_220(arg0, arg1);
+function __wasm_bindgen_func_elem_283(arg0, arg1) {
+    wasm.__wasm_bindgen_func_elem_283(arg0, arg1);
 }
 
-function __wasm_bindgen_func_elem_218(arg0, arg1, arg2) {
-    wasm.__wasm_bindgen_func_elem_218(arg0, arg1, addHeapObject(arg2));
+function __wasm_bindgen_func_elem_281(arg0, arg1, arg2) {
+    wasm.__wasm_bindgen_func_elem_281(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_218_51(arg0, arg1, arg2) {
-    wasm.__wasm_bindgen_func_elem_218_51(arg0, arg1, addHeapObject(arg2));
+function __wasm_bindgen_func_elem_281_59(arg0, arg1, arg2) {
+    wasm.__wasm_bindgen_func_elem_281_59(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_603(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_603(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_685(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_685(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_603_48(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_603_48(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_685_56(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_685_56(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_574(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_656(arg0, arg1, arg2) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        wasm.__wasm_bindgen_func_elem_574(retptr, arg0, arg1, addHeapObject(arg2));
+        wasm.__wasm_bindgen_func_elem_656(retptr, arg0, arg1, addHeapObject(arg2));
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         if (r1) {

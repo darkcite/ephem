@@ -56,6 +56,7 @@ struct Seen {
     peer_ready: bool,
     identity_sent: bool,
     identity: Vec<u8>,
+    room: Vec<(u8, Vec<u8>)>,
 }
 
 fn sink<'w>(wire: &'w mut Wire, seen: &'w mut Seen) -> impl FnMut(Event<'_>) + 'w {
@@ -70,15 +71,16 @@ fn sink<'w>(wire: &'w mut Wire, seen: &'w mut Seen) -> impl FnMut(Event<'_>) + '
             seen.sas_optional = Some(sas_optional);
             seen.nick = nick.to_vec();
         }
-        Event::Reaction { msg, emoji } => seen.reactions.push((msg, emoji.to_vec())),
+        Event::Reaction { msg, emoji, .. } => seen.reactions.push((msg, emoji.to_vec())),
+        Event::Room { rtype, body } => seen.room.push((rtype, body.to_vec())),
         Event::SignalOffer(ice) => seen.signals.push((true, ice)),
         Event::SignalAnswer(ice) => seen.signals.push((false, ice)),
         Event::PeerReady => seen.peer_ready = true,
         Event::IdentitySent => seen.identity_sent = true,
         Event::IdentityReceived(b) => seen.identity = b.to_vec(),
-        Event::Chat { seq, text, ttl_s, reply } => seen.chats.push((seq, text.to_vec(), ttl_s, reply)),
-        Event::Setting { ttl_s } => seen.settings.push(ttl_s),
-        Event::Edited { seq, text } => seen.edited.push((seq, text.to_vec())),
+        Event::Chat { msg, text, ttl_s, reply } => seen.chats.push((msg.seq, text.to_vec(), ttl_s, reply)),
+        Event::Setting { ttl_s, .. } => seen.settings.push(ttl_s),
+        Event::Edited { msg, text } => seen.edited.push((msg.seq, text.to_vec())),
         Event::Deleted(m) => seen.deleted.push(m),
         Event::Expired(m) => seen.expired.push(m),
         Event::Delivered { seq } => seen.delivered = seq,
@@ -210,7 +212,7 @@ fn handshake_hello_sas() {
 #[test]
 fn chat_ack_read_rekey_close() {
     let mut p = connect();
-    let seq = act!(p.a, send_chat(NOW_MS, "héllo".as_bytes(), None)).unwrap();
+    let seq = act!(p.a, send_chat(NOW_MS, None, "héllo".as_bytes(), None)).unwrap();
     p.settle();
     assert_eq!(p.b.seen.chats, vec![(1, "héllo".as_bytes().to_vec(), 0, None)]);
     assert_eq!(p.a.seen.delivered, seq);
@@ -220,14 +222,14 @@ fn chat_ack_read_rekey_close() {
     p.settle();
     assert_eq!(p.a.seen.read, 1);
 
-    let r = act!(p.b, send_chat(NOW_MS, b"hi", Some(MsgRef { mine: false, seq: 1 }))).unwrap();
+    let r = act!(p.b, send_chat(NOW_MS, None, b"hi", Some(MsgRef { sender: 0, seq: 1 }))).unwrap();
     p.settle();
-    assert_eq!(p.a.seen.chats[0].3, Some(MsgRef { mine: true, seq: 1 }), "reply refers to Alice's message");
+    assert_eq!(p.a.seen.chats[0].3, Some(MsgRef { sender: 0, seq: 1 }), "reply refers to Alice's message");
     assert_eq!(r, 1);
 
     act!(p.a, tick(NOW_MS + REKEY_MS, false));
     p.settle();
-    act!(p.a, send_chat(NOW_MS, b"after rekey", None)).unwrap();
+    act!(p.a, send_chat(NOW_MS, None, b"after rekey", None)).unwrap();
     p.settle();
     assert_eq!(p.b.seen.chats.len(), 2);
     assert!(p.b.seen.closed.is_none());
@@ -241,17 +243,17 @@ fn chat_ack_read_rekey_close() {
 #[test]
 fn edit_delete_typing() {
     let mut p = connect();
-    act!(p.a, send_chat(NOW_MS, b"typo", None)).unwrap();
+    act!(p.a, send_chat(NOW_MS, None, b"typo", None)).unwrap();
     p.settle();
     act!(p.a, edit(NOW_MS, 1, b"fixed")).unwrap();
     p.settle();
     assert_eq!(p.b.seen.edited, vec![(1, b"fixed".to_vec())]);
     assert_eq!(act!(p.a, edit(NOW_MS, 9, b"x")), Err(ErrorCode::NotPermitted), "not our message");
 
-    act!(p.a, delete(NOW_MS, MsgRef { mine: true, seq: 1 })).unwrap();
+    act!(p.a, delete(NOW_MS, MsgRef { sender: 0, seq: 1 })).unwrap();
     p.settle();
-    assert_eq!(p.b.seen.deleted, vec![MsgRef { mine: false, seq: 1 }]);
-    act!(p.b, delete(NOW_MS, MsgRef { mine: false, seq: 1 })).unwrap();
+    assert_eq!(p.b.seen.deleted, vec![MsgRef { sender: 0, seq: 1 }]);
+    act!(p.b, delete(NOW_MS, MsgRef { sender: 0, seq: 1 })).unwrap();
     assert!(p.a.out.frames.is_empty() && p.b.out.frames.is_empty(), "delete-for-me sends nothing");
 
     act!(p.a, typing(NOW_MS, true));
@@ -263,11 +265,11 @@ fn edit_delete_typing() {
     assert_eq!(p.b.seen.typing, Some(false), "cleared after 6 s");
     act!(p.a, typing(NOW_MS + 200, false));
     p.settle();
-    act!(p.a, send_chat(NOW_MS, b"x", None)).unwrap();
+    act!(p.a, send_chat(NOW_MS, None, b"x", None)).unwrap();
     act!(p.a, typing(NOW_MS + 300, true));
     p.settle();
     assert_eq!(p.b.seen.typing, Some(true));
-    act!(p.a, send_chat(NOW_MS, b"y", None)).unwrap();
+    act!(p.a, send_chat(NOW_MS, None, b"y", None)).unwrap();
     p.settle();
     assert_eq!(p.b.seen.typing, Some(false), "a message clears typing");
 }
@@ -276,7 +278,7 @@ fn edit_delete_typing() {
 fn receipts_and_typing_are_reciprocal() {
     let off = Settings { read_receipts: false, typing: false, ..Settings::default() };
     let mut p = connect_with(Settings::default(), off, false, false);
-    act!(p.a, send_chat(NOW_MS, b"1", None)).unwrap();
+    act!(p.a, send_chat(NOW_MS, None, b"1", None)).unwrap();
     p.settle();
     act!(p.b, mark_read(NOW_MS + 5000, 1));
     p.settle();
@@ -291,12 +293,12 @@ fn receipts_and_typing_are_reciprocal() {
 #[test]
 fn self_destruct() {
     let mut p = connect();
-    act!(p.a, set_ttl(NOW_MS, 5)).unwrap();
-    assert_eq!(act!(p.a, set_ttl(NOW_MS, 7)), Err(ErrorCode::NotPermitted));
+    act!(p.a, set_ttl(NOW_MS, None, 5)).unwrap();
+    assert_eq!(act!(p.a, set_ttl(NOW_MS, None, 7)), Err(ErrorCode::NotPermitted));
     p.settle();
     assert_eq!(p.b.seen.settings, vec![5]);
     assert_eq!(p.b.s.chat_ttl(), 5, "either person sets it for both");
-    let seq = act!(p.a, send_chat(NOW_MS, b"secret", None)).unwrap();
+    let seq = act!(p.a, send_chat(NOW_MS, None, b"secret", None)).unwrap();
     p.settle();
     assert_eq!(p.b.seen.chats[0].2, 5);
     // Countdowns start when read (recipient) and when READ arrives (sender).
@@ -309,12 +311,12 @@ fn self_destruct() {
     assert!(p.b.seen.expired.is_empty());
     act!(p.b, tick(NOW_MS + 65_000, false));
     act!(p.a, tick(NOW_MS + 65_000, false));
-    assert_eq!(p.b.seen.expired, vec![MsgRef { mine: false, seq }]);
-    assert_eq!(p.a.seen.expired, vec![MsgRef { mine: true, seq }]);
-    act!(p.b, set_ttl(NOW_MS, 0)).unwrap();
+    assert_eq!(p.b.seen.expired, vec![MsgRef { sender: 0, seq }]);
+    assert_eq!(p.a.seen.expired, vec![MsgRef { sender: 0, seq }]);
+    act!(p.b, set_ttl(NOW_MS, None, 0)).unwrap();
     p.settle();
     assert_eq!(p.a.seen.settings, vec![0]);
-    act!(p.a, send_chat(NOW_MS, b"plain", None)).unwrap();
+    act!(p.a, send_chat(NOW_MS, None, b"plain", None)).unwrap();
     p.settle();
     assert_eq!(p.b.seen.chats.last().unwrap().2, 0);
 }
@@ -322,17 +324,17 @@ fn self_destruct() {
 #[test]
 fn resume_resends_pending_and_keeps_seq() {
     let mut p = connect();
-    act!(p.a, send_chat(NOW_MS, b"one", None)).unwrap();
+    act!(p.a, send_chat(NOW_MS, None, b"one", None)).unwrap();
     p.settle();
     p.cut();
     assert_eq!((p.a.seen.suspended, p.b.seen.suspended), (1, 1));
     assert_eq!(p.a.s.state(), State::Suspended);
     // Typed while offline: queued; edit and delete rewrite the queue in place.
-    let s2 = act!(p.a, send_chat(NOW_MS, b"two (draft)", None)).unwrap();
-    let s3 = act!(p.a, send_chat(NOW_MS, b"three", None)).unwrap();
-    let s4 = act!(p.a, send_chat(NOW_MS, b"four", None)).unwrap();
+    let s2 = act!(p.a, send_chat(NOW_MS, None, b"two (draft)", None)).unwrap();
+    let s3 = act!(p.a, send_chat(NOW_MS, None, b"three", None)).unwrap();
+    let s4 = act!(p.a, send_chat(NOW_MS, None, b"four", None)).unwrap();
     act!(p.a, edit(NOW_MS, s2, b"two")).unwrap();
-    act!(p.a, delete(NOW_MS, MsgRef { mine: true, seq: s3 })).unwrap();
+    act!(p.a, delete(NOW_MS, MsgRef { sender: 0, seq: s3 })).unwrap();
     assert!(p.a.out.frames.is_empty(), "nothing sent while suspended");
     assert_eq!(p.a.s.pending_count(), 3);
     assert_eq!(act!(p.a, edit(NOW_MS, 1, b"x")), Err(ErrorCode::PeerOffline), "delivered message, peer offline");
@@ -346,12 +348,12 @@ fn resume_resends_pending_and_keeps_seq() {
     assert_eq!(p.a.s.pending_count(), 0);
 
     // Messages and replies keep working across the new path in both directions.
-    act!(p.b, send_chat(NOW_MS, b"back", Some(MsgRef { mine: false, seq: s4 }))).unwrap();
+    act!(p.b, send_chat(NOW_MS, None, b"back", Some(MsgRef { sender: 0, seq: s4 }))).unwrap();
     p.settle();
-    assert_eq!(p.a.seen.chats.last().unwrap().3, Some(MsgRef { mine: true, seq: s4 }));
+    assert_eq!(p.a.seen.chats.last().unwrap().3, Some(MsgRef { sender: 0, seq: s4 }));
 
     // Cut while frames are in flight: the unacked message is resent after the next resume.
-    act!(p.a, send_chat(NOW_MS, b"lost in flight", None)).unwrap();
+    act!(p.a, send_chat(NOW_MS, None, b"lost in flight", None)).unwrap();
     p.cut();
     p.resume(true);
     assert_eq!(p.b.seen.chats.last().unwrap().1, b"lost in flight".to_vec());
@@ -399,13 +401,13 @@ fn suspended_grace_and_first_path_failure() {
     let mut seen = Seen::default();
     s.path_lost(NOW_MS, ErrorCode::NoDirectPath, &mut sink(&mut w, &mut seen));
     assert_eq!(seen.closed, Some(ErrorCode::NoDirectPath));
-    assert_eq!(s.send_chat(NOW_MS, b"x", None, &mut sink(&mut w, &mut seen)), Err(ErrorCode::PeerOffline));
+    assert_eq!(s.send_chat(NOW_MS, None, b"x", None, &mut sink(&mut w, &mut seen)), Err(ErrorCode::PeerOffline));
 }
 
 #[test]
 fn tamper_closes() {
     let mut p = connect();
-    act!(p.a, send_chat(NOW_MS, b"x", None)).unwrap();
+    act!(p.a, send_chat(NOW_MS, None, b"x", None)).unwrap();
     p.a.out.frames[0][HEADER_LEN] ^= 1;
     p.settle();
     assert_eq!(p.b.seen.closed, Some(ErrorCode::CryptoFailed));
@@ -444,18 +446,18 @@ fn nickname_reactions_and_app_rtt() {
     assert_eq!(p.b.seen.nick, "Алиса".as_bytes());
     assert!(p.a.seen.nick.is_empty());
 
-    act!(p.a, send_chat(NOW_MS, b"hi", None)).unwrap();
+    act!(p.a, send_chat(NOW_MS, None, b"hi", None)).unwrap();
     p.settle();
-    act!(p.b, react(NOW_MS, MsgRef { mine: false, seq: 1 }, "👍".as_bytes())).unwrap();
-    act!(p.a, react(NOW_MS, MsgRef { mine: true, seq: 1 }, "🎉".as_bytes())).unwrap();
+    act!(p.b, react(NOW_MS, MsgRef { sender: 0, seq: 1 }, "👍".as_bytes())).unwrap();
+    act!(p.a, react(NOW_MS, MsgRef { sender: 0, seq: 1 }, "🎉".as_bytes())).unwrap();
     p.settle();
-    assert_eq!(p.a.seen.reactions, vec![(MsgRef { mine: true, seq: 1 }, "👍".as_bytes().to_vec())]);
-    assert_eq!(p.b.seen.reactions, vec![(MsgRef { mine: false, seq: 1 }, "🎉".as_bytes().to_vec())]);
-    act!(p.b, react(NOW_MS, MsgRef { mine: false, seq: 1 }, b"")).unwrap();
+    assert_eq!(p.a.seen.reactions, vec![(MsgRef { sender: 0, seq: 1 }, "👍".as_bytes().to_vec())]);
+    assert_eq!(p.b.seen.reactions, vec![(MsgRef { sender: 0, seq: 1 }, "🎉".as_bytes().to_vec())]);
+    act!(p.b, react(NOW_MS, MsgRef { sender: 0, seq: 1 }, b"")).unwrap();
     p.settle();
     assert_eq!(p.a.seen.reactions[1].1, b"", "empty removes");
-    assert_eq!(act!(p.b, react(NOW_MS, MsgRef { mine: false, seq: 9 }, b"x")), Err(ErrorCode::NotPermitted), "unknown message");
-    assert_eq!(act!(p.b, react(NOW_MS, MsgRef { mine: false, seq: 1 }, &[b'x'; 33])), Err(ErrorCode::MessageTooLarge));
+    assert_eq!(act!(p.b, react(NOW_MS, MsgRef { sender: 0, seq: 9 }, b"x")), Err(ErrorCode::NotPermitted), "unknown message");
+    assert_eq!(act!(p.b, react(NOW_MS, MsgRef { sender: 0, seq: 1 }, &[b'x'; 33])), Err(ErrorCode::MessageTooLarge));
 
     act!(p.a, tick(NOW_MS + PING_IDLE_MS, false));
     p.now = NOW_MS + PING_IDLE_MS + 40;
@@ -510,7 +512,7 @@ fn identity_transfer() {
     act!(p.a, on_open(NOW_MS));
     p.settle();
     assert_eq!(p.a.seen.sas_optional, Some(false), "SAS mandatory even when both scanned");
-    assert_eq!(act!(p.b, send_chat(NOW_MS, b"x", None)), Err(ErrorCode::NotPermitted), "not a chat");
+    assert_eq!(act!(p.b, send_chat(NOW_MS, None, b"x", None)), Err(ErrorCode::NotPermitted), "not a chat");
 
     let blob: Vec<u8> = (0..30_000u32).map(|i| (i * 7) as u8).collect();
     // Old device confirms first: nothing is sent until the new device confirms too.
@@ -529,4 +531,132 @@ fn sas_confirm_on_a_normal_chat_sends_nothing() {
     let mut p = connect();
     assert_eq!(act!(p.b, confirm_sas(NOW_MS, Some(b"x"))), Ok(()), "plain SAS confirm");
     assert!(p.b.out.frames.is_empty(), "no transfer on a normal chat");
+}
+
+// ---- rooms (§14) ----------------------------------------------------------------------------
+
+use crate::room::{self, RoomRole, RoomState};
+use ephem_crypto::seal;
+
+const ROOM: [u8; 16] = [0x42; 16];
+
+/// A connected pairwise room link between `x` (offerer) and `y` (answerer) of room `ROOM`.
+fn group_link(x_seed: u8, y_seed: u8, extra: u8) -> Pair {
+    let (xi, yi) = (Identity::from_seed(&[x_seed; 32]), Identity::from_seed(&[y_seed; 32]));
+    let mut x = Box::new(Session::offerer(&xi, [x_seed ^ y_seed; 16], ROOM, NOW_S + 300, Privacy::Default, false, Settings::default()));
+    x.add_flags(flags::GROUP | extra);
+    let inv = x.build_code(&xi, sdp_str(&local_sdp("XXXX", x_seed, "9090b126-3aae-4a3e-b714-5d089ddfbff0", 40000))).unwrap().to_vec();
+    let mut y = Box::new(Session::answerer(&yi, &inv, NOW_S, Privacy::Default, false, Settings::default(), false).unwrap());
+    let ans = y.build_code(&yi, sdp_str(&local_sdp("YYYY", y_seed, "1111b126-3aae-4a3e-b714-5d089ddfbff0", 50000))).unwrap().to_vec();
+    x.apply_answer(&xi, &ans, NOW_S, false).unwrap();
+    let mut p = Pair { a: Side { id: xi, s: x, out: Wire { frames: vec![] }, seen: Seen::default() }, b: Side { id: yi, s: y, out: Wire { frames: vec![] }, seen: Seen::default() }, now: NOW_MS };
+    act!(p.b, on_open(NOW_MS));
+    act!(p.a, on_open(NOW_MS));
+    p.settle();
+    assert_eq!(p.a.s.state(), State::Connected);
+    p
+}
+
+fn set_link(side: &mut Side, me: u8, peer: u8, my_role: RoomRole, peer_role: RoomRole) {
+    side.s.set_room(crate::session::RoomLink { me, peer, my_role, peer_role });
+}
+
+#[test]
+fn room_state_intro_roles_and_moderation() {
+    use RoomRole::{Member, Observer, Owner};
+    // Owner O (seed 1) invites A (seed 2, member) and B (seed 3, observer).
+    let mut oa = group_link(1, 2, 0);
+    let mut ob = group_link(1, 3, flags::OBSERVER);
+    assert_ne!(ob.b.s.code_flags() & flags::OBSERVER, 0, "role requested in the invite");
+    let owner = Identity::from_seed(&[1; 32]);
+    let mut st = RoomState::new(ROOM, &owner);
+    let a_idx = st.admit(oa.b.id.peer_id(), oa.b.id.sign_pk(), Member).unwrap();
+    let b_idx = st.admit(ob.b.id.peer_id(), ob.b.id.sign_pk(), Observer).unwrap();
+    set_link(&mut oa.a, 0, a_idx, Owner, Member);
+    set_link(&mut ob.a, 0, b_idx, Owner, Observer);
+
+    // The signed state reaches both; each verifies it against the owner's key from HELLO.
+    let blob = st.sign(&owner);
+    act!(oa.a, send_room(NOW_MS, rtype::ROOM_STATE, &blob)).unwrap();
+    act!(ob.a, send_room(NOW_MS, rtype::ROOM_STATE, &blob)).unwrap();
+    oa.settle();
+    ob.settle();
+    for (link, idx, role) in [(&mut oa, a_idx, Member), (&mut ob, b_idx, Observer)] {
+        let (rt, body) = link.b.seen.room.pop().unwrap();
+        assert_eq!(rt, rtype::ROOM_STATE);
+        let got = RoomState::verify(&body, &owner.peer_id(), &link.b.s.peer_sign_pk()).unwrap();
+        assert_eq!(got, st);
+        set_link(&mut link.b, idx, 0, role, Owner);
+    }
+
+    // Introduction A → B through O: A offers, sealed for B; O forwards what it cannot read.
+    let (ai, bi) = (Identity::from_seed(&[2; 32]), Identity::from_seed(&[3; 32]));
+    let mut ab_a = Box::new(Session::offerer(&ai, [0x77; 16], ROOM, NOW_S + 300, Privacy::Default, false, Settings::default()));
+    ab_a.add_flags(flags::GROUP);
+    let inv = ab_a.build_code(&ai, sdp_str(&local_sdp("ABAB", 0xAB, "2222b126-3aae-4a3e-b714-5d089ddfbff0", 41000))).unwrap().to_vec();
+    let sealed = seal::seal(&ai, &bi.peer_id(), &room::seal_context(&ROOM, a_idx, b_idx), &inv);
+    act!(oa.b, send_room(NOW_MS, rtype::ROOM_SIGNAL, &room::signal_encode(a_idx, b_idx, &sealed))).unwrap();
+    oa.settle();
+    let (_, sig) = oa.a.seen.room.pop().unwrap();
+    let (from, to, boxed) = room::signal_decode(&sig).unwrap();
+    assert_eq!((from, to), (a_idx, b_idx), "owner checks `from` = the member on this link");
+    assert!(seal::open(&owner, &ai.peer_id(), &room::seal_context(&ROOM, from, to), boxed).is_none(), "owner cannot read it");
+    let mut tampered = boxed.to_vec();
+    tampered[20] ^= 1;
+    assert!(seal::open(&bi, &ai.peer_id(), &room::seal_context(&ROOM, from, to), &tampered).is_none(), "owner cannot alter it");
+    let code = seal::open(&bi, &ai.peer_id(), &room::seal_context(&ROOM, from, to), boxed).unwrap();
+    assert_eq!(Code::decode(&code).unwrap().static_pk, st.member(a_idx).unwrap().peer.0, "B checks the key against the signed state");
+    let mut ab_b = Box::new(Session::answerer(&bi, &code, NOW_S, Privacy::Default, false, Settings::default(), false).unwrap());
+    let ans = ab_b.build_code(&bi, sdp_str(&local_sdp("BABA", 0xBA, "3333b126-3aae-4a3e-b714-5d089ddfbff0", 42000))).unwrap().to_vec();
+    ab_a.apply_answer(&ai, &ans, NOW_S, false).unwrap();
+    let mut ab = Pair { a: Side { id: ai, s: ab_a, out: Wire { frames: vec![] }, seen: Seen::default() }, b: Side { id: bi, s: ab_b, out: Wire { frames: vec![] }, seen: Seen::default() }, now: NOW_MS };
+    set_link(&mut ab.a, a_idx, b_idx, Member, Observer);
+    set_link(&mut ab.b, b_idx, a_idx, Observer, Member);
+    act!(ab.b, on_open(NOW_MS));
+    act!(ab.a, on_open(NOW_MS));
+    ab.settle();
+    assert_eq!(ab.a.s.state(), State::Connected, "direct A↔B link");
+
+    // One room message, the same (sender, seq) on every link (§14.3).
+    act!(oa.b, send_chat(NOW_MS, Some(1), b"hello room", None)).unwrap();
+    act!(ab.a, send_chat(NOW_MS, Some(1), b"hello room", None)).unwrap();
+    oa.settle();
+    ab.settle();
+    assert_eq!(oa.a.seen.chats[0].0, 1);
+    assert_eq!(ab.b.seen.chats[0].0, 1);
+    // The owner replies to A's message on its link to B: the quote names A (a third party for that link).
+    act!(ob.a, send_chat(NOW_MS, Some(1), b"re", Some(MsgRef { sender: a_idx, seq: 1 }))).unwrap();
+    ob.settle();
+    assert_eq!(ob.b.seen.chats[0].3, Some(MsgRef { sender: a_idx, seq: 1 }));
+
+    // Observers are read-only: locally refused, and dropped by every receiver even if forced.
+    assert_eq!(act!(ab.b, send_chat(NOW_MS, Some(1), b"x", None)), Err(ErrorCode::NotPermitted));
+    set_link(&mut ab.b, b_idx, a_idx, Member, Member); // a lying observer
+    act!(ab.b, send_chat(NOW_MS, Some(1), b"sneaky", None)).unwrap();
+    act!(ab.b, delete(NOW_MS, MsgRef { sender: b_idx, seq: 1 })).unwrap();
+    ab.settle();
+    assert!(ab.a.seen.chats.is_empty() && ab.a.seen.deleted.is_empty(), "A drops what an observer sends");
+    assert!(ab.a.seen.closed.is_none());
+
+    // Owner moderation: O deletes A's message for everyone; a member cannot.
+    act!(ob.a, delete(NOW_MS, MsgRef { sender: a_idx, seq: 1 })).unwrap();
+    ob.settle();
+    assert_eq!(ob.b.seen.deleted, vec![MsgRef { sender: a_idx, seq: 1 }]);
+    // ... and on its link to the author, whose own copy goes too.
+    act!(oa.a, delete(NOW_MS, MsgRef { sender: a_idx, seq: 1 })).unwrap();
+    oa.settle();
+    assert_eq!(oa.b.seen.deleted, vec![MsgRef { sender: a_idx, seq: 1 }]);
+    act!(ab.a, delete(NOW_MS, MsgRef { sender: 0, seq: 1 })).unwrap();
+    assert!(ab.a.out.frames.is_empty(), "a member's delete of someone else's message stays local");
+    // Only the owner sets the room timer.
+    assert_eq!(act!(oa.b, set_ttl(NOW_MS, Some(2), 60)), Err(ErrorCode::NotPermitted));
+    act!(oa.a, set_ttl(NOW_MS, Some(2), 60)).unwrap();
+    oa.settle();
+    assert_eq!(oa.b.seen.settings, vec![60]);
+}
+
+#[test]
+fn room_records_only_on_room_links() {
+    let mut p = connect();
+    assert_eq!(act!(p.a, send_room(NOW_MS, rtype::ROOM_STATE, b"x")), Err(ErrorCode::NotPermitted));
 }

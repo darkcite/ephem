@@ -11,11 +11,16 @@ pub const TTL_CAP: usize = 256;
 /// Allowed self-destruct values (§11.7), seconds. 0 = off.
 pub const TTL_CHOICES: [u32; 7] = [0, 5, 30, 60, 300, 3_600, 86_400];
 
-/// Reference to a message from this side's point of view.
+/// A message: its sender's member index (`PeerIdx`, §11.3: 0/1 in a 1:1 chat, the room index in
+/// a room) and the sender's `chat_seq`. The same on every member's device.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct MsgRef {
-    pub mine: bool,
+    pub sender: u8,
     pub seq: u64,
+}
+
+impl MsgRef {
+    pub const NONE: Self = Self { sender: 0, seq: 0 };
 }
 
 /// One pending CHAT: the exact record body fields, so a resend is byte-identical in meaning.
@@ -32,7 +37,7 @@ pub struct Slot {
 }
 
 impl Slot {
-    const EMPTY: Self = Self { seq: 0, rflags: 0, deleted: false, ttl_s: 0, reply: MsgRef { mine: false, seq: 0 }, len: 0, text: [0; MAX_TEXT] };
+    const EMPTY: Self = Self { seq: 0, rflags: 0, deleted: false, ttl_s: 0, reply: MsgRef::NONE, len: 0, text: [0; MAX_TEXT] };
 
     #[inline(always)]
     pub fn text(&self) -> &[u8] {
@@ -45,7 +50,7 @@ impl Slot {
         self.rflags = 0;
         self.deleted = false;
         self.ttl_s = 0;
-        self.reply = MsgRef { mine: false, seq: 0 };
+        self.reply = MsgRef::NONE;
         self.len = 0;
     }
 }
@@ -81,6 +86,34 @@ impl Pending {
     #[inline(always)]
     fn idx(seq: u64) -> usize {
         (seq % PENDING_CAP as u64) as usize
+    }
+
+    /// A room link opened mid-conversation starts at the sender's current sequence number
+    /// (§14.3). Only on an empty ring.
+    pub fn rebase(&mut self, seq: u64) -> bool {
+        if self.last != self.acked || self.last > seq {
+            return false;
+        }
+        self.acked = seq;
+        self.last = seq;
+        true
+    }
+
+    /// Appends a CHAT with an explicit `seq` > `last` (rooms: the same sequence number goes to
+    /// every member's link, §14.3). Sequence numbers skipped on this link become deleted slots,
+    /// never sent. `None` if the ring cannot hold it.
+    pub fn push_at(&mut self, seq: u64, rflags: u8, ttl_s: u32, reply: MsgRef, text: &[u8]) -> Option<&Slot> {
+        if seq <= self.last || seq - self.acked > PENDING_CAP as u64 {
+            return None;
+        }
+        while self.last + 1 < seq {
+            self.last += 1;
+            let s = &mut self.slots[Self::idx(self.last)];
+            s.wipe();
+            s.seq = self.last;
+            s.deleted = true;
+        }
+        Some(self.push(rflags, ttl_s, reply, text))
     }
 
     /// Appends the next CHAT (seq = last + 1). The caller checked `is_full`.
@@ -150,7 +183,7 @@ pub struct Timers {
 
 impl Timers {
     pub const fn new() -> Self {
-        Self { t: [Timer { msg: MsgRef { mine: false, seq: 0 }, ttl_ms: 0, deadline_ms: 0 }; TTL_CAP], n: 0 }
+        Self { t: [Timer { msg: MsgRef::NONE, ttl_ms: 0, deadline_ms: 0 }; TTL_CAP], n: 0 }
     }
 
     /// Registers a message with a TTL (countdown not started). If full, the oldest entry is
@@ -210,7 +243,7 @@ impl Default for Timers {
 mod tests {
     use super::*;
 
-    const NONE: MsgRef = MsgRef { mine: false, seq: 0 };
+    const NONE: MsgRef = MsgRef::NONE;
 
     #[test]
     fn pending_ring() {
@@ -228,13 +261,22 @@ mod tests {
         assert_eq!(p.get(11).unwrap().text(), &[10]);
         p.clear();
         assert!(p.get(12).is_none());
+
+        let mut p = Pending::new();
+        assert!(p.push_at(5, 0, 0, NONE, b"a").is_some(), "room link joined at seq 5");
+        assert!(p.get(3).unwrap().deleted, "skipped seq never sent");
+        assert!(p.push_at(5, 0, 0, NONE, b"b").is_none(), "not increasing");
+        assert!(p.push_at(5 + PENDING_CAP as u64, 0, 0, NONE, b"c").is_none(), "beyond the ring");
+        let mut p = Pending::new();
+        assert!(p.rebase(1000) && p.push_at(1001, 0, 0, NONE, b"x").is_some(), "joined late, no gap");
+        assert!(!p.rebase(5), "not on a non-empty ring");
     }
 
     #[test]
     fn timers() {
         let mut t = Timers::new();
-        t.add(MsgRef { mine: true, seq: 1 }, 5);
-        t.add(MsgRef { mine: true, seq: 2 }, 30);
+        t.add(MsgRef { sender: 0, seq: 1 }, 5);
+        t.add(MsgRef { sender: 0, seq: 2 }, 30);
         t.start_upto(1, 1000);
         let mut out = [0u64; 4];
         let mut n = 0;
@@ -251,8 +293,8 @@ mod tests {
         t.expire(u64::MAX, |_| n += 1);
         assert_eq!(n, 1, "seq 2 never started");
         for s in 0..TTL_CAP as u64 {
-            assert!(t.add(MsgRef { mine: false, seq: 10 + s }, 5).is_none() || s == TTL_CAP as u64 - 1);
+            assert!(t.add(MsgRef { sender: 1, seq: 10 + s }, 5).is_none() || s == TTL_CAP as u64 - 1);
         }
-        assert_eq!(t.add(MsgRef { mine: false, seq: 999 }, 5), Some(MsgRef { mine: false, seq: 10 }));
+        assert_eq!(t.add(MsgRef { sender: 1, seq: 999 }, 5), Some(MsgRef { sender: 1, seq: 10 }));
     }
 }

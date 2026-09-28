@@ -9,6 +9,7 @@
 //! does not allocate; the only setup-time heap use is snow's handshake state and the pending ring.
 
 use crate::messages::{MsgRef, Pending, TTL_CHOICES, Timers};
+use crate::room::{MAX_MEMBERS, RoomRole};
 use ephem_crypto::noise::{HS_MSG_LEN, Handshake, Transport};
 use ephem_crypto::sas::Sas;
 use ephem_crypto::{Identity, PeerId};
@@ -139,6 +140,15 @@ impl Default for Settings {
     }
 }
 
+/// This link's place in a room (§14): member indices and roles, fixed by the owner-signed state.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct RoomLink {
+    pub me: u8,
+    pub peer: u8,
+    pub my_role: RoomRole,
+    pub peer_role: RoomRole,
+}
+
 /// Diagnostics of the current path (§18).
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Diag {
@@ -163,12 +173,12 @@ pub enum Event<'a> {
     /// Peer HELLO. `sas_optional` = both codes were scanned in person (§10.4); never for an
     /// identity transfer. `sign_pk` is the peer's Ed25519 key (stored with a contact).
     Hello { nick: &'a [u8], sas_optional: bool, sign_pk: [u8; 32] },
-    /// Incoming chat message (UTF-8 validated).
-    Chat { seq: u64, text: &'a [u8], ttl_s: u32, reply: Option<MsgRef> },
-    /// The peer changed the self-destruct timer (0 = off).
-    Setting { ttl_s: u32 },
+    /// Incoming chat message (UTF-8 validated); `msg.sender` is the peer's member index.
+    Chat { msg: MsgRef, text: &'a [u8], ttl_s: u32, reply: Option<MsgRef> },
+    /// Member `by` changed the self-destruct timer (0 = off).
+    Setting { ttl_s: u32, by: u8 },
     /// The peer edited its message.
-    Edited { seq: u64, text: &'a [u8] },
+    Edited { msg: MsgRef, text: &'a [u8] },
     /// A message was deleted for everyone.
     Deleted(MsgRef),
     /// Our messages up to `seq` were delivered (cumulative ACK).
@@ -177,8 +187,10 @@ pub enum Event<'a> {
     Read { seq: u64 },
     /// Self-destruct timer fired: remove the message everywhere.
     Expired(MsgRef),
-    /// The peer reacted to a message (empty = reaction removed) (§11.7).
-    Reaction { msg: MsgRef, emoji: &'a [u8] },
+    /// Member `by` reacted to a message (empty = reaction removed) (§11.7).
+    Reaction { msg: MsgRef, emoji: &'a [u8], by: u8 },
+    /// A room record (ROOM_STATE, ROOM_SIGNAL, ROOM_LEAVE) for the room layer (§14).
+    Room { rtype: u8, body: &'a [u8] },
     /// In-band ICE restart from the peer (§13 T1): render with [`Session::render_signal`].
     SignalOffer(IceParams),
     SignalAnswer(IceParams),
@@ -224,8 +236,11 @@ pub struct Session {
     sign_pk: [u8; 32],
     remote: PeerId,
     room_id: [u8; 16],
-    /// PeerIdx of this side (0 = offerer of the first path), fixed at the first connection.
+    /// PeerIdx of this side and of the peer: 0/1 by the first path's roles in a 1:1 chat, the
+    /// room indices in a room (§11.3).
     me_idx: u8,
+    peer_idx: u8,
+    room: Option<RoomLink>,
     ever_connected: bool,
     settings: Settings,
     scanned: bool,
@@ -272,6 +287,15 @@ fn session_id(invite_id: &[u8; 16]) -> u64 {
     u64::from_le_bytes(b) >> 1
 }
 
+/// How an outgoing CHAT is queued: explicit room sequence number, record flags, timer, reply.
+#[derive(Copy, Clone)]
+struct OutHeader {
+    at: Option<u64>,
+    rf: u8,
+    ttl_s: u32,
+    reply: MsgRef,
+}
+
 /// A record that does not fit the frame: only reachable through a caller bug.
 #[inline]
 fn too_large(_: ()) -> ErrorCode {
@@ -302,6 +326,8 @@ impl Session {
             remote: PeerId([0; 32]),
             room_id: [0; 16],
             me_idx: 0,
+            peer_idx: 1,
+            room: None,
             ever_connected: false,
             settings,
             scanned: false,
@@ -429,6 +455,56 @@ impl Session {
     #[inline(always)]
     pub fn room_id(&self) -> [u8; 16] {
         self.room_id
+    }
+
+    /// Makes this link part of a room (§14): fixed member indices and roles; room records are
+    /// accepted and roles enforced from now on. Call before the first message.
+    pub fn set_room(&mut self, link: RoomLink) {
+        debug_assert!((link.me as usize) < MAX_MEMBERS && (link.peer as usize) < MAX_MEMBERS && link.me != link.peer);
+        self.me_idx = link.me;
+        self.peer_idx = link.peer;
+        self.room = Some(link);
+        self.code_flags |= flags::GROUP;
+    }
+
+    /// Our next room message on this link continues from `seq` (a link opened mid-room, §14.3).
+    pub fn set_seq_base(&mut self, seq: u64) -> bool {
+        self.pending.rebase(seq)
+    }
+
+    /// Extra invite flags (e.g. `GROUP`, `OBSERVER`) before the offerer builds its code.
+    pub fn add_flags(&mut self, f: u8) {
+        self.code_flags |= f & flags::KNOWN;
+    }
+
+    #[inline(always)]
+    pub fn code_flags(&self) -> u8 {
+        self.code_flags
+    }
+
+    #[inline(always)]
+    pub fn me_idx(&self) -> u8 {
+        self.me_idx
+    }
+
+    #[inline(always)]
+    pub fn peer_idx(&self) -> u8 {
+        self.peer_idx
+    }
+
+    #[inline(always)]
+    pub fn room_link(&self) -> Option<RoomLink> {
+        self.room
+    }
+
+    #[inline]
+    fn peer_observer(&self) -> bool {
+        self.room.is_some_and(|r| r.peer_role == RoomRole::Observer)
+    }
+
+    #[inline]
+    fn me_observer(&self) -> bool {
+        self.room.is_some_and(|r| r.my_role == RoomRole::Observer)
     }
 
     /// This chat is an identity transfer (§7.6), not a conversation.
@@ -729,7 +805,10 @@ impl Session {
         let resumed = self.ever_connected;
         if !resumed {
             self.ever_connected = true;
-            self.me_idx = if self.role == Role::Offerer { 0 } else { 1 };
+            if self.room.is_none() {
+                self.me_idx = if self.role == Role::Offerer { 0 } else { 1 };
+                self.peer_idx = 1 - self.me_idx;
+            }
         }
         sink(Event::Connected { sas, peer: self.remote, resumed });
         self.send_hello(now_ms, sink)?;
@@ -749,7 +828,6 @@ impl Session {
         if slot.deleted {
             return Ok(());
         }
-        let (me, peer) = (self.me_idx, 1 - self.me_idx);
         let tr = self.tr.as_mut().ok_or(ErrorCode::PeerOffline)?;
         let n = {
             let mut b = Buf::new(&mut self.tx[HEADER_LEN..HEADER_LEN + MAX_PLAIN]);
@@ -764,7 +842,7 @@ impl Session {
                 b.u32(slot.ttl_s).map_err(too_large)?;
             }
             if reply_len != 0 {
-                b.u8(if slot.reply.mine { me } else { peer }).map_err(too_large)?;
+                b.u8(slot.reply.sender).map_err(too_large)?;
                 b.u64(slot.reply.seq).map_err(too_large)?;
             }
             b.put(text).map_err(too_large)?;
@@ -780,7 +858,9 @@ impl Session {
         use ErrorCode::ProtocolMismatch as Bad;
         let range = self.tr.as_mut().ok_or(Bad)?.open(frame)?;
         let plain = &frame[range];
-        let (me, peer) = (self.me_idx, 1 - self.me_idx);
+        let (me, peer) = (self.me_idx, self.peer_idx);
+        let (in_room, observer) = (self.room.is_some(), self.peer_observer());
+        let peer_owner = self.room.is_some_and(|r| r.peer_role == RoomRole::Owner);
         let mut ack_upto = None;
         let mut pong = None;
         let mut rekey = false;
@@ -813,7 +893,10 @@ impl Session {
                     let reply = if rec.rflags & rflags::REPLY != 0 {
                         let who = r.u8().ok_or(Bad)?;
                         let s = r.u64().ok_or(Bad)?;
-                        Some(MsgRef { mine: who == me, seq: s })
+                        if who as usize >= MAX_MEMBERS {
+                            return Err(Bad);
+                        }
+                        Some(MsgRef { sender: who, seq: s })
                     } else {
                         None
                     };
@@ -824,19 +907,25 @@ impl Session {
                     if core::str::from_utf8(text).is_err() {
                         return Err(Bad);
                     }
+                    // Observers are read-only; in a room only the owner sets the timer (§11.7). Such
+                    // records are acknowledged (no resends) but dropped.
+                    let setting = rec.rflags & rflags::SETTING != 0;
+                    let permitted = !observer && (!setting || !in_room || peer_owner);
                     if seq > self.chat_rx {
                         self.chat_rx = seq;
-                        if rec.rflags & rflags::SETTING != 0 {
+                        if !permitted {
+                        } else if setting {
                             self.chat_ttl_s = ttl_s;
-                            sink(Event::Setting { ttl_s });
+                            sink(Event::Setting { ttl_s, by: peer });
                         } else {
+                            let msg = MsgRef { sender: peer, seq };
                             if ttl_s != 0
-                                && let Some(old) = self.peer_timers.add(MsgRef { mine: false, seq }, ttl_s)
+                                && let Some(old) = self.peer_timers.add(msg, ttl_s)
                             {
                                 sink(Event::Expired(old));
                             }
                             self.peer_typing(false, sink);
-                            sink(Event::Chat { seq, text, ttl_s, reply });
+                            sink(Event::Chat { msg, text, ttl_s, reply });
                         }
                     }
                     ack_upto = Some(self.chat_rx);
@@ -860,7 +949,7 @@ impl Session {
                 }
                 rtype::TYPING => {
                     let on = r.u8().ok_or(Bad)? != 0;
-                    if self.settings.typing {
+                    if self.settings.typing && !observer {
                         self.peer_typing(on, sink);
                         if on {
                             self.peer_typing_until = now_ms + TYPING_CLEAR_MS;
@@ -873,17 +962,22 @@ impl Session {
                     if text.is_empty() || text.len() > MAX_TEXT || core::str::from_utf8(text).is_err() {
                         return Err(Bad);
                     }
-                    if seq <= self.chat_rx {
-                        sink(Event::Edited { seq, text });
+                    if seq <= self.chat_rx && !observer {
+                        sink(Event::Edited { msg: MsgRef { sender: peer, seq }, text });
                     }
                 }
                 rtype::DELETE => {
                     let who = r.u8().ok_or(Bad)?;
                     let seq = r.u64().ok_or(Bad)?;
-                    // 1:1: only the author may delete for everyone (§11.7); anything else is dropped.
-                    if who == peer && seq <= self.chat_rx {
-                        self.peer_timers.remove(seq);
-                        sink(Event::Deleted(MsgRef { mine: false, seq }));
+                    // Only the author deletes for everyone, or the room owner (moderation, §11.7);
+                    // anything else, and anything from an observer, is dropped.
+                    let own = who == peer && seq <= self.chat_rx;
+                    let moderation = peer_owner && (who as usize) < MAX_MEMBERS;
+                    if !observer && (own || moderation) {
+                        if own {
+                            self.peer_timers.remove(seq);
+                        }
+                        sink(Event::Deleted(MsgRef { sender: who, seq }));
                     }
                 }
                 rtype::REACT => {
@@ -891,11 +985,24 @@ impl Session {
                     let seq = r.u64().ok_or(Bad)?;
                     let n = r.u8().ok_or(Bad)? as usize;
                     let emoji = r.take(n).filter(|e| e.len() <= MAX_REACTION && core::str::from_utf8(e).is_ok()).ok_or(Bad)?;
-                    let msg = MsgRef { mine: who == me, seq };
-                    let known = if msg.mine { seq <= self.pending.last() } else { who == peer && seq <= self.chat_rx };
-                    if known && seq != 0 {
-                        sink(Event::Reaction { msg, emoji });
+                    let msg = MsgRef { sender: who, seq };
+                    // In a room a reaction may target any member's message (the room layer knows them).
+                    let known = if who == me {
+                        seq <= self.pending.last()
+                    } else if who == peer {
+                        seq <= self.chat_rx
+                    } else {
+                        in_room && (who as usize) < MAX_MEMBERS
+                    };
+                    if known && seq != 0 && !observer {
+                        sink(Event::Reaction { msg, emoji, by: peer });
                     }
+                }
+                rtype::ROOM_STATE | rtype::ROOM_SIGNAL | rtype::ROOM_LEAVE => {
+                    if self.code_flags & flags::GROUP == 0 {
+                        return Err(Bad);
+                    }
+                    sink(Event::Room { rtype: rec.rtype, body: rec.body });
                 }
                 rtype::SIGNAL_OFFER | rtype::SIGNAL_ANSWER => {
                     let n = r.u8().ok_or(Bad)?;
@@ -1035,17 +1142,19 @@ impl Session {
 
     // ---- user actions ----
 
-    fn queue(&mut self, now_ms: u64, rf: u8, ttl_s: u32, reply: MsgRef, text: &[u8], sink: &mut impl FnMut(Event<'_>)) -> Result<u64, ErrorCode> {
-        if self.transfer {
+    fn queue(&mut self, now_ms: u64, h: OutHeader, text: &[u8], sink: &mut impl FnMut(Event<'_>)) -> Result<u64, ErrorCode> {
+        let OutHeader { at, rf, ttl_s, reply } = h;
+        if self.transfer || self.me_observer() {
             return Err(ErrorCode::NotPermitted);
         }
         if !self.ever_connected || self.state == State::Closed {
             return Err(ErrorCode::PeerOffline);
         }
-        if self.pending.is_full() {
-            return Err(ErrorCode::Backpressure);
-        }
-        let seq = self.pending.push(rf, ttl_s, reply, text).seq;
+        let seq = match at {
+            Some(seq) => self.pending.push_at(seq, rf, ttl_s, reply, text).ok_or(ErrorCode::Backpressure)?.seq,
+            None if self.pending.is_full() => return Err(ErrorCode::Backpressure),
+            None => self.pending.push(rf, ttl_s, reply, text).seq,
+        };
         if self.connected() {
             self.transmit_slot(seq, now_ms, sink)?;
         }
@@ -1053,8 +1162,9 @@ impl Session {
     }
 
     /// Sends (or queues while the path is down) one chat message with the chat's current
-    /// self-destruct timer; returns its `chat_seq`.
-    pub fn send_chat(&mut self, now_ms: u64, text: &[u8], reply: Option<MsgRef>, sink: &mut impl FnMut(Event<'_>)) -> Result<u64, ErrorCode> {
+    /// self-destruct timer; returns its `chat_seq`. `at`: a room gives every link the same
+    /// sequence number (§14.3); `None` takes the next one of this link.
+    pub fn send_chat(&mut self, now_ms: u64, at: Option<u64>, text: &[u8], reply: Option<MsgRef>, sink: &mut impl FnMut(Event<'_>)) -> Result<u64, ErrorCode> {
         if text.is_empty() || text.len() > MAX_TEXT {
             return Err(ErrorCode::MessageTooLarge);
         }
@@ -1063,9 +1173,9 @@ impl Session {
         }
         let ttl = self.chat_ttl_s;
         let rf = if ttl != 0 { rflags::TTL } else { 0 } | if reply.is_some() { rflags::REPLY } else { 0 };
-        let seq = self.queue(now_ms, rf, ttl, reply.unwrap_or(MsgRef { mine: false, seq: 0 }), text, sink)?;
+        let seq = self.queue(now_ms, OutHeader { at, rf, ttl_s: ttl, reply: reply.unwrap_or(MsgRef::NONE) }, text, sink)?;
         if ttl != 0
-            && let Some(old) = self.own_timers.add(MsgRef { mine: true, seq }, ttl)
+            && let Some(old) = self.own_timers.add(MsgRef { sender: self.me_idx, seq }, ttl)
         {
             sink(Event::Expired(old));
         }
@@ -1073,15 +1183,23 @@ impl Session {
         Ok(seq)
     }
 
-    /// Sets the chat's self-destruct timer (either person may, in 1:1) and notifies the peer.
-    pub fn set_ttl(&mut self, now_ms: u64, ttl_s: u32, sink: &mut impl FnMut(Event<'_>)) -> Result<u64, ErrorCode> {
-        if !TTL_CHOICES.contains(&ttl_s) {
+    /// Sets the chat's self-destruct timer (either person in 1:1, only the owner in a room) and
+    /// notifies the peer. `at` as for [`Self::send_chat`].
+    pub fn set_ttl(&mut self, now_ms: u64, at: Option<u64>, ttl_s: u32, sink: &mut impl FnMut(Event<'_>)) -> Result<u64, ErrorCode> {
+        if !TTL_CHOICES.contains(&ttl_s) || self.room.is_some_and(|r| r.my_role != RoomRole::Owner) {
             return Err(ErrorCode::NotPermitted);
         }
         let rf = rflags::SETTING | if ttl_s != 0 { rflags::TTL } else { 0 };
-        let seq = self.queue(now_ms, rf, ttl_s, MsgRef { mine: false, seq: 0 }, &[], sink)?;
+        let seq = self.queue(now_ms, OutHeader { at, rf, ttl_s, reply: MsgRef::NONE }, &[], sink)?;
         self.chat_ttl_s = ttl_s;
         Ok(seq)
+    }
+
+    /// Room member: adopts the room's timer set by the owner on another link (§14.3), so every
+    /// link stamps our messages with the same TTL. Nothing is sent.
+    pub fn apply_ttl(&mut self, ttl_s: u32) {
+        debug_assert!(TTL_CHOICES.contains(&ttl_s));
+        self.chat_ttl_s = ttl_s;
     }
 
     /// Edits one of our messages. A message still pending is rewritten in place, so the peer
@@ -1089,6 +1207,9 @@ impl Session {
     pub fn edit(&mut self, now_ms: u64, seq: u64, text: &[u8], sink: &mut impl FnMut(Event<'_>)) -> Result<(), ErrorCode> {
         if text.is_empty() || text.len() > MAX_TEXT || core::str::from_utf8(text).is_err() {
             return Err(ErrorCode::MessageTooLarge);
+        }
+        if self.me_observer() {
+            return Err(ErrorCode::NotPermitted);
         }
         if seq == 0 || seq > self.pending.last() {
             return Err(ErrorCode::NotPermitted);
@@ -1119,11 +1240,22 @@ impl Session {
         })
     }
 
-    /// Deletes a message. Ours: for everyone (a pending one is simply never sent).
-    /// The peer's: for me only, nothing is sent.
+    /// Deletes a message. Ours: for everyone (a pending one is simply never sent). Someone
+    /// else's: for me only (nothing is sent), or for everyone by the room owner (moderation).
     pub fn delete(&mut self, now_ms: u64, msg: MsgRef, sink: &mut impl FnMut(Event<'_>)) -> Result<(), ErrorCode> {
-        if !msg.mine {
-            self.peer_timers.remove(msg.seq);
+        if msg.sender != self.me_idx {
+            if self.room.is_some_and(|r| r.my_role == RoomRole::Owner) {
+                if !self.connected() {
+                    return Err(ErrorCode::PeerOffline);
+                }
+                let mut body = [0u8; 9];
+                body[0] = msg.sender;
+                body[1..].copy_from_slice(&msg.seq.to_le_bytes());
+                return self.send_records(now_ms, sink, |b| frame::write_record(b, rtype::DELETE, 0, &body));
+            }
+            if msg.sender == self.peer_idx {
+                self.peer_timers.remove(msg.seq);
+            }
             return Ok(());
         }
         if msg.seq == 0 || msg.seq > self.pending.last() {
@@ -1156,14 +1288,20 @@ impl Session {
         if emoji.len() > MAX_REACTION || core::str::from_utf8(emoji).is_err() {
             return Err(ErrorCode::MessageTooLarge);
         }
-        let known = if msg.mine { msg.seq <= self.pending.last() } else { msg.seq <= self.chat_rx };
-        if self.transfer || msg.seq == 0 || !known {
+        let known = if msg.sender == self.me_idx {
+            msg.seq <= self.pending.last()
+        } else if msg.sender == self.peer_idx {
+            msg.seq <= self.chat_rx
+        } else {
+            self.room.is_some() && (msg.sender as usize) < MAX_MEMBERS
+        };
+        if self.transfer || self.me_observer() || msg.seq == 0 || !known {
             return Err(ErrorCode::NotPermitted);
         }
         if !self.connected() {
             return Err(ErrorCode::PeerOffline);
         }
-        let who = if msg.mine { self.me_idx } else { 1 - self.me_idx };
+        let who = msg.sender;
         self.send_records(now_ms, sink, |b| {
             b.u8(rtype::REACT)?;
             b.u8(0)?;
@@ -1224,6 +1362,17 @@ impl Session {
         Ok(())
     }
 
+    /// Sends a room record (§14) on this link.
+    pub fn send_room(&mut self, now_ms: u64, rt: u8, body: &[u8], sink: &mut impl FnMut(Event<'_>)) -> Result<(), ErrorCode> {
+        if self.code_flags & flags::GROUP == 0 || !matches!(rt, rtype::ROOM_STATE | rtype::ROOM_SIGNAL | rtype::ROOM_LEAVE) {
+            return Err(ErrorCode::NotPermitted);
+        }
+        if !self.connected() {
+            return Err(ErrorCode::PeerOffline);
+        }
+        self.send_records(now_ms, sink, |b| frame::write_record(b, rt, 0, body))
+    }
+
     /// The user has seen the peer's messages up to `seq` (on screen, page visible).
     /// Starts their self-destruct countdowns and sends a coalesced READ if enabled.
     pub fn mark_read(&mut self, now_ms: u64, seq: u64, sink: &mut impl FnMut(Event<'_>)) {
@@ -1251,7 +1400,7 @@ impl Session {
 
     /// Composer activity. Sends TYPING at most every 3 s while typing, and 0 when it stops.
     pub fn typing(&mut self, now_ms: u64, active: bool, sink: &mut impl FnMut(Event<'_>)) {
-        if !self.settings.typing || !self.connected() {
+        if !self.settings.typing || !self.connected() || self.me_observer() {
             return;
         }
         let send = if active { !self.typing_sent || now_ms.saturating_sub(self.typing_sent_ms) >= TYPING_EVERY_MS } else { self.typing_sent };

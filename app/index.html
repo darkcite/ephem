@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-e2r1XPvoMIjq207+/zwhO9wqVCpmAQXun2SvP+yknXY='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="4a6e5d527ff9">
-<meta name="ephem-wasm" content="sha384-8RH61clWoNCeN/0f0ZeqlBuLzYoXoB1gJvOYIN37NVwg9TBDx0mAxKsbNeyqRxYD">
-<link rel="stylesheet" href="app.css" integrity="sha384-uHTRa6dhozGg1mvMb4Wu8sB9KbmSmoIFTmiDxmWRz9nHMpATY2+jr7CVhZIeZcei">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-R1uUB9ayut0ZGegOtrAXR7HYIqJBnXtNe4TXPhdpY67lAu0wZm3mQHGz5SEDEWFz","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem.js":"sha384-8gfbVacTSO8bbQ1aSxWbwHuVwvWu7aIa6b0ZF0bJ+zCSsm7BjjGjqdOWHLtRW5zQ"}}</script>
-<script type="module" src="app.js" integrity="sha384-R1uUB9ayut0ZGegOtrAXR7HYIqJBnXtNe4TXPhdpY67lAu0wZm3mQHGz5SEDEWFz"></script>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-eDZN+4Ck5Hel4zLzfsjMgRgbxuIocrPCEomnoCte5x8='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="bec3b455e479">
+<meta name="ephem-wasm" content="sha384-pNr5uDarsiYGUdDaLBYrWL/oepWCTXxMCq3CDFaNWN7DqEA9rng2fSRDTV4KUDjq">
+<link rel="stylesheet" href="app.css" integrity="sha384-X/Ytyc6Pmb9W8qWVl/o7tXdvU19WJQl24X4vT6/u98eDIdWIfTfFw1bwNy4ForAc">
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-2Kmvt09gVtQO/8FvpfGuFNfV42QMjN3oo4f5alwFR0RJeOneVVNkqgjVtn/fRKF7","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem.js":"sha384-r8mT07dwdnkeemy4TayMbxTJWXhqvwlhL86djGza/r3mvtvOlZCFs0uSfa5dOihI"}}</script>
+<script type="module" src="app.js" integrity="sha384-2Kmvt09gVtQO/8FvpfGuFNfV42QMjN3oo4f5alwFR0RJeOneVVNkqgjVtn/fRKF7"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -47,6 +47,11 @@
       <h2>1 · Invite someone</h2>
       <p>Creates an invite code. Show it as a QR code, or send the link.</p>
       <button id="b-invite" class="primary">Create invite</button>
+    </div>
+    <div class="card">
+      <h2>Or open a room</h2>
+      <p>Up to 16 people, each connected directly to every other one. You own the room: you invite members (or read-only observers) and can remove them. When you leave, the room is gone.</p>
+      <button id="b-room">Create room</button>
     </div>
     <div class="card">
       <h2>Got a code?</h2>
@@ -184,6 +189,37 @@
       </label>
       <button id="b-info" class="ghost" title="Connection details">ⓘ</button>
       <button id="b-leave" class="ghost">Leave</button>
+    </div>
+    <div id="room" class="card room" hidden>
+      <h2>Room · <span id="room-count"></span> <span id="room-role" class="pill"></span></h2>
+      <ul id="members" class="contacts members"></ul>
+      <div id="room-owner" class="actions" hidden>
+        <button id="b-room-invite">Invite member</button>
+        <button id="b-room-observer" class="ghost">Invite observer</button>
+      </div>
+      <div id="room-invite" hidden>
+        <p class="note">Let the new member scan this code, or send them the link. It works once. Then paste their answer below.</p>
+        <div class="codebox">
+          <div class="qr" aria-label="QR code"></div>
+          <textarea class="link" rows="2" readonly spellcheck="false"></textarea>
+          <div class="actions">
+            <button class="primary copy">Copy link</button>
+            <button class="share">Share…</button>
+          </div>
+        </div>
+        <textarea id="t-room-answer" rows="2" placeholder="Paste their answer (https://…/app/#a=…)" spellcheck="false" autocomplete="off"></textarea>
+        <div class="actions">
+          <button id="b-room-answer">Add to room</button>
+          <button id="b-scan-room" class="scan">Scan answer</button>
+        </div>
+      </div>
+      <div id="room-confirm" class="warn" hidden>
+        <p id="room-confirm-text"></p>
+        <div class="actions">
+          <button id="b-room-connect" class="primary">Connect</button>
+          <button id="b-room-decline" class="danger">Leave the room</button>
+        </div>
+      </div>
     </div>
     <div id="diag" class="card diag" hidden>
       <p><strong>Path:</strong> <span id="diag-path">measuring…</span></p>

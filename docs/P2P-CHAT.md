@@ -6,8 +6,8 @@
 |---|---|
 | Product | **Ephem** |
 | Document | The **single** project document. It replaces the earlier SPEC, REVIEW, plans and spike notes (all merged here on 2026-09-28) |
-| Spec level | v0.8 (see the decision log, §25) |
-| Status | Architecture and protocol draft. MVP-1 is ready to start. **Gate G2 passed on desktop and iOS**; Tor mode and public channels are now gated only by G3–G4 (need TOR-1 code) (§23.3) |
+| Spec level | v0.9 (see the decision log, §25) |
+| Status | MVP-1, MVP-2 and MVP-3 built and tested end to end. **Gate G2 passed on desktop and iOS**; Tor mode and public channels are now gated only by G3–G4 (need TOR-1 code) (§23.3) |
 | Deployment | GitHub Pages, project site `https://<owner>.github.io/ephem/` |
 | Runtime | Browser PWA. **Only our WASM app is built: no native programs (P10)** |
 | Implementation | Rust (edition 2024) → `wasm32-unknown-unknown` |
@@ -35,11 +35,12 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 
 | Area | State |
 |---|---|
-| Design | Complete up to MVP-3, plus Tor mode and public channels |
+| Design | Complete up to MVP-3 (rooms by owner-signed state, v0.9), plus Tor mode and public channels |
 | Proven | SDP rebuild from ~150–165-byte codes connects in **every tested pair: Chrome, Safari, Firefox and iPhone, both directions across engines**; camera permission exposes the real IP in Chrome and iPhone Safari but **not Firefox**; a pending offer survives **182 s** in the iOS background; the protocol crates fit in 291 KB gzip **with no C code**; Argon2id 34 ms (t = 4, Apple Silicon); **arti (Tor) builds for WASM on Linux and macOS (G1)**; **live Snowflake rendezvous + DataChannel from Chrome, Safari, Firefox and iPhone (G2)**; browsers publish an IPNS record and read it back via `trustless-gateway.link` |
 | Built | **MVP-1 feature-complete, 41/41 end-to-end checks in Chromium** (APP-E2E, §24.2): landing page; `/app/` PWA; temporary or saved identity (encrypted key file, one identity per tab); invite → answer by QR (camera scanner in wasm), link or paste, hand-off between tabs; Noise KK; SAS policy; 1:1 chat with pending queue and ticks 🕓 ✓ ✓✓, typing, reply, edit, delete, self-destruct timers; T3 reconnect codes; diagnostics with relay rejection; "what your peer sees" panel and IPv6 warning; version-pinned service worker, SRI, offline start. 188 KB gzip wasm. 33 native unit tests |
 | Built (MVP-2) | **MVP-2 feature-complete, 18/18 end-to-end checks** (APP-E2E-MVP2, §24.2): up to 8 remembered identities (IndexedDB) with sign-in from the list; nicknames; contacts in the key file (verified by SAS, SAS skipped next time, impersonation warning, backup-out-of-date notice); reactions; identity transfer to another device over P2P; in-band ICE restart T1 (perfect negotiation, triggered by a stuck path, a network change or by hand); full diagnostics. 40 native unit tests |
-| Next | 1. MVP-3 (rooms). 2. Merge to `main`, make the repo public and switch on Pages after MVP-3 (§23.1a, owner decision 2026-09-28). 3. In parallel, TOR-1 steps E3–E5 (gates G3, G4). Camera/QR work waits until Tor is in (owner decision) |
+| Built (MVP-3) | **Rooms, 18/18 end-to-end checks with four browsers** (APP-E2E-ROOM, §24.2): owner-controlled rooms of up to 16 with member and **observer** roles; the owner-signed room state (Ed25519) verified by every member; introductions through the owner with **sealed** signalling (the owner forwards what it cannot read); full mesh; one sequence number per sender on every link; sender labels, replies across members, delivery "✓ k/N"; owner moderation and room timer; removal, leaving, disposal; **T2** (lost member links come back by themselves through the owner). 225 KB gzip wasm. 46 native unit tests |
+| Next | 1. Merge to `main`, make the repo public and switch on Pages (§23.1a, owner decision 2026-09-28). 2. Device runs of the room flow (S9: 16 links on iOS Safari). 3. In parallel, TOR-1 steps E3–E5 (gates G3, G4). Camera/QR work waits until Tor is in (owner decision) |
 | Blocked on devices | S3, S6, S7, S9 (phones, real networks) |
 
 ---
@@ -89,7 +90,7 @@ There is no server, relay, database or history. Network paths can be thrown away
 ```
 +------------------------------------------------+
 | 5 Application   rooms, members, messages, UI   |  Rust (core)       + JS (DOM only)
-| 4 Crypto        Noise KK (1:1), MLS (groups),  |  Rust (crypto)
+| 4 Crypto        Noise KK (every link), owner-  |  Rust (crypto)
 |                 SAS, identity key file         |
 | 3 P2P protocol  frames, sequencing, recovery,  |  Rust (proto, core)
 |                 peer-relayed signalling        |
@@ -163,11 +164,11 @@ ephem/
 │   │   ├── contacts.rs             # fixed-capacity contact table (256), verified keys (§7.5)
 │   │   ├── noise.rs                # Noise_KK handshake (snow); transport over the raw split keys: in-place ChaCha20-Poly1305, header as AAD
 │   │   ├── sas.rs                  # short authentication string from handshake hash
-│   │   └── mls.rs                  # (MVP-3) openmls group wrapper
+│   │   └── seal.rs                 # sealed boxes between two static keys: relayed room signalling (§14.4)
 │   ├── core/                       # pure deterministic state machines, no wasm-bindgen
 │   │   ├── session.rs              # per-peer connection FSM (§12)
 │   │   ├── recovery.rs             # recovery ladder T0–T3 (§13)
-│   │   ├── room.rs                 # membership, dedup high-water marks (§14)
+│   │   ├── room.rs                 # owner-signed room state, roles, relayed-signal codec (§14)
 │   │   ├── sendq.rs                # fixed ring send queue + backpressure (§11.5)
 │   │   ├── messages.rs             # message table: TTL, edit, delete, replies, reactions, ticks (§11.7)
 │   │   ├── transport.rs            # Transport = Direct(WebRTC) | Tor(embedded), mode guard (§28.5)
@@ -233,7 +234,7 @@ impl Core {
 
 - An identity is a **32-byte seed**. Two keys are derived from it with domain-separated HKDF-BLAKE2s:
   - `HKDF(seed, "p2pchat/x25519")` → the X25519 static key, used by Noise (§10.1);
-  - `HKDF(seed, "p2pchat/ed25519")` → the Ed25519 signing key, used for MLS credentials (MVP-3). It is sent to peers inside the Noise channel, so it is bound to the `PeerId`.
+  - `HKDF(seed, "p2pchat/ed25519")` → the Ed25519 signing key: a room owner signs the room state with it (§14.2), and contacts keep it. It is sent to peers inside the Noise channel, so it is bound to the `PeerId`.
   - `HKDF(seed, "p2pchat/onion")` → the Ed25519 **onion service key** (Tor mode, §28). It is stable for saved identities, and temporary for temporary ones.
 - `PeerId` is the X25519 public key itself. It is not hashed.
 - While the app runs, the seed and the derived secret keys live only in wasm linear memory. They are zeroized on sign-out and on `pagehide`.
@@ -311,7 +312,7 @@ Wallet sign-in is removed from the MVP plan. When it comes back, the design in �
   | 32 | `peer_id` |
   | 1 | `flags`: bit0 `verified` (the SAS was compared), bit1 has `onion_pk`, bit2 has `sign_pk` |
   | 0 / 32 | `onion_pk` (Tor mode, §28) |
-  | 0 / 32 | `sign_pk` (MLS credential) |
+  | 0 / 32 | `sign_pk` (Ed25519, §7.1) |
   | 4 | `added_at` (u32, Unix seconds) |
   | 1 + n | local nickname (≤ 32 B), chosen by the user, not by the peer |
 
@@ -549,7 +550,11 @@ The builder filters by mode **regardless of what the browser exposes**.
 
 ### 10.3 Groups (MVP-3)
 
-MLS (RFC 9420) via `openmls`, compiled for `wasm32`. See §14.4 for ordering.
+No group key (owner decision v0.9, replacing MLS). A room is a full mesh of the pairwise Noise KK links of §10.1, and **every message is encrypted separately on each link**. What makes the set of links a room is the **owner-signed room state** (§14.2): room id, version and the member table (index, role, `PeerId`, Ed25519 key), signed with Ed25519 over `"ephem-room-state/1" ‖ state`. Members verify it with the signing key the owner sent in HELLO on their own Noise link, which is bound to the owner's pinned static key.
+
+Signalling between two members travels through the owner, **sealed** (§14.4): ChaCha20-Poly1305 under `HKDF-BLAKE2s(X25519(static_a, static_b))`, with a random nonce and `room_id ‖ from ‖ to` as associated data. The owner forwards the box and can neither read nor alter it.
+
+Why not MLS: with one committer and no delivery service MLS adds a group key, epochs and a 100 KB+ dependency, while each message must still be sent on every link (no forwarding, §14.3). Pairwise Noise already gives per-link forward secrecy and rekeying; removing a member is just closing its links, after which it receives nothing (post-compromise security by construction).
 
 ### 10.4 Short authentication string (SAS)
 
@@ -582,7 +587,7 @@ MLS (RFC 9420) via `openmls`, compiled for `wasm32`. See §14.4 for ordering.
 | Off | Size | Field |
 |---|---|---|
 | 0 | 1 | `ver` = 1 |
-| 1 | 1 | `ftype`: `1` NOISE_HS, `2` NOISE_TRANSPORT, `3` MLS (MVP-3) |
+| 1 | 1 | `ftype`: `1` NOISE_HS, `2` NOISE_TRANSPORT (rooms use the same frames, §10.3) |
 | 2 | 2 | `flags` (reserved, must be 0) |
 | 4 | 8 | `seq`: the transport counter. It must equal the Noise nonce and is carried for diagnostics and assertions |
 | 12 | … | ciphertext, plus a 16-byte Poly1305 tag |
@@ -614,10 +619,12 @@ MLS (RFC 9420) via `openmls`, compiled for `wasm32`. See §14.4 for ordering.
 | 0x0C | REACT | `target_sender u8`, `target_seq u64`, `len u8` + emoji (0–32 B UTF-8; 0 = remove) | MVP-2 |
 | 0x40 | IDENTITY_CHUNK | `idx u16`, `total u16`, up to 12 KiB of the encrypted key-file blob. Only valid on a `TRANSFER` link after the SAS is confirmed (§7.6) | MVP-2 |
 | 0x41 | IDENTITY_READY | empty: the receiving device's user confirmed the SAS (§7.6) | MVP-2 |
-| 0x10 | SIGNAL_OFFER / 0x11 SIGNAL_ANSWER | `n_cand u8` + ICE body (ufrag, pwd, DTLS fingerprint, candidates; the §8.3 layout without ids). MVP-3 adds a target for relayed signalling (§14.4) | MVP-2 (T1), MVP-3 (§14.4) |
-| 0x30… | ROOM_* / MLS_* | defined in MVP-3 | MVP-3 |
+| 0x10 | SIGNAL_OFFER / 0x11 SIGNAL_ANSWER | `n_cand u8` + ICE body (ufrag, pwd, DTLS fingerprint, candidates; the §8.3 layout without ids): in-band ICE restart of this link | MVP-2 (T1) |
+| 0x30 | ROOM_STATE | the owner-signed room state: `room_id [16]`, `version u32`, `n u8`, n × (`idx u8`, `role u8`, `peer_id [32]`, `sign_pk [32]`), `sig [64]`. Owner → member only; strict decoding (§14.2) | MVP-3 |
+| 0x31 | ROOM_SIGNAL | `from u8`, `to u8`, sealed box (§10.3) of a §8.3 code (invite, answer, resume invite, resume answer) for the `from`→`to` member link. Member → owner → member; the owner checks that `from` is the member on the link it came in on | MVP-3 |
+| 0x32 | ROOM_LEAVE | empty: the member is leaving (the owner removes it and re-signs) | MVP-3 |
 
-Unknown `rtype` values are ignored if `rflags.bit0` (IGNORABLE) is set. Otherwise they cause `E_PROTOCOL_MISMATCH`.
+Room records are accepted only on links made from a `GROUP` invite. Unknown `rtype` values are ignored if `rflags.bit0` (IGNORABLE) is set. Otherwise they cause `E_PROTOCOL_MISMATCH`.
 
 ### 11.3 Sequencing and deduplication
 
@@ -658,6 +665,9 @@ Unknown `rtype` values are ignored if `rflags.bit0` (IGNORABLE) is set. Otherwis
 | TX | JS string → wasm TX slot | **1 transcode** | Unavoidable: `TextEncoder.encodeInto` writes directly into a wasm memory view |
 | TX | Encrypt | 0 | In place |
 | TX | `send(Uint8Array view of wasm memory)` | 0 on our side | The browser copies into SCTP internally. The view is created right before `send`, and memory never grows after init, so the view stays valid |
+| Room control (setup path) | ROOM_STATE / ROOM_SIGNAL / ROOM_LEAVE body → room inbox | **1 copy** | The room layer handles a record after the core call that produced it returns (it touches other links); these are admissions, introductions and reconnects, never chat |
+| Room control (setup path) | Relayed code → sealed box → ROOM_SIGNAL body | **2 copies** (≤ 400 B) | Sealing writes a new buffer; the owner forwards the body as received. Once per introduction or T2 attempt |
+| Room chat | One message to N members | N encryptions | Inherent to pairwise links (§10.3): each link encrypts in place from the same text slot; no plaintext copy |
 
 ### 11.7 Message features: semantics
 
@@ -752,7 +762,7 @@ Honest baseline: when a device's **only** network changes, all of its links drop
 |---|---|---|---|---|
 | **T0** | The ICE agent switches to an already-validated backup pair, or continual gathering finds a peer-reflexive path | None | A second interface was gathered at connect time, or the stationary peer is directly reachable *(spike S3)* | Free (browser behaviour) |
 | **T1** | ICE restart. SIGNAL_OFFER/ANSWER travel over the **still-open** DataChannel, encrypted by Noise. The re-offer is rendered with the Appendix A template, the `o=` version increased and the DTLS roles of the connection kept (the path's answerer stays `active`, so an answer from the other side is rendered `passive`) | In-band | The path is `disconnected` for 2 s, the browser reports a network change (`online`, `navigator.connection`), or the user taps "Restart ICE" in the diagnostics | MVP-2 |
-| **T2** | ICE restart relayed **through the room owner**, end-to-end encrypted (§14.4) | Peer-relayed | Group, with a partial break; the owner is still linked to both sides | MVP-3 |
+| **T2** | A **resume code pair relayed through the room owner**, sealed end to end (§14.4): the member with the greater `PeerId` sends a RESUME_INVITE as ROOM_SIGNAL, the other answers the same way; Noise KK rebinds as in T3. Automatic, retried every 15 s | Peer-relayed | Room, a member-to-member link is `SUSPENDED` while both members' links to the owner are up | MVP-3 |
 | **T3** | **Resume code**: RESUME_INVITE / RESUME_ANSWER exchanged out of band. Noise KK with the **same static keys** rebinds the session automatically (no room join, `chat_seq` continues, unacknowledged messages are resent) | Out of band | Always | MVP-1 |
 
 - Glare during T1 or T2 (both sides restart at once) is handled with the *perfect negotiation* pattern. The **polite** peer is the one whose `PeerId` is lexicographically greater.
@@ -769,50 +779,58 @@ Honest baseline: when a device's **only** network changes, all of its links drop
 - Each link is an independent pairwise session as in §8–§13.
 - Cost of the cap on each device: 15 `RTCPeerConnection`s, 15 × (64-frame send ring + 256-message resend ring) of preallocated memory, and 15 DTLS/ICE keepalive streams. This is acceptable for chat. It is checked on iOS Safari in spike S9.
 
-### 14.2 Room authority: the owner
+### 14.2 Room authority: the owner-signed state
 
-- The room creator is the **owner**, and the only authority:
+- The room creator is the **owner**, member index **0**, and the only authority:
   - only the owner creates invites and admits members;
   - only the owner removes members;
-  - the owner is the **only MLS committer** (§14.5). Members send Proposals, such as "I am leaving".
+  - only the owner signs the **room state** (§10.3, ROOM_STATE §11.2). Every admission, removal or departure produces a new state with a higher `version`, sent to every member.
+- A member verifies each state strictly: the signature with the owner's HELLO key, index 0 = the owner of its own link (key and `PeerId`), indices unique and < 16, known roles, no trailing bytes, the room id of its invite, and a higher version than the last. A state without the member means it was removed.
 - There is **no succession**. When the owner leaves, the room is **disposed** (§14.6).
 - **Roles:** `owner` (exactly one), `member` (reads and writes), and **`observer`** (read-only).
-  - Only the owner assigns roles: an `OBSERVER` room invite (flag bit3), or a later role change.
-  - The role is stored in the MLS group context (a GroupContext extension changed only by owner commits), so every member knows every role.
-  - Roles are **enforced by every receiver** (§11.7): there is no central point that could filter.
+  - Only the owner assigns roles, by the kind of invite (`OBSERVER` flag bit3). Changing a role later is not part of MVP-3.
+  - The role is in the signed state, so every member knows every role.
+  - Roles are **enforced by every receiver** (§11.7): observers' CHAT, EDIT, DELETE, TYPING and REACT are dropped (but acknowledged); only the owner may delete someone else's message or set the timer.
   - Observers are full mesh members for networking. **They see the other members' IP addresses, and the other members see theirs** (§29.2).
+- **Admission:** the owner's GROUP invite is answered as in §8. Once the joiner's HELLO (with its signing key) arrives, the owner assigns the lowest free index, fixes the link's indices and roles, and sends the new state to everyone. A second tab of an identity already in the room is refused (`E_DUPLICATE_SESSION`); a 17th person gets `E_ROOM_FULL`.
+- Members verify the owner by the SAS of their link to the owner; the owner sees every member's SAS in its member list. Trust in the member table is trust in the owner: a malicious owner can admit anyone, but cannot forge a member's key (links are Noise KK with the key named in the state).
 
 ### 14.3 Propagation
 
 - The sender sends each message **directly** to every connected member. There is **no flooding and no forwarding** (§25.1 R6). Forwarding is deferred and is not part of any current phase.
-- Deduplication uses `last_chat_seq[leaf_idx]`, a fixed array of 16.
-- A member without a direct link to the sender does not receive the message. The UI shows that link as missing ("no direct path to Carol").
+- Messages are identified by `(sender index, chat_seq)`. Each sender numbers its messages once for the room and uses **the same `chat_seq` on every link**; a link opened later starts after the current number, and a receiver accepts gaps. Replies, edits, deletes and reactions name `(sender, seq)`, so they work across members. Deduplication is per link (each sender's messages arrive only on its own link).
+- Delivery is shown as "✓ k/N" from the per-link cumulative ACKs. Read receipts and typing are off in rooms.
+- The room timer is set by the owner; members stamp their messages with it on every link.
+- A member without a direct link to the sender does not receive the message. The UI shows that link as missing ("no direct path").
 
 ### 14.4 Joining (introductions by the owner)
 
-1. A new member M does the out-of-band exchange with the **owner** O (§8).
-2. O commits an MLS Add for M and sends the Welcome to M. O sends M's `PeerId` and signing key to every other member Y over the existing encrypted links.
-3. For each Y, M and Y exchange SIGNAL_OFFER/ANSWER **through O**. The body is sealed M↔Y with a key from the MLS exporter secret, so O forwards only ciphertext. This is signalling only, never chat.
-4. The M↔Y link comes up directly. If ICE fails, that pair stays unlinked, and both sides show it.
+1. A new member M does the out-of-band exchange with the **owner** O (§8), from a GROUP invite. The app warns before answering that every member will see M's IP address (§29.2).
+2. O admits M (§14.2) and sends the new signed state to everyone.
+3. M is asked "Connect directly to N other members?" (a member who joins alone is not asked again later). Of every pair M, Y the side with the **greater `PeerId` offers**: it builds a normal invite code for the M↔Y link, seals it to the other's static key with `room_id ‖ from ‖ to` as associated data, and sends it as ROOM_SIGNAL to O, who forwards it to the addressee. The answer comes back the same way. Each side checks that the code's static key is the one the signed state names for that member. This is signalling only, never chat.
+4. The M↔Y link comes up directly (Noise KK). If ICE fails, that pair stays unlinked, both sides show "no direct path", and the introduction is retried every 15 s.
+5. T2 (§13) uses the same relay for resume codes.
+
+What the owner learns: that M and Y are being introduced and the size and timing of their codes, not the codes (candidates, fingerprints) themselves. Sealed signalling has no forward secrecy of its own (static-static key); it carries only ICE parameters, and the chat keys come from the fresh Noise KK handshake.
 
 ### 14.5 Group key management
 
-- MLS (RFC 9420). The credential is the Ed25519 signing key from §7.1, bound to the `PeerId` by the Noise session.
-- With a single committer there are no forked epochs, even without a delivery service.
-- A new joiner cannot read earlier epochs. A leave or removal leads to a Commit and a new epoch.
+- None (v0.9): each link has its own Noise KK keys, rekeyed per §10.1. Nothing is encrypted to "the room".
+- A newcomer receives only messages sent after its links come up; a removed or departed member's links are closed, so it receives nothing more.
+- Removal: the owner sends the removed member the state without it, closes its link (GOODBYE), and sends the new state to everyone else, who close their links to it.
 
 ### 14.6 Disposal
 
 The room is disposed when either of these happens:
 
 - the owner leaves on purpose (GOODBYE to every member), or closes the room;
-- no member has had a link to the owner for longer than the owner grace period (10 min, the same as `SUSPENDED` in §12). While the owner is unreachable, members can keep chatting on their existing links, but nobody can join or be removed.
+- a member's link to the owner closes: a GOODBYE, or `SUSPENDED` for longer than the grace period (10 min, §12). While the owner is unreachable, members keep chatting on their existing links and can reconnect to the owner with a T3 code, but nobody can join or be removed.
 
 On disposal, every member's core:
 
-1. shows "Room closed by owner" or "Owner unreachable — room closed", with `E_ROOM_DISPOSED`;
+1. shows "The owner closed the room" (`E_ROOM_DISPOSED`), or "You were removed from the room";
 2. closes all links in the room;
-3. zeroizes the room's MLS and Noise state.
+3. drops the room state, the Noise states and all messages.
 
 There is no takeover. To continue, someone creates a new room and becomes its owner.
 
@@ -914,7 +932,7 @@ Members     4 / 8  (links 5 / 6)
 | 0x0012 | E_ROOM_DISPOSED | The owner left or was unreachable past the grace period (§14.6) |
 | 0x0013 | E_NOT_OWNER | A non-owner tried an owner-only action |
 | 0x0020 | E_AUTH_FAILED | Static key mismatch, or an invalid signing-key binding |
-| 0x0021 | E_CRYPTO_FAILED | Noise or MLS failure, nonce gap, or bad tag |
+| 0x0021 | E_CRYPTO_FAILED | Noise failure, nonce gap, or bad tag |
 | 0x0022 | E_SAS_REJECTED | The user marked the SAS as a mismatch |
 | 0x0023 | E_DUPLICATE_SESSION | The identity is already open in another tab (Web Lock), or already live in this 1:1 or room from another device |
 | 0x0024 | E_NOT_A_CONTACT | Tor mode: an incoming onion stream from a key that is neither a contact nor holding a live invite |
@@ -964,7 +982,7 @@ Members     4 / 8  (links 5 / 6)
 
 - message confidentiality and integrity against network observers and against the static host;
 - peer authentication, pinned to the out-of-band exchange and optionally SAS-verified;
-- room membership (MLS, owner-controlled, MVP-3);
+- room membership (owner-signed state, verified by every member, MVP-3), and member-to-member signalling relayed by the owner (sealed, §14.4);
 - a saved identity key and **contacts list** at rest (Argon2id + XChaCha20-Poly1305; as strong as the passphrase);
 - in **Tor mode**: your IP address, hidden from the peer and from network observers (§28);
 - no central storage or relay;
@@ -988,7 +1006,7 @@ Members     4 / 8  (links 5 / 6)
 |---|---|---|
 | Network observer | IPs, timing, sizes, volume | DTLS + Noise hide the contents. Metadata is accepted as exposed |
 | Out-of-band channel MITM (messenger) | Swaps invite and answer | SAS comparison on another channel |
-| Malicious peer | Fake identity, injection, replay, joining, abuse of membership, relay candidates | Keys pinned by the invite, AEAD with strict nonces, owner-only admission and MLS commits, relay filtering |
+| Malicious peer | Fake identity, injection, replay, joining, abuse of membership, relay candidates | Keys pinned by the invite, AEAD with strict nonces, owner-only admission and signed room state, relay filtering |
 | Thief of a key file | Offline passphrase guessing; this also exposes the contacts list | Argon2id. The UI enforces a minimum passphrase strength |
 | Snowflake proxy / broker (Tor mode) | Sees your IP and that you use Snowflake; a malicious proxy can drop traffic | Tor's own encryption and circuit verification inside WASM; proxy rotation (Turbotunnel keeps the session across proxies) |
 | Static host | Serves altered code | SRI, a service worker that pins the version and asks before updating, reproducible builds |
@@ -1039,7 +1057,7 @@ Members     4 / 8  (links 5 / 6)
 |---|---|---|
 | **MVP-1** | Sign-in (temporary identity, or saved identity with an encrypted key file); 1:1 in direct mode; two-way exchange by QR, link and paste; binary codes with SDP reconstruction; STUN defaults, privacy modes and **Drop IPv6**; relay prohibition; Noise KK; SAS policy; T3 resume code; **pending queue and ticks; replies, edit, delete, self-destruct timers; typing and read receipts**; **IP disclosure features (§29.2)**; basic diagnostics; CSP, SRI and a version-pinned service worker; desktop browsers and iOS Safari; **a static landing page** (what the messenger is, how it works, privacy claims as allowed by §21, and a **Start** link to the app) | Checkpoints S1, S2, S4 on all engines |
 | **MVP-2** | T1 in-band ICE restart and `NetChanged` handling; full diagnostics; **contacts; several identities (IndexedDB slots, Web Locks); identity transfer over P2P; reactions** | MVP-1; S3 |
-| **MVP-3** | Owner-controlled rooms of up to 16 members, with **observer role** and owner moderation (delete); introductions by the owner; MLS with the owner as single committer; room disposal; T2 recovery through the owner | MVP-2; S9 |
+| **MVP-3** | Owner-controlled rooms of up to 16 members, with **observer role** and owner moderation (delete); introductions by the owner with sealed signalling; owner-signed room state (v0.9, no MLS); room disposal; T2 recovery through the owner | MVP-2; S9 |
 | **CARDS** | Contact cards and card secrets | MVP-2 |
 | **TOR-1** | Embedded Tor in WASM (Appendix C steps E2–E7): runtime shim, Snowflake transport in Rust (KCP + smux), IndexedDB directory cache, onion hosting from a tab | Gates G2–G4 |
 | **TOR-2** | Tor mode for 1:1: transport guard, TOR_INVITE (one-way), Noise IK, stream framing, "VIA TOR" UI | TOR-1 |
@@ -1120,6 +1138,7 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 | S2 | Real code sizes per browser | ✅ Chrome, Safari and iPhone: ufrag 4, pwd 24 → invite **153 B** (mDNS). **Firefox 142: ufrag 8, pwd 32 → invite 165 B** (§8.5 budget assumed this worst case). All: `actpass`/`active`, mid 0, sctp-port 5000. Raw SDP 584–738 B | 🤖 | §8.5 |
 | APP-E2E | Does the MVP-1 app work end to end in a real browser? | ✅ **Laptop (macOS arm64, installed Chrome, WARP on), 41/41, 2026-09-28:** real STUN; invite **212 B** (mDNS + srflx-v4 + srflx-v6); the "what your peer sees" panel lists **only WARP egress addresses** (104.28.163.34, 2a09:bac5:…), which is TS3 confirmed inside the app; the selected path was `prflx ↔ host`, RTT 2 ms. ✅ **Chromium (container), 41/41** (`checks/e2e_app.mjs`, two browsers): landing → app; **identity** saved as key file, wrong passphrase refused, signed back in, same identity in a second tab refused (Web Lock); invite 141 B (2 raw host candidates; no STUN reachable), "what your peer sees" panel; Bob **scans the invite with a camera** (fake camera playing the real QR; rqrr in wasm, the iOS path); answer link opened in a **new tab** is handed to the inviting tab (S7 on one device); Noise KK, **identical SAS**; chat both ways (Unicode, 4 096 B), ✓ then ✓✓, typing, reply with quote, edit, delete for everyone, **self-destruct 5 s** removes the message on both sides; path diagnostics via getStats (no relay, addresses hidden by default); **simulated network loss → message queued 🕓 → reconnect codes (T3) → delivered and ✓**; leave; invalid code; **offline start from the service worker; a new build waits and activates only on consent; tampered wasm and tampered `app.js` refused (SRI)**; no CSP violations or page errors. Native: 33 unit tests (proto, crypto incl. key file, core incl. two sessions over paths, tamper, replay, resume binding; QR render → decode) | 🤖 (`ONLY=app`) | §7, §8, §10–§13, §17, §29 |
 | APP-E2E-MVP2 | Do the MVP-2 features work end to end? | ✅ **Chromium (container), 18/18** (`checks/e2e_mvp2.mjs`): identity saved and remembered in a slot, page reloaded, signed in from the list (nickname kept in the key file); peer nickname shown as self-chosen; contact saved after the SAS → "Bobby ✔", backup flagged out of date; reaction round trip; diagnostics (Noise epoch, rekey timer, ICE/DTLS/channel state); **in-band ICE restart with the chat continuing**; next chat with the verified contact skips the SAS prompt; **identity transfer to a new browser profile**: transfer invite → answer → equal SAS → both confirm → encrypted key file sent → unlocked on the new device with the same handle, label, nickname and contacts; the old device keeps it by default; no CSP violations | 🤖 (`ONLY=app`) | §7, §10.4, §11.7, §13, §18 |
+| APP-E2E-ROOM | Do rooms work end to end? | ✅ **Chromium (container), 18/18, four browsers** (`checks/e2e_room.mjs`): owner creates a room; member B joins (owner sees B's SAS, equal to B's); member C joins, is asked before connecting, and is **introduced to B through the owner** (sealed ROOM_SIGNAL); observer D joins; full mesh of 4, all links direct; **B's member links dropped → back by T2 without user action**; observer read-only (no composer); a message reaches all three others with its sender label; "✓ 3/3"; C replies quoting B, seen correctly by the owner; owner deletes C's message for everyone (incl. C); owner sets the timer, members cannot; C removed (C told; others' lists updated); B leaves (others updated); owner closes the room (D sees "Room closed"); no CSP violations. Native: signed-state admit/verify/forgery/tamper, sealed-signal privacy and integrity, 3-party introduction via the owner, roles and moderation | 🤖 (`ONLY=app`) | §10.3, §11.2, §13, §14 |
 | QR-CAM | Does the in-app scanner read a QR filmed from a screen? | ❌ → ✅ **iPhone PWA (2026-09-28): camera worked but nothing decoded.** Cause reproduced natively: rqrr (a quirc port) keeps at most 251 flood-filled regions, and blur + noise + uneven light along module edges produce enough speckle to evict the finder patterns (it decoded only 15 of 45 synthetic camera frames, failing even on some crisp ones). Fix: 3×3 denoise → local adaptive threshold → 3×3 majority filter before rqrr, plus a native-resolution centre crop on alternate frames and `BarcodeDetector` only when it lists `qr_code`: 34 of 45 decode, all at ≥ 5 px per module but one very low-contrast case. The e2e fake camera now plays a blurred, noisy, low-contrast QR. ✅ **Re-tested on the iPhone PWA (2026-09-28): scans the laptop's QR** | 🤖 + ✋ iPhone | §8.2, §17.5 |
 | S3 | Path switch without signalling (T0) | ⏳ | ✋ two devices | §13 |
 | S4 | Does camera permission disable mDNS obfuscation? | ✅ **Chrome 153 and iPhone Safari: yes** (raw IP after permission; stays after the camera stops). **Firefox 142: no** (mDNS even with the camera live). Safari without permission: mDNS. So the invite builder's own filtering (§9.4) is mandatory: two of three engines leak the LAN IP after the QR scanner is used | 🤖 / iPhone page | §9.4 |
@@ -1156,7 +1175,7 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 | R6 | Flood-forwarding in a mesh | Multiplies traffic and turns peers into relays (P8) | Direct fan-out only; forwarding deferred |
 | R7 | Retrying the first connection | Nothing to retry without a channel | Explicit failure with a new invite (§12) |
 
-The v0.1 points that were **confirmed** are kept throughout: principles P1–P9, Rust owning the state, identity ≠ transport, no history, honest privacy claims (§21), full mesh with a cap, and MLS for groups.
+The v0.1 points that were **confirmed** are kept throughout: principles P1–P9, Rust owning the state, identity ≠ transport, no history, honest privacy claims (§21), full mesh with a cap, and MLS for groups (replaced by the owner-signed room state in v0.9, §10.3).
 
 ### 25.2 Owner decisions
 
@@ -1183,7 +1202,8 @@ The v0.1 points that were **confirmed** are kept throughout: principles P1–P9,
 | v0.7 | Integrity via stamped `index.html` (import-map integrity + CSP hash + wasm fetch integrity) instead of a separate `boot.js`; key files are named `ephem-<label>.p2pkey` | §17.2, §7.3 |
 | v0.7 | Visual style shared with the owner's other projects (darkcite/trading-engine-multivenue dashboard): dark panels, one monospace face, uppercase accent section titles, status chips; dark-only | §23.1a |
 | v0.8 | MVP-2: IDENTITY_READY (0x41) orders the transfer; SIGNAL body = §8.3 ICE layout; T1 by perfect negotiation with DTLS roles kept; remembered identities in IndexedDB hold only the encrypted key file | §7.6, §11.2, §13 |
-| v0.7 | "Simulate network loss" in the diagnostics drops the path without GOODBYE, so users (and the e2e test) can exercise T3 | §13, §18 |
+| v0.9 | **Rooms by owner-signed state instead of MLS**: pairwise Noise links carry every message; the owner signs the member table (Ed25519) and every member verifies it; member-to-member signalling relayed by the owner, sealed with the static-static X25519 key; the greater `PeerId` offers; T2 = resume codes through the owner; record types ROOM_STATE 0x30, ROOM_SIGNAL 0x31, ROOM_LEAVE 0x32; one `chat_seq` per sender on every link | §10.3, §11.2, §13, §14 |
+| v0.7 | "Simulate network loss" in the diagnostics drops the path without GOODBYE, so users (and the e2e test) can exercise T3; in a room (v0.9) it drops the member's links to other members, exercising T2 | §13, §18 |
 
 ### 25.3 Open questions
 
