@@ -1,0 +1,22 @@
+[package]
+name = "ephem-crypto"
+description = "Ephem identity, Noise KK handshake, in-place transport cipher, SAS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ephem-proto = { path = "../proto" }
+snow = { version = "0.10", default-features = false, features = ["default-resolver", "use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom", "risky-raw-split"] }
+chacha20poly1305 = { version = "0.10", default-features = false }
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets", "zeroize"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["zeroize"] }
+blake2 = { version = "0.10", default-features = false }
+hkdf = "0.12"
+zeroize = { version = "1", features = ["derive"] }
+getrandom = "0.3"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+# snow's `use-getrandom` resolver still uses getrandom 0.2.
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }

@@ -1,0 +1,8 @@
+[package]
+name = "ephem-proto"
+description = "Ephem wire formats: invite/answer codes, SDP template, frames (no_std, no alloc)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

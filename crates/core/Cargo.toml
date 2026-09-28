@@ -1,0 +1,10 @@
+[package]
+name = "ephem-core"
+description = "Ephem sans-IO session state machine (no browser, deterministic, natively testable)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ephem-proto = { path = "../proto" }
+ephem-crypto = { path = "../crypto" }
