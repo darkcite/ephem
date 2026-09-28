@@ -7,8 +7,12 @@ use crate::candidate::CandidateBin;
 pub const MAX_CANDIDATES: usize = 8;
 /// Largest encoded code: header + ids + key + expiry + creds (1+32, 1+32) + fp + 8 × 19.
 pub const MAX_CODE_LEN: usize = 4 + 16 + 16 + 32 + 4 + 33 + 33 + 32 + MAX_CANDIDATES * 19;
-/// Smallest valid code: an answer with minimal credentials and no candidates.
-pub const MIN_CODE_LEN: usize = 4 + 16 + 32 + (1 + 4) + (1 + 22) + 32;
+/// Smallest valid code: a Tor invite (§28.4), which has no ICE part.
+pub const MIN_CODE_LEN: usize = TOR_CODE_LEN;
+/// Smallest valid WebRTC code: an answer with minimal credentials and no candidates.
+const MIN_RTC_CODE_LEN: usize = 4 + 16 + 32 + (1 + 4) + (1 + 22) + 32;
+/// A Tor invite: header, invite_id, room_id, static_pk, onion_pk, expires_at.
+pub const TOR_CODE_LEN: usize = 4 + 16 + 16 + 32 + 32 + 4;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -17,6 +21,8 @@ pub enum Kind {
     Answer = 2,
     ResumeInvite = 3,
     ResumeAnswer = 4,
+    /// Tor mode (§28.4): one-way invite to the inviter's onion service. No answer code.
+    TorInvite = 5,
 }
 
 impl Kind {
@@ -26,13 +32,14 @@ impl Kind {
             2 => Self::Answer,
             3 => Self::ResumeInvite,
             4 => Self::ResumeAnswer,
+            5 => Self::TorInvite,
             _ => return None,
         })
     }
 
     #[inline(always)]
     pub const fn is_invite(self) -> bool {
-        matches!(self, Self::Invite | Self::ResumeInvite)
+        matches!(self, Self::Invite | Self::ResumeInvite | Self::TorInvite)
     }
 }
 
@@ -153,7 +160,10 @@ pub struct Code {
     pub invite_id: [u8; 16],
     pub room_id: [u8; 16],
     pub static_pk: [u8; 32],
+    /// Tor invites: the inviter's onion service key (its `.onion` address). Zero otherwise.
+    pub onion_pk: [u8; 32],
     pub expires_at: u32,
+    /// WebRTC codes only (empty for a Tor invite).
     pub ice: IceParams,
 }
 
@@ -169,10 +179,15 @@ impl Code {
             b.put(&self.room_id)?;
         }
         b.put(&self.static_pk)?;
+        if self.kind == Kind::TorInvite {
+            b.put(&self.onion_pk)?;
+        }
         if self.kind.is_invite() {
             b.u32(self.expires_at)?;
         }
-        self.ice.encode_body(&mut b)?;
+        if self.kind != Kind::TorInvite {
+            self.ice.encode_body(&mut b)?;
+        }
         Ok(b.len())
     }
 
@@ -189,6 +204,10 @@ impl Code {
             return Err(ProtocolMismatch);
         }
         let kind = Kind::from_u8(r.u8().ok_or(InvalidInvite)?).ok_or(InvalidInvite)?;
+        let tor = kind == Kind::TorInvite;
+        if (tor && src.len() != TOR_CODE_LEN) || (!tor && src.len() < MIN_RTC_CODE_LEN) {
+            return Err(InvalidInvite);
+        }
         let flags = r.u8().ok_or(InvalidInvite)?;
         if flags & !flags::KNOWN != 0 {
             return Err(InvalidInvite);
@@ -197,12 +216,20 @@ impl Code {
         let invite_id = r.arr::<16>().ok_or(InvalidInvite)?;
         let room_id = if kind.is_invite() { r.arr::<16>().ok_or(InvalidInvite)? } else { [0; 16] };
         let static_pk = r.arr::<32>().ok_or(InvalidInvite)?;
+        let onion_pk = if tor { r.arr::<32>().ok_or(InvalidInvite)? } else { [0; 32] };
         let expires_at = if kind.is_invite() { r.u32().ok_or(InvalidInvite)? } else { 0 };
-        let ice = IceParams::decode_body(&mut r, n_cand).ok_or(InvalidInvite)?;
+        let ice = if tor {
+            if n_cand != 0 {
+                return Err(InvalidInvite);
+            }
+            IceParams::EMPTY
+        } else {
+            IceParams::decode_body(&mut r, n_cand).ok_or(InvalidInvite)?
+        };
         if r.remaining() != 0 {
             return Err(InvalidInvite);
         }
-        Ok(Self { kind, flags, invite_id, room_id, static_pk, expires_at, ice })
+        Ok(Self { kind, flags, invite_id, room_id, static_pk, onion_pk, expires_at, ice })
     }
 }
 
@@ -219,7 +246,23 @@ mod tests {
         };
         ice.push(CandidateBin::from_sdp_parts("9090b126-3aae-4a3e-b714-5d089ddfbff0.local", "41731", "host").unwrap());
         ice.push(CandidateBin::from_sdp_parts("171.97.169.36", "55298", "srflx").unwrap());
-        Code { kind, flags: 0, invite_id: [7; 16], room_id: if kind.is_invite() { [9; 16] } else { [0; 16] }, static_pk: [3; 32], expires_at: if kind.is_invite() { 1_790_000_000 } else { 0 }, ice }
+        Code { kind, flags: 0, invite_id: [7; 16], room_id: if kind.is_invite() { [9; 16] } else { [0; 16] }, static_pk: [3; 32], onion_pk: [0; 32], expires_at: if kind.is_invite() { 1_790_000_000 } else { 0 }, ice }
+    }
+
+    #[test]
+    fn tor_invite_roundtrip_and_strictness() {
+        let c = Code { kind: Kind::TorInvite, flags: flags::GROUP, invite_id: [1; 16], room_id: [2; 16], static_pk: [3; 32], onion_pk: [4; 32], expires_at: 1_790_000_000, ice: IceParams::EMPTY };
+        let mut out = [0u8; MAX_CODE_LEN];
+        let n = c.encode(&mut out).unwrap();
+        assert_eq!(n, TOR_CODE_LEN);
+        assert_eq!(n, 104, "§28.4");
+        assert_eq!(Code::decode(&out[..n]).unwrap(), c);
+        assert!(Code::decode(&out[..n - 1]).is_err(), "short");
+        let mut long = out[..n].to_vec();
+        long.push(0);
+        assert!(Code::decode(&long).is_err(), "trailing byte");
+        out[3] = 1;
+        assert!(Code::decode(&out[..n]).is_err(), "candidates in a Tor invite");
     }
 
     #[test]

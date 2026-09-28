@@ -359,6 +359,7 @@ fn on_signal(inner: &Shared, body: &[u8]) {
             drop(g);
             accept_invite(inner, from, &code);
         }
+        Kind::TorInvite => {}
         Kind::Answer | Kind::ResumeAnswer => {
             let id = {
                 let mut g = inner.borrow_mut();

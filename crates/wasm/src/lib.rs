@@ -725,7 +725,7 @@ impl App {
         g.links.iter().any(|l| match c.kind {
             Kind::Answer | Kind::ResumeAnswer => l.sess.state() == State::AwaitingAnswer && l.sess.invite_id() == c.invite_id,
             Kind::ResumeInvite => l.sess.ever_connected() && l.sess.state() != State::Closed && l.sess.room_id() == c.room_id && l.sess.remote().0 == c.static_pk,
-            Kind::Invite => false,
+            Kind::Invite | Kind::TorInvite => false,
         })
     }
 
@@ -778,6 +778,8 @@ impl App {
                 };
                 rtc::start(self.inner.clone(), id, privacy, rtc::Step::Answer);
             }
+            // A Tor invite needs a Tor session (tor.html, §28.2); modes never mix.
+            Kind::TorInvite => return Err(ErrorCode::TorUnavailable),
             Kind::Answer | Kind::ResumeAnswer => {
                 let id = {
                     let mut g = self.inner.borrow_mut();

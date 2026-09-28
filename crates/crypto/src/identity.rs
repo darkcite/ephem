@@ -107,6 +107,21 @@ impl Identity {
         sig
     }
 
+    /// The onion service secret of Tor mode (§28.4, §28.7): an Ed25519 seed derived from the
+    /// identity seed, so a saved identity keeps its `.onion` address across sessions and devices.
+    /// A separate key from the signing key (no key reuse across protocols). Wipe after use.
+    pub fn onion_secret(&self) -> [u8; 32] {
+        derive(&self.seed, b"p2pchat/onion-ed25519")
+    }
+
+    /// The onion service public key (the `.onion` address is its base32 form).
+    pub fn onion_pk(&self) -> [u8; 32] {
+        let mut s = self.onion_secret();
+        let pk = ed25519_dalek::SigningKey::from_bytes(&s).verifying_key().to_bytes();
+        s.zeroize();
+        pk
+    }
+
     /// X25519 of our static key with `peer` (sealed signalling, §14.4).
     pub fn dh(&self, peer: &PeerId) -> [u8; 32] {
         let xs = x25519_dalek::StaticSecret::from(self.x_secret);

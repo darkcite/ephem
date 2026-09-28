@@ -1,4 +1,6 @@
-//! Noise KK session (§10.1).
+//! Noise sessions (§10.1): KK for direct mode (both static keys known from the codes), IK for
+//! Tor mode (§28.4: the dialer knows the inviter's key from the one-way invite; the inviter
+//! learns the dialer's key from message 1).
 //!
 //! snow runs only the 1-RTT handshake (setup path, may allocate). After the handshake the raw
 //! split keys drive ChaCha20-Poly1305 directly, so that transport frames are:
@@ -19,9 +21,16 @@ use ephem_proto::frame::{FrameType, HEADER_LEN, Header, TAG_LEN};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const PARAMS: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
+pub const PARAMS_IK: &str = "Noise_IK_25519_ChaChaPoly_BLAKE2s";
 pub const PROLOGUE_TAG: &[u8] = b"p2pchat/1";
-/// Handshake messages carry an empty payload: 32 B ephemeral + 16 B tag.
+/// KK messages (and IK message 2) carry an empty payload: 32 B ephemeral + 16 B tag.
 pub const HS_MSG_LEN: usize = 48;
+/// Payload of IK message 1 (Tor mode): `invite_id` ‖ the dialer's onion key.
+pub const IK_PAYLOAD_LEN: usize = 16 + 32;
+/// IK message 1: ephemeral 32 + encrypted static 32+16 + encrypted payload.
+pub const IK_MSG1_LEN: usize = 32 + 48 + IK_PAYLOAD_LEN + 16;
+/// Largest handshake message.
+pub const MAX_HS_MSG_LEN: usize = IK_MSG1_LEN;
 
 pub struct Handshake {
     hs: snow::HandshakeState,
@@ -46,6 +55,44 @@ impl Handshake {
             .map_err(|_| ErrorCode::CryptoFailed)?;
         let hs = if initiator { builder.build_initiator() } else { builder.build_responder() };
         Ok(Self { hs: hs.map_err(|_| ErrorCode::CryptoFailed)? })
+    }
+
+    /// Tor mode (§28.4), the dialer: Noise IK to the inviter's static key. `prologue` =
+    /// the Tor invite code (the same bytes on both sides).
+    pub fn ik_initiator(id: &Identity, remote: &PeerId, prologue: &[u8]) -> Result<Self, ErrorCode> {
+        let builder = snow::Builder::new(PARAMS_IK.parse().map_err(|_| ErrorCode::CryptoFailed)?)
+            .local_private_key(id.x_secret())
+            .and_then(|b| b.remote_public_key(&remote.0))
+            .and_then(|b| b.prologue(prologue))
+            .map_err(|_| ErrorCode::CryptoFailed)?;
+        Ok(Self { hs: builder.build_initiator().map_err(|_| ErrorCode::CryptoFailed)? })
+    }
+
+    /// Tor mode, the inviter: Noise IK responder; the dialer's key arrives in message 1.
+    pub fn ik_responder(id: &Identity, prologue: &[u8]) -> Result<Self, ErrorCode> {
+        let builder = snow::Builder::new(PARAMS_IK.parse().map_err(|_| ErrorCode::CryptoFailed)?)
+            .local_private_key(id.x_secret())
+            .and_then(|b| b.prologue(prologue))
+            .map_err(|_| ErrorCode::CryptoFailed)?;
+        Ok(Self { hs: builder.build_responder().map_err(|_| ErrorCode::CryptoFailed)? })
+    }
+
+    /// Writes a handshake message with `payload` (IK message 1).
+    pub fn write_payload(&mut self, payload: &[u8], out: &mut [u8]) -> Result<usize, ErrorCode> {
+        self.hs.write_message(payload, out).map_err(|_| ErrorCode::CryptoFailed)
+    }
+
+    /// Reads a handshake message and its payload (IK message 1); returns the payload length.
+    pub fn read_payload(&mut self, msg: &[u8], payload: &mut [u8]) -> Result<usize, ErrorCode> {
+        self.hs.read_message(msg, payload).map_err(|_| ErrorCode::CryptoFailed)
+    }
+
+    /// The peer's static key (IK responder after message 1).
+    pub fn remote_static(&self) -> Option<PeerId> {
+        let k = self.hs.get_remote_static()?;
+        let mut p = [0u8; 32];
+        p.copy_from_slice(k.get(..32)?);
+        Some(PeerId(p))
     }
 
     #[inline]
@@ -190,6 +237,37 @@ mod tests {
         let (ti, si) = i.finish().unwrap();
         let (tr, sr) = r.finish().unwrap();
         (ti, si, tr, sr)
+    }
+
+    #[test]
+    fn ik_tor_handshake() {
+        let host = Identity::from_seed(&[1; 32]);
+        let dialer = Identity::from_seed(&[2; 32]);
+        let mut i = Handshake::ik_initiator(&dialer, &host.peer_id(), b"TOR-INVITE").unwrap();
+        let mut r = Handshake::ik_responder(&host, b"TOR-INVITE").unwrap();
+        let payload = [7u8; IK_PAYLOAD_LEN];
+        let mut m = [0u8; MAX_HS_MSG_LEN];
+        let n = i.write_payload(&payload, &mut m).unwrap();
+        assert_eq!(n, IK_MSG1_LEN);
+        let mut got = [0u8; IK_PAYLOAD_LEN];
+        assert_eq!(r.read_payload(&m[..n], &mut got).unwrap(), IK_PAYLOAD_LEN);
+        assert_eq!(got, payload);
+        assert_eq!(r.remote_static(), Some(dialer.peer_id()), "the host learns the dialer's key");
+        let n = r.write(&mut m).unwrap();
+        assert_eq!(n, HS_MSG_LEN);
+        i.read(&m[..n]).unwrap();
+        let (_, si) = i.finish().unwrap();
+        let (_, sr) = r.finish().unwrap();
+        assert_eq!(si, sr);
+
+        // Wrong prologue (another invite) or a responder with another key: message 1 fails.
+        let mut i = Handshake::ik_initiator(&dialer, &host.peer_id(), b"TOR-INVITE").unwrap();
+        let n = i.write_payload(&payload, &mut m).unwrap();
+        assert!(Handshake::ik_responder(&host, b"OTHER").unwrap().read_payload(&m[..n], &mut got).is_err());
+        let other = Identity::from_seed(&[3; 32]);
+        assert!(Handshake::ik_responder(&other, b"TOR-INVITE").unwrap().read_payload(&m[..n], &mut got).is_err());
+        assert_ne!(host.onion_pk(), host.sign_pk(), "separate onion key");
+        assert_eq!(host.onion_pk(), Identity::from_seed(&[1; 32]).onion_pk(), "stable");
     }
 
     #[test]

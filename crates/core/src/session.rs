@@ -10,7 +10,7 @@
 
 use crate::messages::{MsgRef, Pending, TTL_CHOICES, Timers};
 use crate::room::{MAX_MEMBERS, RoomRole};
-use ephem_crypto::noise::{HS_MSG_LEN, Handshake, Transport};
+use ephem_crypto::noise::{HS_MSG_LEN, Handshake, IK_PAYLOAD_LEN, MAX_HS_MSG_LEN, Transport};
 use ephem_crypto::sas::Sas;
 use ephem_crypto::{Identity, PeerId};
 use ephem_proto::ErrorCode;
@@ -277,6 +277,13 @@ pub struct Session {
     rekeys: u32,
     /// `o=` version of the next remote description rendered on this path (§13 T1).
     sdp_version: u32,
+    // ---- Tor mode (§28.4) ----
+    /// This chat runs over Tor streams (Noise IK, one-way invite), not WebRTC.
+    tor: bool,
+    /// Our onion service key (the host's is in the invite).
+    onion_pk: [u8; 32],
+    /// The peer's onion service key: from the invite (dialer) or IK message 1 (host).
+    peer_onion: [u8; 32],
 }
 
 #[inline]
@@ -359,6 +366,9 @@ impl Session {
             app_rtt_ms: 0,
             rekeys: 0,
             sdp_version: 2,
+            tor: false,
+            onion_pk: [0; 32],
+            peer_onion: [0; 32],
         }
     }
 
@@ -465,6 +475,7 @@ impl Session {
         self.peer_idx = link.peer;
         self.room = Some(link);
         self.code_flags |= flags::GROUP;
+        self.encode_tor_invite();
     }
 
     /// Our next room message on this link continues from `seq` (a link opened mid-room, §14.3).
@@ -475,6 +486,7 @@ impl Session {
     /// Extra invite flags (e.g. `GROUP`, `OBSERVER`) before the offerer builds its code.
     pub fn add_flags(&mut self, f: u8) {
         self.code_flags |= f & flags::KNOWN;
+        self.encode_tor_invite();
     }
 
     #[inline(always)]
@@ -551,6 +563,126 @@ impl Session {
         }
     }
 
+    // ---- Tor mode (§28.4) ----
+
+    /// Tor mode, the inviter: a new chat and its one-way invite (TOR_INVITE, kind 5) to our
+    /// onion service. There is no answer code: incoming streams go to [`Self::tor_accept`].
+    pub fn tor_host(id: &Identity, invite_id: [u8; 16], room_id: [u8; 16], expires_at: u32, settings: Settings) -> Self {
+        let mut s = Self::blank(Role::Offerer, id, Privacy::Default, false, settings);
+        s.tor = true;
+        s.onion_pk = id.onion_pk();
+        s.invite_id = invite_id;
+        s.room_id = room_id;
+        s.expires_at = expires_at;
+        s.state = State::AwaitingAnswer;
+        s.encode_tor_invite();
+        s
+    }
+
+    /// Re-encodes the host's Tor invite after a flag change.
+    fn encode_tor_invite(&mut self) {
+        if !self.tor || self.role != Role::Offerer {
+            return;
+        }
+        let code = Code {
+            kind: Kind::TorInvite,
+            flags: self.code_flags,
+            invite_id: self.invite_id,
+            room_id: self.room_id,
+            static_pk: self.local.0,
+            onion_pk: self.onion_pk,
+            expires_at: self.expires_at,
+            ice: IceParams::EMPTY,
+        };
+        let n = code.encode(&mut self.invite).expect("a Tor invite fits");
+        self.invite_len = n as u16;
+    }
+
+    /// Tor mode, the dialer: a chat from a TOR_INVITE. The adapter dials the onion, calls
+    /// [`Self::tor_dial`], then [`Self::on_open`] when the stream is up.
+    pub fn tor_dialer(id: &Identity, invite: &[u8], now_s: u32, settings: Settings, scanned: bool) -> Result<Self, ErrorCode> {
+        let c = Code::decode(invite)?;
+        // Identity transfer (§7.6) is a direct-mode feature.
+        if c.kind != Kind::TorInvite || c.flags & flags::TRANSFER != 0 {
+            return Err(ErrorCode::InvalidInvite);
+        }
+        Self::check_invite(id, &c, now_s)?;
+        let mut s = Self::blank(Role::Answerer, id, Privacy::Default, false, settings);
+        s.tor = true;
+        s.onion_pk = id.onion_pk();
+        s.remote = PeerId(c.static_pk);
+        s.peer_onion = c.onion_pk;
+        s.room_id = c.room_id;
+        s.invite_id = c.invite_id;
+        s.expires_at = c.expires_at;
+        s.code_flags = c.flags;
+        s.scanned = scanned;
+        s.invite[..invite.len()].copy_from_slice(invite);
+        s.invite_len = invite.len() as u16;
+        s.state = State::Gathering;
+        Ok(s)
+    }
+
+    #[inline(always)]
+    pub fn tor(&self) -> bool {
+        self.tor
+    }
+
+    /// The peer's onion service key (Tor mode; kept with a contact, §28.7).
+    #[inline(always)]
+    pub fn peer_onion(&self) -> [u8; 32] {
+        self.peer_onion
+    }
+
+    /// Tor mode, the dialer: prepares a (new) stream to the host: the first one, or a redial
+    /// after the stream was lost (§28.5: no recovery ladder, the dialer simply dials again).
+    pub fn tor_dial(&mut self, id: &Identity) -> Result<(), ErrorCode> {
+        if !self.tor || self.role != Role::Answerer || self.state == State::Closed || self.state == State::Connected {
+            return Err(ErrorCode::NotPermitted);
+        }
+        self.drop_path();
+        self.hs = Some(Handshake::ik_initiator(id, &self.remote, &self.invite[..self.invite_len as usize])?);
+        self.state = State::Connecting;
+        Ok(())
+    }
+
+    /// Tor mode, the host: the first frame of an incoming stream. `Ok(true)`: this chat took
+    /// the stream (reply sent; the chat is connected); `Ok(false)`: not this chat's (another
+    /// invite, or a key other than the pinned peer's), try the next one. Every stream is
+    /// authenticated here, before any application data (§28.4).
+    pub fn tor_accept(&mut self, id: &Identity, now_ms: u64, frame: &[u8], sink: &mut impl FnMut(Event<'_>)) -> Result<bool, ErrorCode> {
+        if !self.tor || self.role != Role::Offerer || self.state == State::Closed {
+            return Ok(false);
+        }
+        if !self.ever_connected && (self.state != State::AwaitingAnswer || (now_ms / 1000) as u32 > self.expires_at) {
+            return Ok(false);
+        }
+        let h = Header::read(frame)?;
+        if h.ftype != FrameType::Handshake {
+            return Ok(false);
+        }
+        let mut hs = Handshake::ik_responder(id, &self.invite[..self.invite_len as usize])?;
+        let mut payload = [0u8; IK_PAYLOAD_LEN];
+        match hs.read_payload(&frame[HEADER_LEN..], &mut payload) {
+            Ok(IK_PAYLOAD_LEN) => {}
+            _ => return Ok(false),
+        }
+        let Some(remote) = hs.remote_static() else { return Ok(false) };
+        if payload[..16] != self.invite_id || (self.ever_connected && remote != self.remote) || remote == self.local {
+            return Ok(false);
+        }
+        self.drop_path();
+        self.remote = remote;
+        self.peer_onion.copy_from_slice(&payload[16..]);
+        self.hs = Some(hs);
+        self.state = State::Connecting;
+        self.last_rx_ms = now_ms;
+        if let Err(e) = self.complete_handshake(now_ms, sink) {
+            self.fail(e, sink);
+        }
+        Ok(true)
+    }
+
     // ---- rendezvous ----
 
     /// Renders the remote description (offer for the answerer, answer for the offerer).
@@ -614,6 +746,7 @@ impl Session {
             invite_id: self.invite_id,
             room_id: if invite { self.room_id } else { [0; 16] },
             static_pk: self.local.0,
+            onion_pk: [0; 32],
             expires_at: if invite { self.expires_at } else { 0 },
             ice,
         };
@@ -741,13 +874,36 @@ impl Session {
     // ---- transport ----
 
     /// DataChannel open. The path's offerer sends Noise message 1.
+    /// Tor mode: the dialer's stream to the host is up; sends IK message 1 (`invite_id` ‖ our
+    /// onion key).
     pub fn on_open(&mut self, now_ms: u64, sink: &mut impl FnMut(Event<'_>)) {
+        if self.tor {
+            if self.state != State::Connecting || self.role != Role::Answerer {
+                return;
+            }
+            if let Err(e) = self.send_tor_hello(now_ms, sink) {
+                self.fail(e, sink);
+            }
+            return;
+        }
         if self.state != State::Connecting || self.role != Role::Offerer {
             return;
         }
         if let Err(e) = self.send_handshake(0, now_ms, sink) {
             self.fail(e, sink);
         }
+    }
+
+    fn send_tor_hello(&mut self, now_ms: u64, sink: &mut impl FnMut(Event<'_>)) -> Result<(), ErrorCode> {
+        let hs = self.hs.as_mut().ok_or(ErrorCode::CryptoFailed)?;
+        let mut payload = [0u8; IK_PAYLOAD_LEN];
+        payload[..16].copy_from_slice(&self.invite_id);
+        payload[16..].copy_from_slice(&self.onion_pk);
+        Header { ftype: FrameType::Handshake, flags: 0, seq: 0 }.write(&mut self.tx).map_err(|_| ErrorCode::CryptoFailed)?;
+        let n = hs.write_payload(&payload, &mut self.tx[HEADER_LEN..HEADER_LEN + MAX_HS_MSG_LEN])?;
+        self.last_tx_ms = now_ms;
+        sink(Event::Send(&self.tx[..HEADER_LEN + n]));
+        Ok(())
     }
 
     fn send_handshake(&mut self, seq: u64, now_ms: u64, sink: &mut impl FnMut(Event<'_>)) -> Result<(), ErrorCode> {
@@ -794,8 +950,14 @@ impl Session {
             return Err(ErrorCode::ProtocolMismatch);
         }
         hs.read(msg)?;
-        if !hs.is_finished() {
-            // Responder: reply with message 2, which finishes KK.
+        self.complete_handshake(now_ms, sink)
+    }
+
+    /// After a handshake message was read: the responder replies with message 2, then both
+    /// sides derive the transport keys and the chat is connected.
+    fn complete_handshake(&mut self, now_ms: u64, sink: &mut impl FnMut(Event<'_>)) -> Result<(), ErrorCode> {
+        if !self.hs.as_ref().is_some_and(Handshake::is_finished) {
+            // Responder: reply with message 2, which finishes KK and IK.
             self.send_handshake(1, now_ms, sink)?;
         }
         let (tr, sas) = self.hs.take().ok_or(ErrorCode::CryptoFailed)?.finish()?;

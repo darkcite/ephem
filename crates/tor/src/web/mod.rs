@@ -115,7 +115,7 @@ impl TorNet {
     pub fn host(&self, nickname: &str, secret: &[u8]) -> Result<String, JsValue> {
         let sk: [u8; 32] = secret.try_into().map_err(|_| err("onion key must be 32 bytes"))?;
         let kp = ed25519::Keypair::from_bytes(&sk);
-        let hsid: HsId = tor_hscrypto::pk::HsIdKey::from(ed25519::ExpandedKeypair::from(&kp).public().clone()).id();
+        let hsid: HsId = tor_hscrypto::pk::HsIdKey::from(*ed25519::ExpandedKeypair::from(&kp).public()).id();
         let cfg = OnionServiceConfigBuilder::default().nickname(nickname.parse().map_err(err)?).build().map_err(err)?;
         let (svc, rend) = self
             .client

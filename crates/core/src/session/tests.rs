@@ -660,3 +660,55 @@ fn room_records_only_on_room_links() {
     let mut p = connect();
     assert_eq!(act!(p.a, send_room(NOW_MS, rtype::ROOM_STATE, b"x")), Err(ErrorCode::NotPermitted));
 }
+
+/// Tor mode (§28.4): one-way invite, Noise IK, the host picks the stream by decrypting message 1,
+/// and the dialer redials after a loss (same handshake, pinned key).
+#[test]
+fn tor_invite_ik_handshake_and_redial() {
+    let (ha, hb) = (Identity::from_seed(&[1; 32]), Identity::from_seed(&[2; 32]));
+    let host = Session::tor_host(&ha, [0x51; 16], [0x52; 16], NOW_S + 300, Settings::default());
+    let invite = host.local_code().to_vec();
+    assert_eq!(invite.len(), ephem_proto::code::TOR_CODE_LEN);
+    let c = Code::decode(&invite).unwrap();
+    assert_eq!((c.kind, c.onion_pk, c.static_pk), (Kind::TorInvite, ha.onion_pk(), ha.peer_id().0));
+    let dialer = Session::tor_dialer(&hb, &invite, NOW_S, Settings::default(), true).unwrap();
+    let mut p = Pair { a: Side { id: ha, s: Box::new(host), out: Wire { frames: vec![] }, seen: Seen::default() }, b: Side { id: hb, s: Box::new(dialer), out: Wire { frames: vec![] }, seen: Seen::default() }, now: NOW_MS };
+
+    // Another chat of the host (other invite) must not take the stream.
+    let mut other = Session::tor_host(&p.a.id, [0x61; 16], [0x62; 16], NOW_S + 300, Settings::default());
+    p.b.s.tor_dial(&p.b.id).unwrap();
+    act!(p.b, on_open(NOW_MS));
+    let msg1 = p.b.out.frames.remove(0);
+    let (mut w, mut s) = (Wire { frames: vec![] }, Seen::default());
+    assert_eq!(other.tor_accept(&p.a.id, NOW_MS, &msg1, &mut sink(&mut w, &mut s)), Ok(false), "not its invite");
+    let id = Identity::from_seed(&[1; 32]); // the host's identity (Identity is not Clone)
+    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &msg1)), Ok(true));
+    p.settle();
+    assert_eq!(p.a.s.state(), State::Connected);
+    assert_eq!(p.b.s.state(), State::Connected);
+    assert_eq!(p.a.seen.sas, p.b.seen.sas, "same SAS");
+    assert_eq!(p.a.s.remote(), p.b.id.peer_id(), "the host learned the dialer's key");
+    assert_eq!(p.a.s.peer_onion(), p.b.id.onion_pk(), "and its onion key");
+    assert_eq!(p.b.s.peer_onion(), p.a.id.onion_pk());
+    act!(p.b, send_chat(NOW_MS, None, b"over tor", None)).unwrap();
+    p.settle();
+    assert_eq!(p.a.seen.chats[0].1, b"over tor");
+
+    // The stream drops; a message is queued; the dialer redials; the host takes the new stream
+    // only from the pinned key.
+    p.cut();
+    act!(p.a, send_chat(NOW_MS, None, b"while away", None)).unwrap();
+    let intruder = Identity::from_seed(&[9; 32]);
+    let mut fake = Session::tor_dialer(&intruder, &invite, NOW_S, Settings::default(), false).unwrap();
+    fake.tor_dial(&intruder).unwrap();
+    let (mut w, mut s) = (Wire { frames: vec![] }, Seen::default());
+    fake.on_open(NOW_MS, &mut sink(&mut w, &mut s));
+    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &w.frames[0])), Ok(false), "only the pinned peer may resume");
+    p.b.s.tor_dial(&p.b.id).unwrap();
+    act!(p.b, on_open(NOW_MS));
+    let msg1 = p.b.out.frames.remove(0);
+    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &msg1)), Ok(true));
+    p.settle();
+    assert!(p.b.seen.resumed);
+    assert_eq!(p.b.seen.chats.last().unwrap().1, b"while away", "queued message delivered after the redial");
+}
