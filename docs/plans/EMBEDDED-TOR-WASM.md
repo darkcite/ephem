@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Research track** with go/no-go gates. It does not replace SPEC §28 until gate G3 passes |
+| Status | **The only Tor path** (the owner decided on 2026-09-28: no native programs, SPEC P10). Normative summary in SPEC §28. **G1 passed** (compile level, spike E1); G2–G4 open |
 | Relates to | SPEC v0.5 §28 (Tor mode), [`TOR-AND-IP-PRIVACY.md`](TOR-AND-IP-PRIVACY.md), [`PUBLIC-CHANNELS-IPFS.md`](PUBLIC-CHANNELS-IPFS.md) |
 | Constraint | Free, with no registration. It may use Tor Project infrastructure (the Snowflake broker, Snowflake bridges) and volunteer Snowflake proxies |
 | Date | 2026-09-28 |
@@ -42,10 +42,10 @@
 | Component | What must be built | Existing base | Risk |
 |---|---|---|---|
 | Async runtime for arti | Implement arti's runtime traits (spawn, sleep, time, TCP/TLS provider → PT streams) over `wasm-bindgen-futures` and JS timers | arti's runtime abstraction (`tor-rtcompat`) is designed to be swappable | Medium |
-| Time, randomness, filesystem | Patch uses of `std::time::SystemTime` (which panics on wasm32), `std::fs`, and threads | `web-time`, `getrandom` (wasm_js) | **High**: many crates, so a fork must be maintained |
-| Directory store | Replace arti's SQLite dir-cache with an in-memory store serialised to IndexedDB | arti has storage traits | Medium–High |
+| Time, randomness, filesystem | Patch uses of `std::time::SystemTime` (which panics on wasm32), `std::fs`, and threads | `web-time`, `getrandom` (wasm_js) | **Resolved (E1):** upstream already handles wasm32 (`coarsetime` uses `performance.now()`, and state is in memory on wasm), so no fork is needed |
+| Directory store | arti builds without SQLite on wasm; we add persistence of the cache to IndexedDB for warm starts | arti has storage traits | Medium |
 | Link TLS | rustls on wasm32 with a pure-Rust crypto provider | rustls with a RustCrypto provider | Medium |
-| Snowflake client | Broker rendezvous, WebRTC to the proxy, and **Turbotunnel (KCP + smux)** in Rust | The reference client is Go (used by Tor Browser); Rust KCP crates exist; **no mature Rust Snowflake client** | **High** |
+| Snowflake client | Broker rendezvous, WebRTC to the proxy, and **Turbotunnel (KCP + smux)** in Rust; plugged in through arti's `AbstractPtMgr` / `ChanMgr::set_pt_mgr` (no fork) | The reference client is Go; the broker sends CORS `*` (source); Rust `kcp` exists (28 releases); smux must be written (small) | **High** |
 | Onion-service host | Hosting from a browser tab: intro points, rendezvous, in-memory keys | `tor-hsservice` in arti | Medium–High |
 | Binary size | arti plus a Snowflake client and rustls | — | **Expected several MB**, loaded lazily **only** by Tor sessions (`tor.html`) |
 
@@ -59,7 +59,7 @@
 | Contacts reconnect | ✓ while open | ✓ only while both apps are in the foreground |
 | Rooms over Tor | ✓ | Possible, but each member must stay in the foreground; practically weak |
 | Latency | Snowflake adds a hop and its own jitter: expect 0.5–2 s per message | Same |
-| Censored networks | The broker is reached by direct HTTPS. **Domain fronting is impossible from a browser**, because `fetch` cannot override the `Host` header. The AMP-cache rendezvous needs CORS support *(spike E2)*. Where the broker is blocked, embedded Tor fails, and the companion (desktop) is the fallback | Same, with no fallback |
+| Censored networks | The broker is reached by direct HTTPS. **Domain fronting is impossible from a browser**, because `fetch` cannot override the `Host` header. The AMP-cache rendezvous needs CORS support *(spike E2)*. Where the broker is blocked, embedded Tor fails, and there is no fallback (P10) | Same, with no fallback |
 
 **Privacy notes:**
 
@@ -73,16 +73,16 @@
 - **§28.1:** Tor mode also becomes available on **iOS** and on desktop **without** the companion.
 - **§28.5 no-mixing guard, restated:** in a Tor session, `RTCPeerConnection`s may be created **only by the Snowflake transport, to Snowflake proxies**, using Snowflake's STUN list. **Never to a chat peer.** `core` still emits no `CreatePc` for peers.
 - **Separate entry page:** `tor.html`, with a CSP that allows only `'self'` plus the Snowflake broker and rendezvous origins. `index.html` (direct mode) keeps `connect-src 'self'` plus the companion's loopback port.
-- **The companion stays as an option,** for what a tab cannot do:
-  1. **always-on hosting**, for public-channel owners and for being reachable with the tab closed;
-  2. **censored networks** where the broker is blocked (it can use obfs4 and WebTunnel);
-  3. **lower latency** (no Snowflake hop).
+- **There is no companion** (SPEC P10). Consequences:
+  - no always-on hosting while the tab is closed;
+  - no obfs4 or WebTunnel for networks where the Snowflake broker is blocked;
+  - no path that avoids the extra Snowflake hop.
 
 ## 5. Research plan with gates
 
 | Step | Work | Gate (must pass to continue) |
 |---|---|---|
-| E1 | Build the arti client crates for `wasm32-unknown-unknown` with a stub runtime; list every blocker (time, fs, threads, SQLite, TLS) | **G1:** the number of blockers and the size of the fork are acceptable, with no rewrite of arti's core |
+| E1 | Build the arti client crates for `wasm32-unknown-unknown` with a stub runtime; list every blocker (time, fs, threads, SQLite, TLS) | **G1: PASSED 2026-09-28.** All 16 crates and the full feature set build, upstream already has wasm stubs, and there is no fork. TLS uses ring. See `../spikes/RESULTS-2026-09-28.md` |
 | E2 | Snowflake from the browser: call the broker `/client` from a `github.io` origin (CORS), direct and through the AMP cache; open a DataChannel to a proxy on desktop **and iOS Safari** | **G2:** the rendezvous and DataChannel work on both, without domain fronting |
 | E3 | Turbotunnel (KCP + smux) in Rust over the DataChannel, talking to the real Snowflake bridge | Byte stream to the bridge is stable for 10 minutes |
 | E4 | arti over the E3 stream: bootstrap, a 3-hop circuit, and connecting to a known onion service | **G3:** time to bootstrap ≤ 60 s cold and ≤ 10 s warm; an onion connects on desktop and iOS |
@@ -90,7 +90,7 @@
 | E6 | Size and performance: WASM size (compressed), memory on iOS, battery during 10 minutes of chat | **G4:** ≤ 5 MB compressed, lazily loaded; no iOS memory kills |
 | E7 | Hardening: fuzz the Snowflake and Turbotunnel parsers, review the fork's diff against upstream arti, plan for tracking upstream | Security review signed off |
 
-- **If G1 or G2 fails:** embedded Tor is not viable today. The companion stays the only Tor path, and iOS gets VPN or WARP (SPEC §29).
+- **If G2 fails:** embedded Tor is not viable today, so **there is no Tor mode**. Users get IP privacy from a VPN or WARP (SPEC §29), and public channels with a hidden owner are not offered.
 - **If G3 passes but E5 fails:** ship **client-only** embedded Tor. iOS and desktop tabs can **dial** onions (a companion host, or a channel), but cannot host. One-way invites from an iPhone then do not work, and the iPhone user dials instead.
 
 ## 6. Effort and maintenance

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Adopted into SPEC v0.4** (§28 Tor mode, §29 IP privacy). The remaining choices are open questions QN in the chat of 2026-09-28 |
+| Status | **Adopted into SPEC v0.4, then changed in v0.6.** §4 (the native companion) is **superseded**: the owner ruled out native programs (SPEC P10), and Tor mode is now built into WASM (SPEC §28, [`EMBEDDED-TOR-WASM.md`](EMBEDDED-TOR-WASM.md)). The rest (§1–§3, the IP-privacy options and disclosures) is in SPEC §29 |
 | Relates to | [`SPEC.md`](../spec/SPEC.md) v0.3: P2, P8, §9, §13, §21 |
 | Constraint | Zero application infrastructure. Anything third-party must be free and need no registration |
 | Date | 2026-09-28 |
@@ -42,7 +42,7 @@
 3. **Group disclosure.** Before joining a room: *"All N members will see your IP address."*
 4. **Allowed-claims update (§21):** *"The app can use your VPN or Tor. It cannot hide your IP address from a peer on its own over a direct connection."*
 
-## 4. Tor mode through a companion (proposed, desktop)
+## 4. Tor mode through a companion (SUPERSEDED in v0.6: no native programs)
 
 ### 4.1 Shape
 

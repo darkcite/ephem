@@ -98,7 +98,7 @@ Only a static host is required:
 | Service | Purpose | What it learns | Carries chat? |
 |---|---|---|---|
 | STUN (default list in §9.3, user-editable) | Discover server-reflexive (srflx) and global IPv6 candidates | The public IP and port of each peer, and when they connect | **No** |
-| Tor network (Tor mode only, §28): volunteer relays; optional bridges (obfs4, Snowflake, WebTunnel) | Anonymous onion-to-onion transport | The guard relay (or bridge) sees your IP but not your destination. No relay sees both ends. The Snowflake broker sees that you use Snowflake | Carries **encrypted** chat by design (Noise inside Tor) |
+| Tor network (Tor mode only, §28): Snowflake broker and bridge (Tor Project), volunteer Snowflake proxies, volunteer relays | Anonymous onion-to-onion transport, entered through Snowflake | The Snowflake proxy and broker see your IP and that you use Snowflake, but not your destination. No relay sees both ends | Carries **encrypted** chat by design (Noise inside Tor) |
 
 ### 4.3 Forbidden
 
@@ -240,7 +240,7 @@ The app opens on a sign-in screen:
 | 4 | magic `"P2PK"` |
 | 1 | `ver` = 2 (a v1 file is read and upgraded when it is next saved) |
 | 1 | `kdf` = 1 (Argon2id) |
-| 4 | KDF parameters: `u16 m_mib` (default 19), `u8 t` (default 2), `u8 p` (default 1) |
+| 4 | KDF parameters: `u16 m_mib` (default 19), `u8 t` (default **4**), `u8 p` (default 1) |
 | 16 | `salt` |
 | 24 | `nonce` (new for every save) |
 | 1 + n | `label` (≤ 32 B UTF-8). Plaintext so the sign-in list can show it; authenticated as AAD. It MUST NOT be secret, and the UI says so |
@@ -259,11 +259,11 @@ The app opens on a sign-in screen:
 |---|---|---|
 | 0x01 | CONTACTS | `u16 count` (≤ 256), then one entry per contact (§7.5) |
 | 0x02 | — | Reserved (was the companion token in v0.5) |
-| 0x03 | KUBO | `u8 len` + RPC token (only for followers who mirror to IPFS, public channels plan §7.2) |
+| 0x03 | — | Reserved (was a Kubo RPC token in v0.5; the app never talks to Kubo, P10) |
 | 0x04 | CARD | `card_secret [u8; 16]`, `expires_at u32` (0 = never): the secret in your current contact card (§7.5) |
 | other | — | Kept unchanged on re-save, so newer app versions can add sections |
 
-- Key: Argon2id(passphrase, salt), 32 bytes. After sign-in the derived key stays in wasm memory, so the app can **re-save** after the contacts change without asking again. It is zeroized on sign-out. The Argon2id defaults are the OWASP minimum.
+- Key: Argon2id(passphrase, salt), 32 bytes. After sign-in the derived key stays in wasm memory, so the app can **re-save** after the contacts change without asking again. It is zeroized on sign-out. Defaults: m = 19 MiB (the OWASP minimum) and t = 4, which is about 100 ms in desktop WASM (spike S5b, where t = 2 took 50 ms).
 - **Save and load options:**
   1. **Download** it as `p2pchat-<label>.p2pkey`, and load it back with a file picker. This is the reliable backup on every target.
   2. **Copy** it as base64url text. It is about 170 characters with no contacts, and much longer with contacts, so the file is recommended then.
@@ -924,7 +924,7 @@ Members     4 / 8  (links 5 / 6)
 | Room size | 16 members (120 links) |
 | Owner grace (room disposal) | 10 min |
 | STUN servers | 2 by default, at most 4 |
-| Argon2id (key file) | m = 19 MiB, t = 2, p = 1 |
+| Argon2id (key file) | m = 19 MiB, t = 4, p = 1 |
 | App ping interval | 15 s idle |
 | Suspended grace | 10 min |
 | Rekey | 2^20 messages or 10 min |
@@ -1009,13 +1009,12 @@ Members     4 / 8  (links 5 / 6)
 | **MVP-1** | Sign-in (temporary identity, or saved identity with an encrypted key file); 1:1 in direct mode; two-way exchange by QR, link and paste; binary codes with SDP reconstruction; STUN defaults, privacy modes and **Drop IPv6**; relay prohibition; Noise KK; SAS policy; T3 resume code; **pending queue and ticks; replies, edit, delete, self-destruct timers; typing and read receipts**; **IP disclosure features (§29.2)**; basic diagnostics; CSP, SRI and a version-pinned service worker; desktop browsers and iOS Safari |
 | **MVP-2** | T1 in-band ICE restart and `NetChanged` handling; full diagnostics; **contacts; several identities (IndexedDB slots, Web Locks); identity transfer over P2P; reactions** |
 | **MVP-3** | Owner-controlled rooms of up to 16 members, with **observer role** and owner moderation (delete); introductions by the owner; MLS with the owner as single committer; room disposal; T2 recovery through the owner |
-| **TOR-1** | `p2pchat-companion`: embedded arti client and onion service, loopback WebSocket bridge, token and Origin check, built-in bridge lists; reproducible releases for Linux, macOS and Windows |
+| **TOR-1** | Embedded Tor in WASM (plan steps E2–E7): runtime shim, Snowflake transport in Rust (KCP + smux), IndexedDB directory cache, onion hosting from a tab; gates G2–G4 |
 | **TOR-2** | Tor mode in the PWA for 1:1: transport guard, TOR_INVITE (one-way), Noise IK, stream framing, "VIA TOR" UI |
 | **TOR-3** | Reconnecting contacts through stable onion addresses, with no QR |
 | **TOR-4** | Rooms over Tor (the owner shares members' onion addresses; members dial each other directly) |
 | **CARDS** | Contact cards and card secrets; card-based Tor dial (with TOR-3) |
-| **CH-1…CH-5** | Public channels, Tor-only owner (plan v2 §9) |
-| **TOR-E (research)** | Tor built into WASM through Snowflake, for iOS and desktop without the companion. Gates G1–G4 in `EMBEDDED-TOR-WASM.md` |
+| **CH-1…CH-5** | Public channels with a Tor-only owner, hosted from the owner's tab (plan v3). Requires TOR-1 |
 | **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16 |
 
 ## 24. Validation spikes (must finish before the design they gate is frozen)
@@ -1031,10 +1030,11 @@ Members     4 / 8  (links 5 / 6)
 | S7 | Link hand-off on desktop browsers (`BroadcastChannel`). On iOS it is already known not to work between a tab and the PWA; the paste fallback is the design | §8.7 |
 | S8 | IPv6 reachability (AAAA records) of the default STUN servers, and srflx-v6 gathering on each target | §9.3 |
 | S9 | 15 simultaneous peer connections on iOS Safari: memory, keepalive and battery | §14.1 |
-| TS1 | Embedded arti: stable onion-service hosting with a key supplied at runtime and kept **only in RAM**; onion-to-onion time to first message and RTT | §28 |
-| TS2 | Can the PWA reach `ws://127.0.0.1:47431` from `https://<owner>.github.io` in Chrome and Edge (Local Network Access prompt), Firefox, and desktop Safari? (Shared with P2 of the channels plan) | §28.3 |
 | TS3 | WebRTC through Cloudflare WARP and 2–3 common VPNs, on desktop and iOS: does the srflx address show the VPN's exit? | §29.1 |
 | TS4 | How often does IPv6 bypass a v4-only VPN in practice (the §29.2 warning)? | §29.2 |
+| E8 | Does an open `RTCDataChannel` (Snowflake) exempt a hidden desktop tab from Chromium's intensive timer throttling? (Channel owners, reachability) | §28.3, §27 |
+
+Results of the spikes run on 2026-09-28 (S1, S2, S4, S5, S8, E1, E2 source, C-P1 source, C-P4) are in [`../spikes/RESULTS-2026-09-28.md`](../spikes/RESULTS-2026-09-28.md). TS1 and TS2 were removed with the companion.
 
 ## 25. Owner decisions
 
@@ -1058,7 +1058,7 @@ Members     4 / 8  (links 5 / 6)
 | Messaging | Replies, edit, delete, self-destruct timers, reactions, typing indicators, read ticks, pending queue | §11.2, §11.3, §11.7 |
 | Identities | Contacts in the encrypted key file; several identities per device; identity transfer over P2P | §7.2, §7.3, §7.5, §7.6 |
 | Rooms | Observer (read-only) role | §14.2 |
-| Tor | A second, separate transport through a local companion, with all features that fit the architecture | §28 |
+| Tor | A second, separate transport, with all features that fit the architecture (built into WASM since v0.6) | §28 |
 | IP privacy | VPN or Cloudflare WARP, Tor mode, LAN-only mode; three disclosure features in MVP-1 | §29 |
 
 ### 25.3 Decisions in v0.5
@@ -1078,9 +1078,18 @@ Members     4 / 8  (links 5 / 6)
 | QN12 | Public channels | Desktop-only publishing; the owner is always hidden (Tor-only onion); no link to the chat identity; 4 KiB posts; republishing and gateways as designed in plan v2 | §27 |
 | — | Tor without the companion | Research track with gates (Snowflake + arti in WASM) | §28.1, EMBEDDED-TOR-WASM.md |
 
-### 25.4 Open question
+### 25.4 Decisions in v0.6
 
-- **QN1:** code signing for `p2pchat-companion`. Either ship unsigned, with instructions for getting past macOS Gatekeeper and Windows SmartScreen, or pay for signing (Apple Developer about $99 a year, plus a Windows code-signing certificate).
+| Topic | Decision | Where |
+|---|---|---|
+| Native programs | **None.** Only our WASM app is built (P10). The companion is removed | §2, §28 |
+| Tor mode | Built into WASM (arti + Snowflake in Rust), on desktop and iOS, gated by G2–G4 | §28 |
+| Public channels | The owner hosts the onion service from a desktop browser tab; only offered once Tor mode passes its gates | §27 |
+| Argon2id | t raised from 2 to 4 (spike S5b) | §7.3 |
+
+### 25.5 Open questions
+
+None. (v0.5's QN1, code signing for the companion, no longer applies: there is no companion.)
 
 ## 26. Out of scope
 
@@ -1101,43 +1110,49 @@ Members     4 / 8  (links 5 / 6)
 - Posts are limited to 4 KiB of text.
 - It is a **publication, not a chat**, and is fully separate from private chats: its own page (`channel.html`), its own CSP, its own crate, and its own keys. Private-chat data MUST NOT flow into a channel.
 - **The owner is always hidden:**
-  - The owner publishes **only through a Tor onion service**, run by the companion on a desktop. The owner never takes part in the public IPFS network, so the owner's IP is never exposed.
+  - The owner publishes **only through a Tor onion service hosted by the embedded Tor client in the owner's desktop browser tab** (§28). The owner never takes part in the public IPFS network, so the owner's IP is never exposed.
+  - **Availability:** the channel is online while the owner's tab (or a follower's mirror tab) is open. There is no always-on host, because nothing native is built (P10).
+  - **This depends on Tor mode passing its gates** (§28.9). Until then, public channels cannot be offered with a hidden owner, so they are not offered at all.
   - The channel's keys and onion address are derived one-way and are **not linked** to the owner's chat identity. The owner is known only if they say so in the channel.
 - **Content format:** IPFS-native (CIDs, dag-cbor, CAR, IPNS V2 records), verified in Rust. Followers may mirror a channel over their own onion, or, accepting that their own IP becomes visible, to public IPFS. That is what lets readers without Tor read it through public gateways.
-- Details and phases: [`../plans/PUBLIC-CHANNELS-IPFS.md`](../plans/PUBLIC-CHANNELS-IPFS.md) (plan v2).
+- Details and phases: [`../plans/PUBLIC-CHANNELS-IPFS.md`](../plans/PUBLIC-CHANNELS-IPFS.md) (plan v3, WASM-only).
 
-## 28. Tor mode (a second, separate transport)
+## 28. Tor mode (a second, separate transport, built into the WASM app)
 
-### 28.1 Why a separate transport
+### 28.1 Why a separate transport, and why embedded
 
 - WebRTC data runs over UDP, and Tor carries only TCP streams. Tor Browser and Onion Browser also disable WebRTC entirely. So Tor mode is **not** "WebRTC over Tor": it is a different transport, under the **same** protocol above it (Noise, records, rooms, contacts, messaging features).
-- **Availability with the companion:** desktop Chrome, Edge and Firefox, plus desktop Safari if spike TS2 passes.
-- **Without the companion (research track):** Tor **built into the WASM app** through Snowflake, for iOS and desktop. It is feasible in principle, with gates and limits: on iOS the onion is reachable **only while the app is in the foreground**. See [`../plans/EMBEDDED-TOR-WASM.md`](../plans/EMBEDDED-TOR-WASM.md). Until gate G3 passes, iOS users get IP privacy from a VPN or WARP (§29.1).
+- **P10 (only our WASM):** the Tor client is built **into the web app**. There is no native helper.
+- **How a browser reaches Tor:** a web page cannot open TCP connections to Tor relays. The only transport it can use is **Snowflake**: WebRTC to a volunteer proxy, which relays to the Tor Project's Snowflake bridge. Tor mode therefore always runs **through bridges**, which matches the "bridges on by default" decision.
+- **Targets:** desktop Chrome, Edge, Firefox and Safari, **and iOS Safari**.
+- **Status: research-gated.** Tor mode ships only if gates G2–G4 (§28.9) pass. The compile-level gate G1 **passed** on 2026-09-28: arti 0.46.0 builds for `wasm32-unknown-unknown` with onion-service client and hosting, bridges, pluggable transports and ring-based TLS (spike E1).
 
 ### 28.2 Mode selection and isolation
 
 - The connection mode is chosen **per signed-in session**, on the sign-in screen: **Direct** (the default) or **Tor**.
 - It cannot be changed without signing out, so a single session never mixes the two.
+- **A Tor session runs on its own page, `tor.html`,** which loads the separate `tor_bg.wasm` module. Direct sessions never download the Tor code.
 
-### 28.3 The companion (`p2pchat-companion`)
+### 28.3 Embedded Tor client
 
 ```
- PWA (core, Noise, UI)  ──ws://127.0.0.1:47431──▶  p2pchat-companion
-                                                     ├─ embedded arti (Tor client + onion service)
-                                                     ├─ optional bridges: obfs4, Snowflake, WebTunnel (built-in lists)
-                                                     └─ byte pipes only: it never sees plaintext
+tor.html ── core (sans-IO, Noise, rooms) ── Transport::Tor
+              │
+              └─ tor_bg.wasm
+                   ├─ arti-client 0.46+ (upstream crates, feature set from spike E1)
+                   ├─ runtime shim: spawn_local, setTimeout timers, inline "blocking", TCP/UDP = unsupported
+                   ├─ TLS: rustls + ring (wasm32_unknown_unknown_js)
+                   ├─ state: in-memory, with guards and the directory cache persisted to IndexedDB (public data only)
+                   ├─ keys: arti ephemeral keystore (the onion key is derived from the seed, §7.1, and kept in RAM only)
+                   └─ PT manager (AbstractPtMgr) = Snowflake in Rust:
+                        broker fetch (CORS *) → RTCPeerConnection to a proxy (web-sys)
+                        → Snowflake encapsulation → KCP → smux → bridge byte stream
 ```
 
-- A native single binary for Linux, macOS and Windows, built from `companion/` in this repository. Releases are reproducible, their hashes are published, and it embeds arti, so no separate Tor install is needed.
-- **Local security:**
-  - it listens on `127.0.0.1:47431` only;
-  - it rejects any `Origin` other than the app's;
-  - the first WebSocket message must carry the 32-byte **token**. The companion prints a pairing code once, and the PWA stores the token in the key file (TLV 0x02; temporary identities re-enter it each session).
-- **Protocol between the PWA and the companion:**
-  - one **control** WebSocket, carrying `HOST(onion_secret)`, `DIAL(onion_pk)` and incoming-stream notifications;
-  - one WebSocket per Tor stream, carrying raw bytes.
-- The onion secret key is sent at session start and kept **in RAM only** by the companion *(spike TS1)*. It is dropped when the control socket closes.
-- **Bridges are on by default.** Snowflake is first, then obfs4 and WebTunnel from the built-in lists. The companion bundles the pluggable-transport binaries (lyrebird and snowflake-client). Settings offer "Connect to Tor directly" for faster bootstrap where Tor is not blocked.
+- **Bridge lines:** the Snowflake bridge lines and broker URL are built in, as in Tor Browser, and updated with app releases.
+- **Rendezvous:** direct HTTPS to the broker. The AMP-cache route is tried when the direct one fails, if spike E2 confirms that it works from a browser.
+- **Domain fronting is not possible from a browser**, because `fetch` cannot override the `Host` header. Where the broker is blocked, Tor mode fails with `E_TOR_UNAVAILABLE` and there is no other route (P10).
+- **Background tabs:** the tab keeps an open `RTCDataChannel` to the Snowflake proxy. Whether that exempts it from Chromium's aggressive timer throttling of hidden tabs is checked in spike E8. On iOS, everything pauses when the app goes to the background (§28.8).
 
 ### 28.4 One-way invite (single QR) and handshake
 
@@ -1154,45 +1169,65 @@ Members     4 / 8  (links 5 / 6)
 
 The virtual port is fixed. There are no ICE candidates, fingerprints or answer.
 
-- **Single QR:** Bob dials Alice's onion address straight from the invite. **No answer code is needed.** This is the one-way bootstrap that v0.1 wanted, and it becomes possible under Tor.
-- **Handshake:** `Noise_IK_25519_ChaChaPoly_BLAKE2s`. The initiator is the dialler (Bob, or a contact reconnecting). The prologue is the invite bytes, or `"p2pchat/contact"` for contact reconnects. The first handshake payload carries `invite_id` (16 B) and the initiator's `onion_pk`.
+- **Single QR:** Bob dials Alice's onion address straight from the invite. **No answer code is needed.** Alice's tab must be open, and on iOS in the foreground, until Bob connects.
+- **Handshake:** `Noise_IK_25519_ChaChaPoly_BLAKE2s`. The initiator is the dialler (Bob, or a contact reconnecting). The prologue is the invite bytes, or `"p2pchat/contact"` for contact reconnects. The first handshake payload carries `invite_id` (16 B), or a `card_secret` for card-based dials, plus the initiator's `onion_pk`.
 - **Who is accepted:** an incoming stream is accepted only in one of these cases:
   1. its static key is in **contacts**;
   2. the payload names a **live, unused** `invite_id`;
   3. the payload carries the current, unexpired **`card_secret`** (§7.5). The user is then asked "Bob (from your contact card) wants to connect", and the key is added as a contact if they accept.
 
   Everything else is closed with `E_NOT_A_CONTACT` before any application data. This blocks spam, which was Tox's "nospam" problem.
-- For a card-based dial, the first handshake payload carries `card_secret` (16 B) in place of `invite_id`.
 - **SAS:** prompted for every non-contact (§10.4), because Alice has no out-of-band proof of Bob's key.
 
 ### 28.5 Transport rules
 
 - **Framing:** each frame is `u16 len` followed by an outer frame (§11.1). The same 16 KiB limit applies, and the same records apply (§11.2).
-- **No-mixing guard:** in a Tor session, `core` refuses to emit `CreatePc`, the `wasm` crate refuses to construct an `RTCPeerConnection`, and no STUN server is contacted. Any attempt aborts, because it would be a bug that leaks the IP.
+- **No-mixing guard:** in a Tor session, `core` never emits `CreatePc` for a **chat peer**, and no STUN server from §9.3 is contacted.
+  - The **only** `RTCPeerConnection`s allowed are the Snowflake transport's own, to Snowflake proxies, using Snowflake's STUN list. They carry only Tor traffic.
+  - Any other attempt aborts, because it would be a bug that leaks the IP.
 - **No fallback:** if Tor fails, the session fails with `E_TOR_UNAVAILABLE`. The app never quietly switches to direct.
-- **Network changes need no recovery ladder:** an onion address does not depend on the network. After a drop, the side that dialled simply dials again with backoff (§12), the Noise session re-handshakes, and the pending queue is resent.
-- **Latency:** 0.3–1.5 s per message (6 hops onion to onion). Text only; voice and video are out of scope for Tor.
+- **Network changes need no recovery ladder:** an onion address does not depend on the network. After a drop, the side that dialled simply dials again with backoff (§12). Turbotunnel also keeps the Tor session alive across a change of Snowflake proxy. The Noise session re-handshakes, and the pending queue is resent.
+- **Latency:** 0.5–2 s per message (Snowflake hop plus 6 hops onion to onion). Text only; voice and video are out of scope for Tor.
 
-### 28.6 Contacts reconnect without a QR (TOR-3)
+### 28.6 CSP of `tor.html`
 
-- A contact entry with `onion_pk` (§7.5) enables **"Connect"** from the contacts list. It dials the stored onion address directly, from any network, at any time the contact is online in Tor mode.
-- The onion address comes from the identity seed, so it is stable for saved identities and survives moving to another device (§7.6).
-- While signed in in Tor mode, the PWA keeps the onion service up so contacts can reach you. The UI shows "Reachable by contacts via Tor". It stops when the tab closes.
+```
+default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self';
+img-src 'self' data: blob:; worker-src 'self'; manifest-src 'self';
+connect-src 'self' https://snowflake-broker.torproject.net https://cdn.ampproject.org;
+base-uri 'none'; form-action 'none'
+```
 
-### 28.7 Rooms over Tor (TOR-4)
+- Only the broker (and the AMP-cache rendezvous) can be reached with `fetch`. Snowflake's WebRTC is not governed by CSP (§17.3 limit).
+- **Everything else goes through Tor**, including the channel owner's IPNS publishing (§27, which uses a Tor exit).
 
-- The same owner model (§14), with each member hosting an onion service.
-- The owner sends each new member's `onion_pk` to the others, and members dial each other **directly**. No signalling relay is needed, which is simpler than WebRTC's §14.4.
-- The member cap is 16 (15 Tor circuits per member).
+### 28.7 Contacts reconnect without a QR, and rooms over Tor
 
-### 28.8 What Tor mode hides, and what it does not
+- **Contacts:** a contact entry with `onion_pk` (§7.5) enables **"Connect"**. It dials the stored onion address directly, from any network, whenever the contact has a Tor session open.
+  - The onion address comes from the identity seed, so it is stable for saved identities and survives moving to another device (§7.6).
+  - While signed in in Tor mode, the tab keeps the onion service up. The UI shows "Reachable by contacts via Tor while this tab is open".
+- **Rooms:** the same owner model (§14), with each member hosting an onion service. The owner sends each new member's `onion_pk` to the others, and members dial each other **directly**. The cap is 16.
 
-- **Hides:** your IP from peers and from network observers. With bridges, it also hides the fact that you use Tor.
+### 28.8 What Tor mode hides, and its limits
+
+- **Hides:** your IP from peers and from network observers.
+  - The Snowflake proxy and broker see your IP and that you use Snowflake, but not whom you talk to.
+  - The TLS SNI of the broker shows that you use Tor.
 - **Does not hide:**
   - what you type, including nicknames;
   - timing correlation by a global observer;
-  - that sessions are linked when a **saved** identity is reused, because its onion address stays the same;
-  - anything the companion's host machine can see.
+  - that sessions are linked when a **saved** identity is reused, because its onion address stays the same.
+- **iOS:** reachable **only while the app is in the foreground**. In the background, Snowflake and all circuits pause. On return, Tor re-attaches (warm start from the IndexedDB cache) and contacts can dial again.
+- **Censored networks:** where the broker and the AMP cache are blocked, Tor mode is unavailable (no domain fronting in browsers, and nothing native, P10).
+
+### 28.9 Gates (details in [`../plans/EMBEDDED-TOR-WASM.md`](../plans/EMBEDDED-TOR-WASM.md))
+
+| Gate | Criterion | Status |
+|---|---|---|
+| G1 | arti builds for `wasm32` without forking its core | ✅ Passed at compile level (spike E1, 2026-09-28) |
+| G2 | Broker rendezvous and a DataChannel to a Snowflake proxy work from `github.io`, on desktop **and** iOS Safari | 🔬 Broker CORS allows it (source); ⏳ live test |
+| G3 | Bootstrap ≤ 60 s cold and ≤ 10 s warm; an onion connects on desktop and iOS | ⏳ |
+| G4 | `tor_bg.wasm` ≤ 5 MB compressed, lazily loaded; no iOS memory kills; onion hosting from a tab works | ⏳ |
 
 ## 29. IP-address privacy
 
@@ -1202,7 +1237,7 @@ The virtual port is fixed. There are no ICE candidates, fingerprints or answer.
 |---|---|---|---|---|---|
 | **LAN-only mode** (§9.4) | The peer sees only a LAN address, and both must be on the same network | ✓ (traffic stays local) | free | ✓ | ✓ |
 | **Your own VPN with UDP support**, full tunnel, set up outside the app. **Cloudflare WARP** (1.1.1.1 app) is free and needs no account | ✓ (the peer sees the VPN exit) | ✓ (the ISP sees that a VPN is used) | depends on the VPN; WARP is free | ✓ | ✓ |
-| **Tor mode** (§28) | ✓ | ✓ (and with bridges, Tor use too) | free | ✓ | ✗ |
+| **Tor mode** (§28, once its gates pass) | ✓ | ✓ (the network sees Snowflake/Tor use, not the destination) | free | ✓ | ✓ (foreground only) |
 
 **Not options (the UI MUST say so when relevant):**
 
