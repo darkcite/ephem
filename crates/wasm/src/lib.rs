@@ -457,21 +457,23 @@ pub struct App {
 impl App {
     /// Starts arti over Snowflake, then hosts our onion service (key from the identity seed).
     /// Progress arrives as TOR events. `broker`: comma-separated broker URLs, tried in order;
+    /// `fingerprint`: comma-separated Snowflake bridges (one or two);
     /// `ice`: comma-separated `stun:` URLs; `nat`: the broker's
     /// NAT hint (empty = "unknown"); `network_toml`: empty for the real Tor network; `cache`:
     /// the directory snapshot of `tor_cache` from an earlier session (warm start), or empty.
-    pub fn tor_start(&self, broker: &str, fingerprint: &str, ice: &str, nat: &str, network_toml: &str, cache: &str) -> u32 {
+    pub fn tor_start(&self, broker: &str, fingerprint: &str, ice: &str, nat: &str, network_toml: &str, cache: &[u8]) -> u32 {
         let sf = ephem_tor::web::Snowflake {
             brokers: ephem_tor::web::list(broker),
-            fingerprint: fingerprint.to_owned(),
+            fingerprints: ephem_tor::web::list(fingerprint),
             ice: ephem_tor::web::list(ice),
             nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
         };
         status(tor::start(&self.inner, sf, network_toml, cache))
     }
 
-    /// The Tor directory as JSON for IndexedDB (public data; empty until downloaded).
-    pub fn tor_cache(&self) -> String {
+    /// The Tor directory as a gzip snapshot for IndexedDB (public data; empty until
+    /// downloaded). Copied out to JS once per save (every 30 min).
+    pub fn tor_cache(&self) -> Vec<u8> {
         tor::cache(&self.inner.borrow())
     }
 

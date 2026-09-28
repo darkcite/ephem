@@ -84,12 +84,12 @@ async fn bootstrap_and_reach_onion_through_our_snowflake() {
     };
     let network = std::fs::read_to_string(format!("{}/arti-net.toml", env["LAB"])).unwrap();
     let root = std::env::temp_dir().join(format!("ephem-arti-{}", std::process::id()));
-    let cfg = ephem_tor::config::build(&env["BRIDGE_FP"], &network, root.to_str().unwrap()).unwrap();
+    let cfg = ephem_tor::config::build(&[env["BRIDGE_FP"].clone()], &network, root.to_str().unwrap()).unwrap();
 
     let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).with_test_writer().try_init();
     let _ = futures_rustls::rustls::crypto::ring::default_provider().install_default();
     let tokio_rt = tor_rtcompat::tokio::TokioRustlsRuntime::current().unwrap();
-    let net = BridgeNet::new(Arc::new(WsDialer { port: env["BRIDGE_PTPORT"].parse().unwrap() }));
+    let net = BridgeNet::new(vec![Arc::new(WsDialer { port: env["BRIDGE_PTPORT"].parse().unwrap() })]);
     let rt = CompoundRuntime::new(tokio_rt.clone(), tokio_rt.clone(), RealCoarseTimeProvider::new(), net.clone(), net.clone(), TorTls::default(), net);
 
     let t0 = Instant::now();

@@ -1,9 +1,10 @@
 //! The only "network" the Tor code has: the Snowflake bridge (§28.5 transport guard).
 //!
-//! arti is configured with one bridge whose address is the placeholder [`BRIDGE_ADDR`] (as in
-//! Tor Browser's Snowflake bridge lines). Its "TCP connect" to that address returns a new
-//! [`SnowflakeStream`]; every other address, every listener, every Unix socket and all UDP are
-//! refused. So nothing in `tor_bg.wasm` can reach any host except through Snowflake.
+//! arti is configured with the Snowflake bridges at placeholder addresses ([`BRIDGE_ADDRS`], as
+//! in Tor Browser's Snowflake bridge lines). Its "TCP connect" to such an address returns a new
+//! [`SnowflakeStream`] toward that bridge; every other address, every listener, every Unix
+//! socket and all UDP are refused. So nothing in the Tor code can reach any host except
+//! through Snowflake.
 
 use crate::stream::SnowflakeStream;
 use async_trait::async_trait;
@@ -14,8 +15,12 @@ use std::sync::Arc;
 use tor_general_addr::unix;
 use tor_rtcompat::{NetStreamListener, NetStreamProvider, UdpProvider, UdpSocket};
 
-/// The Snowflake bridge's placeholder address (TEST-NET-1, never routed).
-pub const BRIDGE_ADDR: SocketAddr = SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 0, 2, 3), 80));
+/// The Snowflake bridges' placeholder addresses (TEST-NET-1, never routed): bridge `i` is
+/// reached at `BRIDGE_ADDRS[i]`.
+pub const BRIDGE_ADDRS: [SocketAddr; 2] = [
+    SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 0, 2, 3), 80)),
+    SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 0, 2, 4), 80)),
+];
 
 fn refused(what: &str) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, format!("Tor mode: {what} is not allowed (only the Snowflake bridge)"))
@@ -29,12 +34,14 @@ pub trait Dialer: Send + Sync + 'static {
 
 #[derive(Clone)]
 pub struct BridgeNet {
-    dialer: Arc<dyn Dialer>,
+    /// One dialer per bridge, in [`BRIDGE_ADDRS`] order.
+    dialers: Arc<[Arc<dyn Dialer>]>,
 }
 
 impl BridgeNet {
-    pub fn new(dialer: Arc<dyn Dialer>) -> Self {
-        Self { dialer }
+    pub fn new(dialers: Vec<Arc<dyn Dialer>>) -> Self {
+        assert!(!dialers.is_empty() && dialers.len() <= BRIDGE_ADDRS.len(), "1 or 2 Snowflake bridges");
+        Self { dialers: dialers.into() }
     }
 }
 
@@ -68,10 +75,10 @@ impl NetStreamProvider<SocketAddr> for BridgeNet {
     type ListenOptions = tor_rtcompat::TcpListenOptions;
 
     async fn connect(&self, addr: &SocketAddr, _options: &()) -> IoResult<SnowflakeStream> {
-        if *addr != BRIDGE_ADDR {
-            return Err(refused(&format!("a connection to {addr}")));
+        match BRIDGE_ADDRS[..self.dialers.len()].iter().position(|a| a == addr) {
+            Some(i) => self.dialers[i].dial(),
+            None => Err(refused(&format!("a connection to {addr}"))),
         }
-        self.dialer.dial()
     }
 
     async fn listen(&self, _addr: &SocketAddr, _options: &Self::ListenOptions) -> IoResult<NoListener> {

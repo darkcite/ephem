@@ -315,6 +315,12 @@ version = "0.46.0"
 version = "0.2.4"
 
 # Ephem patch: SQLite (C) only off the browser; wasm32 uses storage::memory.
+# Ephem patch: gzip for the wasm32 directory snapshots (pure Rust, miniz_oxide).
+[target.'cfg(all(target_arch="wasm32", target_os="unknown"))'.dependencies.flate2]
+version = "1.1"
+default-features = false
+features = ["rust_backend"]
+
 [target.'cfg(not(all(target_arch="wasm32", target_os="unknown")))'.dependencies.rusqlite]
 version = ">=0.36.0, <0.40.0"
 features = ["time"]

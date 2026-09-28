@@ -12,8 +12,13 @@ use super::ExpirationConfig;
 use crate::docmeta::{AuthCertMeta, ConsensusMeta};
 use crate::storage::{InputString, Store};
 use crate::Result;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io::Read;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tor_llcrypto::pk::rsa::RsaIdentity;
@@ -250,42 +255,53 @@ impl Store for MemoryStore {
 }
 
 // ---- Ephem: snapshots for warm starts (IndexedDB, kept by the page) ----
+//
+// A snapshot is gzip-compressed JSON. The real directory is tens of MB of text (mostly
+// microdescriptors): export streams borrowed data straight into the compressor, so no second
+// copy of the directory is made in wasm memory (which never shrinks).
 
 /// Snapshot format version.
-const SNAPSHOT_V: u8 = 1;
+const SNAPSHOT_V: u8 = 2;
 
 #[derive(Serialize, Deserialize)]
-struct Snapshot {
+struct Snapshot<'a> {
     v: u8,
-    consensuses: Vec<SnapConsensus>,
-    authcerts: Vec<SnapCert>,
-    microdescs: Vec<SnapMd>,
+    #[serde(borrow)]
+    consensuses: Vec<SnapConsensus<'a>>,
+    #[serde(borrow)]
+    authcerts: Vec<SnapCert<'a>>,
+    #[serde(borrow)]
+    microdescs: Vec<SnapMd<'a>>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct SnapConsensus {
-    flavor: String,
+struct SnapConsensus<'a> {
+    #[serde(borrow)]
+    flavor: Cow<'a, str>,
     /// valid-after, fresh-until, valid-until (Unix seconds).
     lifetime: [u64; 3],
     /// SHA3-256 of the signed part and of the whole document (hex).
     signed: String,
     whole: String,
-    text: String,
+    #[serde(borrow)]
+    text: Cow<'a, str>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct SnapCert {
+struct SnapCert<'a> {
     id: String,
     sk: String,
     expires: i64,
-    text: String,
+    #[serde(borrow)]
+    text: Cow<'a, str>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct SnapMd {
+struct SnapMd<'a> {
     digest: String,
     listed: i64,
-    text: String,
+    #[serde(borrow)]
+    text: Cow<'a, str>,
 }
 
 fn secs(t: SystemTime) -> u64 {
@@ -296,9 +312,10 @@ fn digest(h: &str) -> Option<[u8; 32]> {
     hex::decode(h).ok()?.try_into().ok()
 }
 
-/// The usable (not pending) consensuses, authority certificates and microdescriptors, as
-/// JSON; `None` before anything was downloaded. Public directory data only.
-pub fn cache_export() -> Option<String> {
+/// The usable (not pending) consensuses, authority certificates and microdescriptors as a
+/// gzip-compressed JSON snapshot; `None` before anything was downloaded. Public directory
+/// data only.
+pub fn cache_export() -> Option<Vec<u8>> {
     with(|m| {
         if m.consensuses.iter().all(|c| c.pending) {
             return None;
@@ -312,11 +329,11 @@ pub fn cache_export() -> Option<String> {
                 .map(|c| {
                     let l = c.meta.lifetime();
                     SnapConsensus {
-                        flavor: c.flavor.name().to_owned(),
+                        flavor: Cow::Borrowed(c.flavor.name()),
                         lifetime: [secs(l.valid_after()), secs(l.fresh_until()), secs(l.valid_until())],
                         signed: hex::encode(c.meta.sha3_256_of_signed()),
                         whole: hex::encode(c.meta.sha3_256_of_whole()),
-                        text: c.text.clone(),
+                        text: Cow::Borrowed(&c.text),
                     }
                 })
                 .collect(),
@@ -327,24 +344,30 @@ pub fn cache_export() -> Option<String> {
                     id: hex::encode(ids.id_fingerprint.as_bytes()),
                     sk: hex::encode(ids.sk_fingerprint.as_bytes()),
                     expires: expires.unix_timestamp(),
-                    text: text.clone(),
+                    text: Cow::Borrowed(text),
                 })
                 .collect(),
             microdescs: m
                 .microdescs
                 .iter()
-                .map(|(d, (listed, text))| SnapMd { digest: hex::encode(d), listed: listed.unix_timestamp(), text: text.clone() })
+                .map(|(d, (listed, text))| SnapMd { digest: hex::encode(d), listed: listed.unix_timestamp(), text: Cow::Borrowed(text) })
                 .collect(),
         };
-        serde_json::to_string(&snap).ok()
+        let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
+        serde_json::to_writer(&mut gz, &snap).ok()?;
+        gz.finish().ok()
     })
 }
 
 /// Seeds the cache from a snapshot of [`cache_export`], before the Tor client starts. Entries
 /// are kept as they are: arti validates cached documents (signatures, lifetimes) on load, as it
 /// does with its SQLite cache. Returns whether the snapshot was readable.
-pub fn cache_import(json: &str) -> bool {
-    let Ok(snap) = serde_json::from_str::<Snapshot>(json) else { return false };
+pub fn cache_import(gz: &[u8]) -> bool {
+    let mut json = String::new();
+    if GzDecoder::new(gz).read_to_string(&mut json).is_err() {
+        return false;
+    }
+    let Ok(snap) = serde_json::from_str::<Snapshot<'_>>(&json) else { return false };
     if snap.v != SNAPSHOT_V {
         return false;
     }
@@ -361,19 +384,19 @@ pub fn cache_import(json: &str) -> bool {
                 continue;
             };
             m.consensuses.retain(|x| x.meta.sha3_256_of_whole() != &whole);
-            m.consensuses.push(Consensus { meta: ConsensusMeta::new(lifetime, signed, whole), flavor, pending: false, text: c.text });
+            m.consensuses.push(Consensus { meta: ConsensusMeta::new(lifetime, signed, whole), flavor, pending: false, text: c.text.into_owned() });
         }
         for a in snap.authcerts {
             let ids = hex::decode(&a.id).ok().zip(hex::decode(&a.sk).ok()).and_then(|(id, sk)| {
                 Some(AuthCertKeyIds { id_fingerprint: RsaIdentity::from_bytes(&id)?, sk_fingerprint: RsaIdentity::from_bytes(&sk)? })
             });
             if let (Some(ids), Some(expires)) = (ids, time(a.expires)) {
-                m.authcerts.insert(ids, (expires, a.text));
+                m.authcerts.insert(ids, (expires, a.text.into_owned()));
             }
         }
         for d in snap.microdescs {
             if let (Some(digest), Some(listed)) = (digest(&d.digest), time(d.listed)) {
-                m.microdescs.insert(digest, (listed, d.text));
+                m.microdescs.insert(digest, (listed, d.text.into_owned()));
             }
         }
     });

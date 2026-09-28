@@ -79,7 +79,7 @@ fn progress(n: f64, text: &str) {
 }
 
 /// Starts arti (Snowflake, bootstrap), hosts our onion service and accepts its streams.
-pub(crate) fn start(inner: &Shared, sf: Snowflake, network_toml: &str, cache: &str) -> Result<(), ErrorCode> {
+pub(crate) fn start(inner: &Shared, sf: Snowflake, network_toml: &str, cache: &[u8]) -> Result<(), ErrorCode> {
     if inner.borrow().tor.tor.is_some() {
         return Err(ErrorCode::NotPermitted);
     }
@@ -246,7 +246,7 @@ fn host(inner: &Shared, tor: &Tor) -> Result<(), ErrorCode> {
 }
 
 /// The Tor directory for the next session's warm start (§28.3; public data), or empty.
-pub(crate) fn cache(g: &Inner) -> String {
+pub(crate) fn cache(g: &Inner) -> Vec<u8> {
     g.tor.tor.as_ref().and_then(|t| t.cache()).unwrap_or_default()
 }
 

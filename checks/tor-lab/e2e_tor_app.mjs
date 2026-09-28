@@ -136,11 +136,11 @@ try {
     const r = indexedDB.open('ephem-tor', 1);
     r.onsuccess = () => {
       const g = r.result.transaction('dir').objectStore('dir').getAll();
-      g.onsuccess = () => res(g.result.map((v) => v.length));
+      g.onsuccess = () => res(g.result.map((v) => v.byteLength));
     };
     r.onerror = () => res([]);
   }));
-  check('Tor directory snapshot kept in IndexedDB', snap.length === 1 && snap[0] > 1000, `${Math.round((snap[0] || 0) / 1024)} KB`);
+  check('Tor directory snapshot kept in IndexedDB (gzip)', snap.length === 1 && snap[0] > 1000, `${Math.round((snap[0] || 0) / 1024)} KB`);
   const t4 = Date.now();
   await a.reload();
   await torReady(a, 'alice');

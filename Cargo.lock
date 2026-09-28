@@ -4379,6 +4379,7 @@ dependencies = [
  "digest 0.10.7",
  "educe",
  "event-listener",
+ "flate2",
  "fs-mistrust",
  "fslock-guard",
  "futures",

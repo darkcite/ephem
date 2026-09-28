@@ -61,6 +61,12 @@ impl Session {
         }
     }
 
+    /// KCP segments sent and not yet acknowledged by the server.
+    #[inline(always)]
+    pub fn unacked(&self) -> u32 {
+        self.kcp.unacked()
+    }
+
     #[inline(always)]
     pub fn error(&self) -> Option<Error> {
         self.err

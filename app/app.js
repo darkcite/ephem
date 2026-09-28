@@ -12,7 +12,9 @@ const SNOWFLAKE = {
   // The direct broker, then its CDN URL (reachable where the broker's name is blocked; no
   // domain fronting, which browsers cannot do). Both are in tor.html's CSP.
   broker: 'https://snowflake-broker.torproject.net/,https://1098762253.rsc.cdn77.org/',
-  fingerprint: '2B280B23E1107BB62ABFC40DDCC8824814F80A72',
+  // Both Snowflake bridges of the Tor Project (snowflake-01, snowflake-02), as in Tor Browser:
+  // one failing does not stop Tor.
+  fingerprint: '2B280B23E1107BB62ABFC40DDCC8824814F80A72,8838024498816A039FCBBAB14E6F40A0843051FA',
   ice: 'stun:stun.l.google.com:19302,stun:stun.antisip.com:3478,stun:stun.bluesip.net:3478,stun:stun.dus.net:3478,stun:stun.epygi.com:3478,stun:stun.sonetel.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.voys.nl:3478',
   nat: '',
   network: '', // empty: the real Tor network
@@ -1311,20 +1313,21 @@ function torDb(mode, fn) {
   return new Promise((resolve) => {
     const req = indexedDB.open('ephem-tor', 1);
     req.onupgradeneeded = () => req.result.createObjectStore('dir');
-    req.onerror = () => resolve('');
+    req.onerror = () => resolve(undefined);
     req.onsuccess = () => {
       const db = req.result;
       const t = db.transaction('dir', mode);
       const r = fn(t.objectStore('dir'));
-      t.oncomplete = () => { db.close(); resolve(r.result ?? ''); };
-      t.onerror = () => { db.close(); resolve(''); };
+      t.oncomplete = () => { db.close(); resolve(r.result); };
+      t.onerror = () => { db.close(); resolve(undefined); };
     };
   });
 }
-const torCache = () => torDb('readonly', (s) => s.get(torCacheKey)).catch(() => '');
+// A snapshot is gzip bytes; anything else (an older format) is ignored.
+const torCache = () => torDb('readonly', (s) => s.get(torCacheKey)).then((v) => (v instanceof Uint8Array ? v : new Uint8Array())).catch(() => new Uint8Array());
 function saveTorCache() {
   const snap = app.tor_cache();
-  if (snap) torDb('readwrite', (s) => s.put(snap, torCacheKey)).catch(() => {});
+  if (snap.length) torDb('readwrite', (s) => s.put(snap, torCacheKey)).catch(() => {});
 }
 
 // ---- boot ----------------------------------------------------------------------------------

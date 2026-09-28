@@ -9,7 +9,7 @@ mod carrier;
 mod rt;
 
 use crate::config;
-use crate::net::BridgeNet;
+use crate::net::{BridgeNet, Dialer};
 use crate::tls::TorTls;
 use arti_client::config::onion_service::OnionServiceConfigBuilder;
 use arti_client::{StreamPrefs, TorClient};
@@ -62,7 +62,8 @@ pub fn tor_log(level: &str) {
 /// arti in the page (single-threaded; share it with `Rc`).
 pub struct Tor {
     client: Arc<TorClient<Runtime>>,
-    pool: WarmPool,
+    /// One pool of warm Snowflake proxies per bridge.
+    pools: Vec<WarmPool>,
     /// The running onion service (kept alive) and its accepted, not yet taken, streams.
     services: RefCell<Vec<Arc<RunningOnionService>>>,
     incoming: Rc<RefCell<VecDeque<DataStream>>>,
@@ -72,30 +73,51 @@ impl Tor {
     /// `network_toml`: empty for the real Tor network; the lab passes its private network.
     /// `cache`: a directory snapshot of [`Self::cache`] from an earlier session (warm start),
     /// or empty.
-    pub fn new(sf: SnowflakeParams, network_toml: &str, cache: &str) -> Result<Tor, String> {
+    pub fn new(sf: SnowflakeParams, network_toml: &str, cache: &[u8]) -> Result<Tor, String> {
         if !cache.is_empty() && !tor_dirmgr::cache_import(cache) {
             tracing::info!("tor: directory snapshot unreadable, starting cold");
         }
-        let fp = sf.fingerprint.clone();
-        let pool = WarmPool::start(sf);
-        let net = BridgeNet::new(Arc::new(WebDialer { pool: pool.clone() }));
+        let fps = sf.fingerprints.clone();
+        let pools: Vec<WarmPool> = fps.iter().map(|fp| WarmPool::start(sf.clone(), fp.clone())).collect();
+        let net = BridgeNet::new(pools.iter().map(|p| Arc::new(WebDialer { pool: p.clone() }) as Arc<dyn Dialer>).collect());
         let rt: Runtime = CompoundRuntime::new(WebTask::default(), WebTask::default(), RealCoarseTimeProvider::new(), net.clone(), net.clone(), TorTls::default(), net);
-        let cfg = config::build(&fp, network_toml, "/ephem")?;
+        let cfg = config::build(&fps, network_toml, "/ephem")?;
         let client = TorClient::with_runtime(rt).config(cfg).create_unbootstrapped().map_err(|e| e.to_string())?;
-        Ok(Tor { client, pool, services: RefCell::default(), incoming: Rc::default() })
+        Ok(Tor { client, pools, services: RefCell::default(), incoming: Rc::default() })
     }
 
     /// Directory ready (the bridge descriptor may still follow; connects retry until it is
-    /// there). Waits first for a Snowflake proxy, so arti's first bridge connection does not
-    /// time out (which would mark the bridge down for minutes).
+    /// there). Waits first for Snowflake proxies (every bridge's for a few seconds, then any),
+    /// so arti's first bridge connection does not time out (which would mark the bridge down
+    /// for minutes).
     pub async fn bootstrap(&self) -> Result<(), String> {
-        self.pool.ready(90_000.0).await?;
+        let t0 = js_sys::Date::now();
+        let mut first_err = None;
+        for p in &self.pools {
+            let left = (15_000.0 - (js_sys::Date::now() - t0)).max(0.0);
+            if let Err(e) = p.ready(left).await {
+                first_err.get_or_insert(e);
+            }
+        }
+        if first_err.is_some() {
+            let mut any = false;
+            while !any && js_sys::Date::now() - t0 < 90_000.0 {
+                any = self.pools.iter().any(WarmPool::has_ready);
+                if !any {
+                    sleep_ms(200).await;
+                }
+            }
+            if !any {
+                return Err(first_err.unwrap_or_default());
+            }
+        }
         self.client.bootstrap().await.map_err(|e| e.to_string())
     }
 
-    /// The directory as a snapshot for the next session's warm start (public data: consensus,
-    /// authority certificates, microdescriptors), or `None` before one was downloaded.
-    pub fn cache(&self) -> Option<String> {
+    /// The directory as a gzip snapshot for the next session's warm start (public data:
+    /// consensus, authority certificates, microdescriptors), or `None` before one was
+    /// downloaded.
+    pub fn cache(&self) -> Option<Vec<u8>> {
         tor_dirmgr::cache_export()
     }
 
@@ -192,11 +214,11 @@ mod js {
         pub fn new(broker: &str, bridge_fp: &str, ice: &str, nat: &str, network_toml: &str) -> Result<TorNet, JsValue> {
             let sf = SnowflakeParams {
                 brokers: list(broker),
-                fingerprint: bridge_fp.to_owned(),
+                fingerprints: list(bridge_fp),
                 ice: list(ice),
                 nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
             };
-            Ok(TorNet { tor: Rc::new(Tor::new(sf, network_toml, "").map_err(err)?) })
+            Ok(TorNet { tor: Rc::new(Tor::new(sf, network_toml, &[]).map_err(err)?) })
         }
 
         pub fn bootstrap(&self) -> js_sys::Promise {

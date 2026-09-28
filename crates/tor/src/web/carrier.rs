@@ -32,10 +32,14 @@ use web_sys::{
 
 /// A proxy that sends nothing for this long is replaced (Snowflake's `SnowflakeTimeout`).
 const SILENT_MS: f64 = 20_000.0;
+/// ...or for this long while our data waits for its acknowledgement: a proxy that died under
+/// load (arti gives up on a directory download after 10 s without data, and failures mark the
+/// bridge down for minutes).
+const STALL_MS: f64 = 4_000.0;
 const OPEN_TIMEOUT_MS: f64 = 10_000.0;
 const GATHER_TIMEOUT_MS: f64 = 5_000.0;
-/// Proxies kept connected in advance.
-pub const POOL: usize = 3;
+/// Proxies kept connected in advance, per bridge.
+pub const POOL: usize = 2;
 /// A carrier without a proxy for this long gives up (the stream fails, arti retries).
 const NO_PROXY_MS: f64 = 60_000.0;
 
@@ -45,7 +49,8 @@ pub struct SnowflakeParams {
     /// Broker URLs, tried in order when one cannot be reached (the direct broker, then its
     /// CDN URL, which works from browsers without domain fronting: §24.2 E2).
     pub brokers: Vec<String>,
-    pub fingerprint: String,
+    /// The Snowflake bridges (RSA fingerprints): the broker matches a proxy to one of them.
+    pub fingerprints: Vec<String>,
     /// `stun:` URLs for the proxy connections only.
     pub ice: Vec<String>,
     /// NAT type hint for the broker's proxy matching: "unknown" on the real network (the
@@ -73,6 +78,8 @@ impl Warm {
 
 struct PoolInner {
     params: SnowflakeParams,
+    /// The bridge this pool's proxies relay to.
+    fingerprint: String,
     ready: VecDeque<Warm>,
     pending: usize,
     last_error: String,
@@ -83,9 +90,10 @@ struct PoolInner {
 pub struct WarmPool(Rc<RefCell<PoolInner>>);
 
 impl WarmPool {
-    /// Starts filling the pool (runs for the life of the page).
-    pub fn start(params: SnowflakeParams) -> Self {
-        let pool = WarmPool(Rc::new(RefCell::new(PoolInner { params, ready: VecDeque::new(), pending: 0, last_error: String::new() })));
+    /// Starts filling the pool of proxies for bridge `fingerprint` (runs for the life of the
+    /// page).
+    pub fn start(params: SnowflakeParams, fingerprint: String) -> Self {
+        let pool = WarmPool(Rc::new(RefCell::new(PoolInner { params, fingerprint, ready: VecDeque::new(), pending: 0, last_error: String::new() })));
         wasm_bindgen_futures::spawn_local(pool.clone().refill());
         pool
     }
@@ -102,14 +110,14 @@ impl WarmPool {
                     }
                     ok
                 });
-                (POOL.saturating_sub(g.ready.len() + g.pending), g.params.clone())
+                (POOL.saturating_sub(g.ready.len() + g.pending), (g.params.clone(), g.fingerprint.clone()))
             };
             for _ in 0..want {
                 self.0.borrow_mut().pending += 1;
                 let pool = self.clone();
-                let p = params.clone();
+                let (p, fp) = params.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    let r = rendezvous(&p).await;
+                    let r = rendezvous(&p, &fp).await;
                     let mut g = pool.0.borrow_mut();
                     g.pending -= 1;
                     match r {
@@ -133,6 +141,11 @@ impl WarmPool {
             w.close();
         }
         None
+    }
+
+    /// Whether a proxy is ready now.
+    pub fn has_ready(&self) -> bool {
+        self.0.borrow().ready.iter().any(Warm::open)
     }
 
     /// Resolves once a proxy is ready (or with the last rendezvous error after `timeout_ms`).
@@ -203,7 +216,7 @@ async fn run(link: Link, pool: WarmPool) {
 }
 
 /// Broker rendezvous and an open DataChannel to one proxy.
-async fn rendezvous(p: &SnowflakeParams) -> Result<Warm, String> {
+async fn rendezvous(p: &SnowflakeParams, fingerprint: &str) -> Result<Warm, String> {
     let cfg = RtcConfiguration::new();
     let servers = js_sys::Array::new();
     for url in &p.ice {
@@ -218,7 +231,7 @@ async fn rendezvous(p: &SnowflakeParams) -> Result<Warm, String> {
     let dc = pc.create_data_channel_with_data_channel_dict("snowflake", &init);
     dc.set_binary_type(RtcDataChannelType::Arraybuffer);
     let w = Warm { pc, dc };
-    match negotiate(p, &w).await {
+    match negotiate(p, fingerprint, &w).await {
         Ok(()) => Ok(w),
         Err(e) => {
             w.close();
@@ -227,7 +240,7 @@ async fn rendezvous(p: &SnowflakeParams) -> Result<Warm, String> {
     }
 }
 
-async fn negotiate(p: &SnowflakeParams, w: &Warm) -> Result<(), String> {
+async fn negotiate(p: &SnowflakeParams, fingerprint: &str, w: &Warm) -> Result<(), String> {
     let (pc, dc) = (&w.pc, &w.dc);
     // Offer with all candidates (no trickle over the broker).
     let offer = JsFuture::from(pc.create_offer()).await.map_err(js_err)?;
@@ -243,7 +256,7 @@ async fn negotiate(p: &SnowflakeParams, w: &Warm) -> Result<(), String> {
 
     // Broker: `1.0\n` + {"offer": "<SDP JSON>", "nat": ..., "fingerprint": ...}.
     let offer_json = js_sys::JSON::stringify(&json_obj(&[("type", "offer"), ("sdp", &local)])).map_err(js_err)?.as_string().unwrap_or_default();
-    let body = js_sys::JSON::stringify(&json_obj(&[("offer", &offer_json), ("nat", &p.nat), ("fingerprint", &p.fingerprint)]))
+    let body = js_sys::JSON::stringify(&json_obj(&[("offer", &offer_json), ("nat", &p.nat), ("fingerprint", fingerprint)]))
         .map_err(js_err)?
         .as_string()
         .unwrap_or_default();
@@ -316,6 +329,7 @@ async fn pump(link: &Link, w: &Warm, t0: f64) {
     });
     dc.set_onmessage(Some(on_msg.as_ref().unchecked_ref()));
     link.lock().sess.on_channel();
+    let mut silent_limit;
     loop {
         {
             let mut g = link.lock();
@@ -330,8 +344,9 @@ async fn pump(link: &Link, w: &Warm, t0: f64) {
                 g.failed = Some(format!("snowflake: {e:?}"));
                 break;
             }
+            silent_limit = if g.sess.unacked() > 0 { STALL_MS } else { SILENT_MS };
         }
-        if dc.ready_state() != RtcDataChannelState::Open || now() - last_rx.get() > SILENT_MS {
+        if dc.ready_state() != RtcDataChannelState::Open || now() - last_rx.get() > silent_limit {
             tracing::info!("snowflake: proxy lost, switching");
             break;
         }
