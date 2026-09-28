@@ -111,6 +111,9 @@ pub use docid::DocId;
 pub use err::Error;
 pub use event::{DirBlockage, DirBootstrapEvents, DirBootstrapStatus};
 pub use storage::DocumentText;
+// Ephem patch: snapshots of the wasm32 in-memory directory cache (warm starts from IndexedDB).
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub use storage::memory::{cache_export, cache_import};
 pub use tor_dircommon::fallback::{FallbackDir, FallbackDirBuilder};
 pub use tor_netdir::Timeliness;
 

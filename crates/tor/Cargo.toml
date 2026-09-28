@@ -42,6 +42,8 @@ getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+# The in-memory directory cache (vendored patch) and its snapshots for warm starts.
+tor-dirmgr = { version = "0.46", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

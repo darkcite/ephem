@@ -4,30 +4,19 @@
 // them dials the other's onion, so the mesh is complete without anyone seeing an IP address.
 // Then room messages, and a member losing its member links (the dialler redials).
 //
-// Needs `checks/tor-lab/lab.sh up` and `./build.sh` (as e2e_tor_app.mjs).
-import * as fs from 'node:fs';
-import { check, finish, launch, msgWith, problems, serve, watch } from '../e2e_lib.mjs';
+// Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network (tor_env.mjs).
+import { check, finish, launch, msgWith, problems, watch } from '../e2e_lib.mjs';
+import { T, serveTor, torContext } from './tor_env.mjs';
 
-const env = Object.fromEntries(fs.readFileSync('/tmp/ephlab/lab.env', 'utf8').trim().split('\n').map((l) => l.split('=')));
-const lab = {
-  broker: env.BROKER_URL,
-  fingerprint: env.BRIDGE_FP,
-  ice: env.STUN_URL,
-  nat: 'unrestricted',
-  network: fs.readFileSync(`${env.LAB}/arti-net.toml`, 'utf8'),
-  log: process.env.TOR_LOG || '',
-};
-const origin = new URL(env.BROKER_URL).origin;
-const srv = await serve((p, read) => (p.endsWith('/tor.html') ? read().replace('https://snowflake-broker.torproject.net', origin) : null));
+const srv = await serveTor();
 const base = `http://127.0.0.1:${srv.address().port}/app`;
 const browsers = [];
-const T = 180_000;
 
 async function open(who, nick) {
   const b = await launch();
   browsers.push(b);
   const ctx = await b.newContext();
-  await ctx.addInitScript((c) => { globalThis.ephemTorLab = c; }, lab);
+  await torContext(ctx);
   const p = await ctx.newPage();
   watch(p, who);
   p.on('dialog', (d) => d.accept());

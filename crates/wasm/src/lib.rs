@@ -457,15 +457,21 @@ pub struct App {
 impl App {
     /// Starts arti over Snowflake, then hosts our onion service (key from the identity seed).
     /// Progress arrives as TOR events. `ice`: comma-separated `stun:` URLs; `nat`: the broker's
-    /// NAT hint (empty = "unknown"); `network_toml`: empty for the real Tor network.
-    pub fn tor_start(&self, broker: &str, fingerprint: &str, ice: &str, nat: &str, network_toml: &str) -> u32 {
+    /// NAT hint (empty = "unknown"); `network_toml`: empty for the real Tor network; `cache`:
+    /// the directory snapshot of `tor_cache` from an earlier session (warm start), or empty.
+    pub fn tor_start(&self, broker: &str, fingerprint: &str, ice: &str, nat: &str, network_toml: &str, cache: &str) -> u32 {
         let sf = ephem_tor::web::Snowflake {
             broker: broker.to_owned(),
             fingerprint: fingerprint.to_owned(),
             ice: ice.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect(),
             nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
         };
-        status(tor::start(&self.inner, sf, network_toml))
+        status(tor::start(&self.inner, sf, network_toml, cache))
+    }
+
+    /// The Tor directory as JSON for IndexedDB (public data; empty until downloaded).
+    pub fn tor_cache(&self) -> String {
+        tor::cache(&self.inner.borrow())
     }
 
     /// Bootstrap status line (empty before `tor_start`).

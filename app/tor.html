@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-+09MGOworWrd1GrjWoEdDSNVceDYJmN5IEwQE1Ae0Os='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://snowflake-broker.torproject.net; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="5b3f0cca4217">
-<meta name="ephem-wasm" content="sha384-161R7gVVkMIKv3bT34eOFyI+WqIsk3JdhbxCnSJAXBRQ9Lsv9NeQI3JUQyawgAZp">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-C5Hp/wI6r0gW++mQaRmSUVaG2xc40Y9bozWlkYI/ygQ='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://snowflake-broker.torproject.net; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="27e582fa318d">
+<meta name="ephem-wasm" content="sha384-5W7os2EHmZSY3lRp7ys7GXwv2Ih5UBdYPrtJjSRD4ymQS6oEBWgp0QuEzl76uP+S">
 <link rel="stylesheet" href="app.css" integrity="sha384-KZyITPZ3GHGWJGfigtvweOjJ0Q+0JiKzjPh8eCB1I2ZnwRrJ+pWIlL92vZbPl9uM">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-zKV4mHUK4R0EsfKx3e7AcntpJoHEbTv/cO6o5tbRCUktwT+mxsD+5IAtyF9pWFTs","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem_tor.js":"sha384-8UJ9md0Hs4icXD9YG73PYN6GRrcil+Zwn1/2U4/7RYlQKQnNCiT3hy6zXV2h8J3F"}}</script>
-<script type="module" src="app.js" integrity="sha384-zKV4mHUK4R0EsfKx3e7AcntpJoHEbTv/cO6o5tbRCUktwT+mxsD+5IAtyF9pWFTs"></script>
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-S6f6j8qMvpMUdxAjEj2T2Q0Cvc8pnDpX6JLo/HlZdr66r1jk0Q142mfEis9nx78P","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem_tor.js":"sha384-B0L2SOGhmLHAql0wfIE1bC45BezgS8ZIxL0TNUi1CXiMDu3a0j9cwRuYCEr+yJbl"}}</script>
+<script type="module" src="app.js" integrity="sha384-S6f6j8qMvpMUdxAjEj2T2Q0Cvc8pnDpX6JLo/HlZdr66r1jk0Q142mfEis9nx78P"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -56,7 +56,7 @@
     <div class="card tor-only">
       <h2>Tor</h2>
       <p id="tor-state">Connecting to Tor through Snowflake…</p>
-      <p class="note">Your peers see an onion address, never your IP address. The Snowflake volunteer proxy and broker see your IP address and that you use Tor, not whom you talk to. Messages take 0.5–2 s. Keep this tab open, and visible in Safari, to stay reachable.</p>
+      <p class="note">Your peers see an onion address, never your IP address. The Snowflake volunteer proxy and broker see your IP address and that you use Tor, not whom you talk to. Messages take 0.5–2 s. Keep this tab open, and visible in Safari, to stay reachable. For faster starts, the public Tor directory is kept on this device (no chats, peers or keys).</p>
       <p class="note"><a href="./">Switch to direct mode</a> (ends this Tor session).</p>
     </div>
     <div class="card direct-only">

@@ -4,26 +4,15 @@
 // Alice creates a TOR_INVITE (single code, no answer); Bob opens it, dials her onion, the Noise
 // IK handshake runs over the Tor stream, both see the same SAS, and they chat both ways.
 //
-// Needs `checks/tor-lab/lab.sh up` and `./build.sh`. The page is served unchanged except that
-// its CSP names the lab broker instead of the real one, and the lab settings are injected as
-// `ephemTorLab` before the page loads (app.js `startTor`).
-import * as fs from 'node:fs';
-import { PASS, check, finish, launch, msgWith, problems, serve, watch } from '../e2e_lib.mjs';
+// Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 runs it on the real Tor network
+// instead (tor_env.mjs).
+import { PASS, check, finish, launch, msgWith, problems, watch } from '../e2e_lib.mjs';
+import { T, serveTor, torContext } from './tor_env.mjs';
 
-const env = Object.fromEntries(fs.readFileSync('/tmp/ephlab/lab.env', 'utf8').trim().split('\n').map((l) => l.split('=')));
-const lab = {
-  broker: env.BROKER_URL,
-  fingerprint: env.BRIDGE_FP,
-  ice: env.STUN_URL,
-  nat: 'unrestricted',
-  network: fs.readFileSync(`${env.LAB}/arti-net.toml`, 'utf8'),
-  log: process.env.TOR_LOG || '',
-};
-const origin = new URL(env.BROKER_URL).origin;
-const srv = await serve((p, read) => (p.endsWith('/tor.html') ? read().replace('https://snowflake-broker.torproject.net', origin) : null));
+const srv = await serveTor();
 const base = `http://127.0.0.1:${srv.address().port}/app`;
 const browsers = [];
-const T = 180_000;
+const logs = []; // console of every page, printed if the flow fails
 
 /** Saves the tab's identity (contacts need one, §7.5); returns the key text. */
 async function saveIdentity(p, label) {
@@ -39,11 +28,14 @@ async function open(who) {
   const b = await launch();
   browsers.push(b);
   const ctx = await b.newContext({ acceptDownloads: true });
-  await ctx.addInitScript((c) => { globalThis.ephemTorLab = c; }, lab);
+  await torContext(ctx);
   const p = await ctx.newPage();
   watch(p, who);
   p.on('dialog', (d) => d.accept(who === 'alice' ? 'Bob' : 'Alice'));
-  p.on('console', (m) => { if (process.env.VERBOSE) console.log(`  ${who} |`, m.text()); });
+  p.on('console', (m) => {
+    logs.push(`  ${who} | ${m.text()}`);
+    if (process.env.VERBOSE) console.log(`  ${who} |`, m.text());
+  });
   await p.goto(`${base}/tor.html`);
   return p;
 }
@@ -67,7 +59,7 @@ try {
 
   const t0 = Date.now();
   const [a, b] = await Promise.all([open('alice'), open('bob')]);
-  check('tor.html runs the Tor build', await a.evaluate(() => document.documentElement.dataset.mode === 'tor' && !document.querySelector('#b-room').offsetParent));
+  check('tor.html runs the Tor build', await a.evaluate(() => document.documentElement.dataset.mode === 'tor' && !document.querySelector('#b-id-receive').offsetParent));
   await a.waitForFunction(() => /Reachable through Tor/.test(document.querySelector('#tor-state').textContent), null, { timeout: T });
   check('Alice: Tor up and her onion service hosted', true, `${Date.now() - t0} ms`);
 
@@ -139,11 +131,29 @@ try {
   await msgWith(a, 'them', 'called you').waitFor({ timeout: 60_000 });
   check('Bob connects to contact Alice through Tor, no code', true, `${Date.now() - t3} ms`);
 
-  // No chat traffic outside Tor: the only RTCPeerConnections are Snowflake's (to the lab proxy).
+  // Warm start (§28.3): the directory snapshot is in IndexedDB; a reload bootstraps from it.
+  const snap = await a.evaluate(() => new Promise((res) => {
+    const r = indexedDB.open('ephem-tor', 1);
+    r.onsuccess = () => {
+      const g = r.result.transaction('dir').objectStore('dir').getAll();
+      g.onsuccess = () => res(g.result.map((v) => v.length));
+    };
+    r.onerror = () => res([]);
+  }));
+  check('Tor directory snapshot kept in IndexedDB', snap.length === 1 && snap[0] > 1000, `${Math.round((snap[0] || 0) / 1024)} KB`);
+  const t4 = Date.now();
+  await a.reload();
+  await a.waitForFunction(() => /Reachable through Tor/.test(document.querySelector('#tor-state').textContent), null, { timeout: T });
+  check('reload: warm start from the snapshot', true, `${Date.now() - t4} ms`);
+
   check('no reconnect-code UI in Tor mode', await a.isHidden('#resume') && await b.isHidden('#resume'));
   check('no page errors or CSP violations', problems.length === 0, problems.join(' | '));
 } catch (e) {
   check('tor app flow', false, e.message.split('\n')[0]);
+  for (const b of browsers) for (const c of b.contexts()) for (const p of c.pages()) {
+    console.log('  tor state:', await p.textContent('#tor-state').catch(() => '?'), '| status:', await p.textContent('#status').catch(() => '?'));
+  }
+  if (!process.env.VERBOSE) console.log(logs.slice(-60).join('\n'));
 } finally {
   for (const b of browsers) await b.close();
   srv.close();

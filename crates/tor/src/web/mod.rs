@@ -12,7 +12,7 @@ use crate::config;
 use crate::net::BridgeNet;
 use crate::tls::TorTls;
 use arti_client::config::onion_service::OnionServiceConfigBuilder;
-use arti_client::TorClient;
+use arti_client::{StreamPrefs, TorClient};
 use futures::StreamExt;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -65,7 +65,12 @@ pub struct Tor {
 
 impl Tor {
     /// `network_toml`: empty for the real Tor network; the lab passes its private network.
-    pub fn new(sf: SnowflakeParams, network_toml: &str) -> Result<Tor, String> {
+    /// `cache`: a directory snapshot of [`Self::cache`] from an earlier session (warm start),
+    /// or empty.
+    pub fn new(sf: SnowflakeParams, network_toml: &str, cache: &str) -> Result<Tor, String> {
+        if !cache.is_empty() && !tor_dirmgr::cache_import(cache) {
+            tracing::info!("tor: directory snapshot unreadable, starting cold");
+        }
         let fp = sf.fingerprint.clone();
         let pool = WarmPool::start(sf);
         let net = BridgeNet::new(Arc::new(WebDialer { pool: pool.clone() }));
@@ -83,6 +88,12 @@ impl Tor {
         self.client.bootstrap().await.map_err(|e| e.to_string())
     }
 
+    /// The directory as a snapshot for the next session's warm start (public data: consensus,
+    /// authority certificates, microdescriptors), or `None` before one was downloaded.
+    pub fn cache(&self) -> Option<String> {
+        tor_dirmgr::cache_export()
+    }
+
     /// Bootstrap progress for the UI, e.g. "45%: connecting successfully; …".
     pub fn status(&self) -> String {
         self.client.bootstrap_status().to_string()
@@ -93,9 +104,17 @@ impl Tor {
         self.client.bootstrap_status().ready_for_traffic()
     }
 
-    /// A stream to `host:port` (an onion address in Ephem).
-    pub async fn connect(&self, host: &str, port: u16) -> Result<DataStream, String> {
-        self.client.connect((host, port)).await.map_err(|e| e.to_string())
+    /// A stream to `host:port` (an onion address in Ephem). `fresh`: in a new isolation group,
+    /// so nothing cached for earlier attempts is reused. arti keeps an onion service's
+    /// descriptor until it expires (hours) and refetches it only after an introduction NACK;
+    /// a descriptor whose intro points silently stopped working (the service was re-hosted,
+    /// e.g. after a sign-in) would otherwise fail every retry.
+    pub async fn connect(&self, host: &str, port: u16, fresh: bool) -> Result<DataStream, String> {
+        let mut prefs = StreamPrefs::new();
+        if fresh {
+            prefs.new_isolation_group();
+        }
+        self.client.connect_with_prefs((host, port), &prefs).await.map_err(|e| e.to_string())
     }
 
     /// Hosts an onion service whose identity is the Ed25519 key `secret` (Ephem derives it from
@@ -171,7 +190,7 @@ mod js {
                 ice: ice.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect(),
                 nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
             };
-            Ok(TorNet { tor: Rc::new(Tor::new(sf, network_toml).map_err(err)?) })
+            Ok(TorNet { tor: Rc::new(Tor::new(sf, network_toml, "").map_err(err)?) })
         }
 
         pub fn bootstrap(&self) -> js_sys::Promise {
@@ -188,7 +207,7 @@ mod js {
 
         pub fn connect(&self, host: String, port: u16) -> js_sys::Promise {
             let t = self.tor.clone();
-            wasm_bindgen_futures::future_to_promise(async move { Ok(TorStream::new(t.connect(&host, port).await.map_err(err)?).into()) })
+            wasm_bindgen_futures::future_to_promise(async move { Ok(TorStream::new(t.connect(&host, port, false).await.map_err(err)?).into()) })
         }
 
         pub fn host(&self, nickname: &str, secret: &[u8]) -> Result<String, JsValue> {

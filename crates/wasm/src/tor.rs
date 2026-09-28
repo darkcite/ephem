@@ -33,6 +33,8 @@ const NICK: &str = "ephem";
 /// Redial backoff (§12: 1, 2, 4, 8, 16 s).
 const REDIAL_FIRST_MS: u32 = 1_000;
 const REDIAL_MAX_MS: u32 = 16_000;
+/// One dial attempt (descriptor, introduction, rendezvous) before it counts as failed.
+const DIAL_TIMEOUT_MS: u32 = 45_000;
 /// Reassembly buffer of a stream: one frame plus a read's worth.
 const RX_CAP: usize = 2 + MAX_FRAME + 4096;
 
@@ -67,6 +69,8 @@ pub(crate) struct TorState {
     pub(crate) onion: String,
     /// Services hosted so far (each gets its own nickname).
     hosted: u32,
+    /// Bootstrap failed: chats cannot connect (no fallback, §28.5).
+    failed: bool,
 }
 
 /// ev::TOR for the UI: 1 starting (text = status), 2 ready (text = our .onion), 3 failed.
@@ -75,11 +79,11 @@ fn progress(n: f64, text: &str) {
 }
 
 /// Starts arti (Snowflake, bootstrap), hosts our onion service and accepts its streams.
-pub(crate) fn start(inner: &Shared, sf: Snowflake, network_toml: &str) -> Result<(), ErrorCode> {
+pub(crate) fn start(inner: &Shared, sf: Snowflake, network_toml: &str, cache: &str) -> Result<(), ErrorCode> {
     if inner.borrow().tor.tor.is_some() {
         return Err(ErrorCode::NotPermitted);
     }
-    let tor = match Tor::new(sf, network_toml) {
+    let tor = match Tor::new(sf, network_toml, cache) {
         Ok(t) => Rc::new(t),
         Err(e) => {
             progress(3.0, &e);
@@ -91,6 +95,7 @@ pub(crate) fn start(inner: &Shared, sf: Snowflake, network_toml: &str) -> Result
     let inner = inner.clone();
     wasm_bindgen_futures::spawn_local(async move {
         if let Err(e) = tor.bootstrap().await {
+            inner.borrow_mut().tor.failed = true;
             progress(3.0, &e);
             return;
         }
@@ -238,6 +243,11 @@ fn host(inner: &Shared, tor: &Tor) -> Result<(), ErrorCode> {
             Err(ErrorCode::TorUnavailable)
         }
     }
+}
+
+/// The Tor directory for the next session's warm start (§28.3; public data), or empty.
+pub(crate) fn cache(g: &Inner) -> String {
+    g.tor.tor.as_ref().and_then(|t| t.cache()).unwrap_or_default()
 }
 
 /// Bootstrap status line for the UI.
@@ -406,6 +416,7 @@ pub(crate) fn dial(inner: &Shared, lid: u32) {
     let inner = inner.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let mut backoff = REDIAL_FIRST_MS;
+        let mut failed = false;
         loop {
             let (tor, onion) = {
                 let g = inner.borrow();
@@ -414,13 +425,28 @@ pub(crate) fn dial(inner: &Shared, lid: u32) {
                     return;
                 }
                 let Some(tor) = g.tor.tor.clone() else { return };
+                if g.tor.failed {
+                    drop(g);
+                    let mut g = inner.borrow_mut();
+                    crate::on_link!(g, i, |s, k, _t| s.abort(ErrorCode::TorUnavailable, &mut k));
+                    return;
+                }
                 (tor, onion_address(&g.links[i].sess.peer_onion()))
             };
             if !tor.ready() {
                 sleep_ms(500).await;
                 continue;
             }
-            match tor.connect(&onion, PORT).await {
+            // After a failure, a fresh descriptor and fresh circuits (see `Tor::connect`). An
+            // attempt that hangs counts as failed.
+            let attempt = tor.connect(&onion, PORT, failed);
+            let timeout = sleep_ms(DIAL_TIMEOUT_MS);
+            futures::pin_mut!(attempt, timeout);
+            let r = match futures::future::select(attempt, timeout).await {
+                futures::future::Either::Left((r, _)) => r,
+                futures::future::Either::Right(_) => Err("timed out".to_owned()),
+            };
+            match r {
                 Ok(s) => {
                     let (r, w) = s.split();
                     let mut g = inner.borrow_mut();
@@ -437,7 +463,8 @@ pub(crate) fn dial(inner: &Shared, lid: u32) {
                     return;
                 }
                 Err(e) => {
-                    tracing::info!("tor: dial {onion}: {e}");
+                    failed = true;
+                    tracing::warn!("tor: dial {onion}: {e}");
                     sleep_ms(backoff).await;
                     backoff = (backoff * 2).min(REDIAL_MAX_MS);
                 }

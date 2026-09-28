@@ -1,11 +1,11 @@
 # Vendored crates (patched)
 
 Four arti 0.46.0 crates, copied from crates.io and patched through `[patch.crates-io]` in the
-workspace `Cargo.toml`. Both patches affect **only** `wasm32-unknown-unknown` (the browser);
+workspace `Cargo.toml`. Every patch affects **only** `wasm32-unknown-unknown` (the browser);
 native builds compile the upstream code paths unchanged. arti's core crates (protocol,
 circuits, channels, guards, onion services, crypto) are used unmodified from crates.io.
 
-Drop a patch as soon as upstream arti covers the case (both spots are marked "TODO wasm" or
+Drop a patch as soon as upstream arti covers the case (these spots are marked "TODO wasm" or
 use SQLite unconditionally in 0.46).
 
 | Crate | Patch | Why |

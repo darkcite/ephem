@@ -10,8 +10,10 @@
 #                chrome   = your installed Google Chrome (no download)
 #                chromium, firefox, webkit = Playwright builds (downloaded once; webkit = Safari's engine)
 #   FORCE_BROWSER_INSTALL=1   re-download Playwright engines even if cached
-#   ONLY=a,b       run only these sections: app, stun, gateways, browser, safari, iphone, e8real, sizes, argon2, arti
-#                  (app = native tests + end-to-end tests of /app/ (MVP-1, MVP-2) in Chrome)
+#   ONLY=a,b       run only these sections: app, tor, stun, gateways, browser, safari, iphone, e8real, sizes, argon2, arti
+#                  (app = native tests + end-to-end tests of /app/ (MVP-1, MVP-2) in Chrome;
+#                   tor = Tor mode end to end on the REAL Tor network (T-10, needs ./build.sh), plus
+#                   the offline lab runs if checks/tor-lab/lab.sh is up (Linux))
 #   E8REAL=1       E8 in your real Chrome/Safari/Firefox (macOS): e.g. E8REAL=1 ONLY=e8real ./checks/run_all.sh e8
 #   IPHONE=1       serve the checks page to your iPhone through a free Cloudflare quick tunnel
 #                  (needs `brew install cloudflared`; works while the repo is private). S6_SECONDS=120
@@ -167,6 +169,23 @@ E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_app.mjs" 2>&1 | tee "$OUT/a
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_mvp2.mjs" 2>&1 | tee "$OUT/app-e2e-mvp2.log"
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_room.mjs" 2>&1 | tee "$OUT/app-e2e-room.log"
 { echo "## App"; echo; echo "Native tests: $NT"; echo; echo "### MVP-1"; echo '```'; cat "$OUT/app-e2e.log"; echo '```'; echo; echo "### MVP-2"; echo '```'; cat "$OUT/app-e2e-mvp2.log"; echo '```'; echo; echo "### MVP-3 rooms"; echo '```'; cat "$OUT/app-e2e-room.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
+fi
+
+if want tor; then
+say "Tor mode (§28): 1:1 and rooms over Tor in Chrome"
+{ echo "## Tor mode"; echo; } >> "$OUT/REPORT.md"
+if [ -f /tmp/ephlab/lab.env ]; then
+  for t in e2e_tor_app e2e_tor_room; do
+    E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/$t.mjs" 2>&1 | tee "$OUT/lab-$t.log"
+    { echo "### Lab: $t"; echo '```'; cat "$OUT/lab-$t.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
+  done
+fi
+if [ "${NET:-1}" != 0 ]; then
+  for t in e2e_tor_app e2e_tor_room; do
+    LIVE=1 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/$t.mjs" 2>&1 | tee "$OUT/live-$t.log"
+    { echo "### Live Tor network: $t"; echo '```'; cat "$OUT/live-$t.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
+  done
+fi
 fi
 
 if want browser; then

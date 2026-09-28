@@ -3,14 +3,21 @@
 //! Browsers have no SQLite, and arti 0.46 opens `SqliteStore` unconditionally. This store keeps
 //! the same data with the same selection and expiry rules as `sqlite.rs` (the queries are
 //! quoted next to each method), in plain maps. Everything is public directory data; the Ephem
-//! adapter snapshots it to IndexedDB for warm starts.
+//! adapter snapshots it to IndexedDB for warm starts ([`cache_export`], [`cache_import`]).
+//!
+//! A tab runs one Tor client, so the maps are one per page (a static): the store handle that
+//! arti owns and the snapshot functions see the same data.
 
 use super::ExpirationConfig;
 use crate::docmeta::{AuthCertMeta, ConsensusMeta};
 use crate::storage::{InputString, Store};
 use crate::Result;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::SystemTime;
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tor_llcrypto::pk::rsa::RsaIdentity;
+use tor_netdoc::doc::netstatus::Lifetime;
 use time::OffsetDateTime;
 use tor_netdoc::doc::authcert::AuthCertKeyIds;
 use tor_netdoc::doc::microdesc::MdDigest;
@@ -31,7 +38,7 @@ struct Consensus {
 
 /// The directory cache of a browser tab.
 #[derive(Default)]
-pub(crate) struct MemoryStore {
+struct Maps {
     consensuses: Vec<Consensus>,
     authcerts: HashMap<AuthCertKeyIds, (OffsetDateTime, String)>,
     microdescs: HashMap<MdDigest, (OffsetDateTime, String)>,
@@ -42,7 +49,19 @@ pub(crate) struct MemoryStore {
     protocols: Option<(SystemTime, ProtoStatuses)>,
 }
 
-impl MemoryStore {
+static MAPS: Mutex<Option<Maps>> = Mutex::new(None);
+
+/// Runs `f` on the page's maps (created empty on first use).
+fn with<R>(f: impl FnOnce(&mut Maps) -> R) -> R {
+    let mut g = MAPS.lock().expect("directory cache lock");
+    f(g.get_or_insert_with(Maps::default))
+}
+
+/// Handle to the page's directory cache (what `open_store` returns on wasm32).
+#[derive(Default)]
+pub(crate) struct MemoryStore;
+
+impl Maps {
     /// `ORDER BY valid_until DESC LIMIT 1` over the matching consensuses.
     fn latest(&self, flavor: ConsensusFlavor, pending: Option<bool>) -> Option<&Consensus> {
         self.consensuses
@@ -62,26 +81,32 @@ impl Store for MemoryStore {
     }
 
     fn expire_all(&mut self, expiration: &ExpirationConfig) -> Result<()> {
-        let now: OffsetDateTime = SystemTime::get().into();
-        // DROP_OLD_MICRODESCS / AUTHCERTS / CONSENSUSES / ROUTERDESCS / BRIDGEDESCS
-        self.microdescs.retain(|_, (listed, _)| *listed >= now - expiration.microdescs);
-        self.authcerts.retain(|_, (expires, _)| *expires >= now - expiration.authcerts);
-        self.consensuses
-            .retain(|c| OffsetDateTime::from(c.meta.lifetime().valid_until()) >= now - expiration.consensuses);
-        #[cfg(feature = "routerdesc")]
-        self.routerdescs.retain(|_, (published, _)| *published >= now - expiration.router_descs);
-        #[cfg(feature = "bridge-client")]
-        self.bridgedescs
-            .retain(|_, (d, until)| !(now > *until || OffsetDateTime::from(d.fetched) > now));
-        Ok(())
+        with(|m| {
+            let now: OffsetDateTime = SystemTime::get().into();
+            // DROP_OLD_MICRODESCS / AUTHCERTS / CONSENSUSES / ROUTERDESCS / BRIDGEDESCS
+            m.microdescs.retain(|_, (listed, _)| *listed >= now - expiration.microdescs);
+            m.authcerts.retain(|_, (expires, _)| *expires >= now - expiration.authcerts);
+            m.consensuses
+                .retain(|c| OffsetDateTime::from(c.meta.lifetime().valid_until()) >= now - expiration.consensuses);
+            #[cfg(feature = "routerdesc")]
+            m.routerdescs.retain(|_, (published, _)| *published >= now - expiration.router_descs);
+            #[cfg(feature = "bridge-client")]
+            m.bridgedescs
+                .retain(|_, (d, until)| !(now > *until || OffsetDateTime::from(d.fetched) > now));
+            Ok(())
+        })
     }
 
     fn latest_consensus(&self, flavor: ConsensusFlavor, pending: Option<bool>) -> Result<Option<InputString>> {
-        Ok(self.latest(flavor, pending).map(|c| InputString::from(c.text.clone())))
+        with(|m| {
+            Ok(m.latest(flavor, pending).map(|c| InputString::from(c.text.clone())))
+        })
     }
 
     fn latest_consensus_meta(&self, flavor: ConsensusFlavor) -> Result<Option<ConsensusMeta>> {
-        Ok(self.latest(flavor, Some(false)).map(|c| c.meta.clone()))
+        with(|m| {
+            Ok(m.latest(flavor, Some(false)).map(|c| c.meta.clone()))
+        })
     }
 
     #[cfg(test)]
@@ -92,103 +117,265 @@ impl Store for MemoryStore {
     }
 
     fn consensus_by_sha3_digest_of_signed_part(&self, d: &[u8; 32]) -> Result<Option<(InputString, ConsensusMeta)>> {
-        Ok(self
-            .consensuses
-            .iter()
-            .find(|c| c.meta.sha3_256_of_signed() == d)
-            .map(|c| (InputString::from(c.text.clone()), c.meta.clone())))
+        with(|m| {
+            Ok(m.consensuses
+                .iter()
+                .find(|c| c.meta.sha3_256_of_signed() == d)
+                .map(|c| (InputString::from(c.text.clone()), c.meta.clone())))
+        })
     }
 
     fn store_consensus(&mut self, cmeta: &ConsensusMeta, flavor: ConsensusFlavor, pending: bool, contents: &str) -> Result<()> {
-        // INSERT OR REPLACE keyed by the digest of the whole document.
-        self.consensuses.retain(|c| c.meta.sha3_256_of_whole() != cmeta.sha3_256_of_whole());
-        self.consensuses.push(Consensus { meta: cmeta.clone(), flavor, pending, text: contents.to_owned() });
-        Ok(())
+        with(|m| {
+            // INSERT OR REPLACE keyed by the digest of the whole document.
+            m.consensuses.retain(|c| c.meta.sha3_256_of_whole() != cmeta.sha3_256_of_whole());
+            m.consensuses.push(Consensus { meta: cmeta.clone(), flavor, pending, text: contents.to_owned() });
+            Ok(())
+        })
     }
 
     fn mark_consensus_usable(&mut self, cmeta: &ConsensusMeta) -> Result<()> {
-        for c in &mut self.consensuses {
-            if c.meta.sha3_256_of_whole() == cmeta.sha3_256_of_whole() {
-                c.pending = false;
+        with(|m| {
+            for c in &mut m.consensuses {
+                if c.meta.sha3_256_of_whole() == cmeta.sha3_256_of_whole() {
+                    c.pending = false;
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn delete_consensus(&mut self, cmeta: &ConsensusMeta) -> Result<()> {
-        self.consensuses.retain(|c| c.meta.sha3_256_of_whole() != cmeta.sha3_256_of_whole());
-        Ok(())
+        with(|m| {
+            m.consensuses.retain(|c| c.meta.sha3_256_of_whole() != cmeta.sha3_256_of_whole());
+            Ok(())
+        })
     }
 
     fn authcerts(&self, certs: &[AuthCertKeyIds]) -> Result<HashMap<AuthCertKeyIds, String>> {
-        Ok(certs.iter().filter_map(|ids| self.authcerts.get(ids).map(|(_, t)| (*ids, t.clone()))).collect())
+        with(|m| {
+            Ok(certs.iter().filter_map(|ids| m.authcerts.get(ids).map(|(_, t)| (*ids, t.clone()))).collect())
+        })
     }
 
     fn store_authcerts(&mut self, certs: &[(AuthCertMeta, &str)]) -> Result<()> {
-        for (meta, content) in certs {
-            self.authcerts.insert(*meta.key_ids(), (meta.expires().into(), (*content).to_owned()));
-        }
-        Ok(())
+        with(|m| {
+            for (meta, content) in certs {
+                m.authcerts.insert(*meta.key_ids(), (meta.expires().into(), (*content).to_owned()));
+            }
+            Ok(())
+        })
     }
 
     fn microdescs(&self, digests: &[MdDigest]) -> Result<HashMap<MdDigest, String>> {
-        Ok(digests.iter().filter_map(|d| self.microdescs.get(d).map(|(_, t)| (*d, t.clone()))).collect())
+        with(|m| {
+            Ok(digests.iter().filter_map(|d| m.microdescs.get(d).map(|(_, t)| (*d, t.clone()))).collect())
+        })
     }
 
     fn store_microdescs(&mut self, digests: &[(&str, &MdDigest)], when: SystemTime) -> Result<()> {
-        let when: OffsetDateTime = when.into();
-        for (content, d) in digests {
-            self.microdescs.insert(**d, (when, (*content).to_owned()));
-        }
-        Ok(())
+        with(|m| {
+            let when: OffsetDateTime = when.into();
+            for (content, d) in digests {
+                m.microdescs.insert(**d, (when, (*content).to_owned()));
+            }
+            Ok(())
+        })
     }
 
     fn update_microdescs_listed(&mut self, digests: &[MdDigest], when: SystemTime) -> Result<()> {
-        let when: OffsetDateTime = when.into();
-        for d in digests {
-            if let Some((listed, _)) = self.microdescs.get_mut(d) {
-                *listed = (*listed).max(when);
+        with(|m| {
+            let when: OffsetDateTime = when.into();
+            for d in digests {
+                if let Some((listed, _)) = m.microdescs.get_mut(d) {
+                    *listed = (*listed).max(when);
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     #[cfg(feature = "routerdesc")]
     fn routerdescs(&self, digests: &[RdDigest]) -> Result<HashMap<RdDigest, String>> {
-        Ok(digests.iter().filter_map(|d| self.routerdescs.get(d).map(|(_, t)| (*d, t.clone()))).collect())
+        with(|m| {
+            Ok(digests.iter().filter_map(|d| m.routerdescs.get(d).map(|(_, t)| (*d, t.clone()))).collect())
+        })
     }
 
     #[cfg(feature = "routerdesc")]
     fn store_routerdescs(&mut self, digests: &[(&str, SystemTime, &RdDigest)]) -> Result<()> {
-        for (content, when, d) in digests {
-            self.routerdescs.insert(**d, ((*when).into(), (*content).to_owned()));
-        }
-        Ok(())
+        with(|m| {
+            for (content, when, d) in digests {
+                m.routerdescs.insert(**d, ((*when).into(), (*content).to_owned()));
+            }
+            Ok(())
+        })
     }
 
     #[cfg(feature = "bridge-client")]
     fn lookup_bridgedesc(&self, bridge: &BridgeConfig) -> Result<Option<CachedBridgeDescriptor>> {
-        Ok(self.bridgedescs.get(&bridge.to_string()).map(|(d, _)| d.clone()))
+        with(|m| {
+            Ok(m.bridgedescs.get(&bridge.to_string()).map(|(d, _)| d.clone()))
+        })
     }
 
     #[cfg(feature = "bridge-client")]
     fn store_bridgedesc(&mut self, bridge: &BridgeConfig, entry: CachedBridgeDescriptor, until: SystemTime) -> Result<()> {
-        self.bridgedescs.insert(bridge.to_string(), (entry, until.into()));
-        Ok(())
+        with(|m| {
+            m.bridgedescs.insert(bridge.to_string(), (entry, until.into()));
+            Ok(())
+        })
     }
 
     #[cfg(feature = "bridge-client")]
     fn delete_bridgedesc(&mut self, bridge: &BridgeConfig) -> Result<()> {
-        self.bridgedescs.remove(&bridge.to_string());
-        Ok(())
+        with(|m| {
+            m.bridgedescs.remove(&bridge.to_string());
+            Ok(())
+        })
     }
 
     fn update_protocol_recommendations(&mut self, valid_after: SystemTime, protocols: &ProtoStatuses) -> Result<()> {
-        self.protocols = Some((valid_after, protocols.clone()));
-        Ok(())
+        with(|m| {
+            m.protocols = Some((valid_after, protocols.clone()));
+            Ok(())
+        })
     }
 
     fn cached_protocol_recommendations(&self) -> Result<Option<(SystemTime, ProtoStatuses)>> {
-        Ok(self.protocols.clone())
+        with(|m| {
+            Ok(m.protocols.clone())
+        })
     }
+}
+
+// ---- Ephem: snapshots for warm starts (IndexedDB, kept by the page) ----
+
+/// Snapshot format version.
+const SNAPSHOT_V: u8 = 1;
+
+#[derive(Serialize, Deserialize)]
+struct Snapshot {
+    v: u8,
+    consensuses: Vec<SnapConsensus>,
+    authcerts: Vec<SnapCert>,
+    microdescs: Vec<SnapMd>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SnapConsensus {
+    flavor: String,
+    /// valid-after, fresh-until, valid-until (Unix seconds).
+    lifetime: [u64; 3],
+    /// SHA3-256 of the signed part and of the whole document (hex).
+    signed: String,
+    whole: String,
+    text: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SnapCert {
+    id: String,
+    sk: String,
+    expires: i64,
+    text: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SnapMd {
+    digest: String,
+    listed: i64,
+    text: String,
+}
+
+fn secs(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+fn digest(h: &str) -> Option<[u8; 32]> {
+    hex::decode(h).ok()?.try_into().ok()
+}
+
+/// The usable (not pending) consensuses, authority certificates and microdescriptors, as
+/// JSON; `None` before anything was downloaded. Public directory data only.
+pub fn cache_export() -> Option<String> {
+    with(|m| {
+        if m.consensuses.iter().all(|c| c.pending) {
+            return None;
+        }
+        let snap = Snapshot {
+            v: SNAPSHOT_V,
+            consensuses: m
+                .consensuses
+                .iter()
+                .filter(|c| !c.pending)
+                .map(|c| {
+                    let l = c.meta.lifetime();
+                    SnapConsensus {
+                        flavor: c.flavor.name().to_owned(),
+                        lifetime: [secs(l.valid_after()), secs(l.fresh_until()), secs(l.valid_until())],
+                        signed: hex::encode(c.meta.sha3_256_of_signed()),
+                        whole: hex::encode(c.meta.sha3_256_of_whole()),
+                        text: c.text.clone(),
+                    }
+                })
+                .collect(),
+            authcerts: m
+                .authcerts
+                .iter()
+                .map(|(ids, (expires, text))| SnapCert {
+                    id: hex::encode(ids.id_fingerprint.as_bytes()),
+                    sk: hex::encode(ids.sk_fingerprint.as_bytes()),
+                    expires: expires.unix_timestamp(),
+                    text: text.clone(),
+                })
+                .collect(),
+            microdescs: m
+                .microdescs
+                .iter()
+                .map(|(d, (listed, text))| SnapMd { digest: hex::encode(d), listed: listed.unix_timestamp(), text: text.clone() })
+                .collect(),
+        };
+        serde_json::to_string(&snap).ok()
+    })
+}
+
+/// Seeds the cache from a snapshot of [`cache_export`], before the Tor client starts. Entries
+/// are kept as they are: arti validates cached documents (signatures, lifetimes) on load, as it
+/// does with its SQLite cache. Returns whether the snapshot was readable.
+pub fn cache_import(json: &str) -> bool {
+    let Ok(snap) = serde_json::from_str::<Snapshot>(json) else { return false };
+    if snap.v != SNAPSHOT_V {
+        return false;
+    }
+    let time = |s: i64| OffsetDateTime::from_unix_timestamp(s).ok();
+    with(|m| {
+        for c in snap.consensuses {
+            let at = |i: usize| UNIX_EPOCH + Duration::from_secs(c.lifetime[i]);
+            let (Ok(flavor), Ok(lifetime), Some(signed), Some(whole)) = (
+                ConsensusFlavor::from_opt_name(Some(&c.flavor)),
+                Lifetime::new(at(0), at(1), at(2)),
+                digest(&c.signed),
+                digest(&c.whole),
+            ) else {
+                continue;
+            };
+            m.consensuses.retain(|x| x.meta.sha3_256_of_whole() != &whole);
+            m.consensuses.push(Consensus { meta: ConsensusMeta::new(lifetime, signed, whole), flavor, pending: false, text: c.text });
+        }
+        for a in snap.authcerts {
+            let ids = hex::decode(&a.id).ok().zip(hex::decode(&a.sk).ok()).and_then(|(id, sk)| {
+                Some(AuthCertKeyIds { id_fingerprint: RsaIdentity::from_bytes(&id)?, sk_fingerprint: RsaIdentity::from_bytes(&sk)? })
+            });
+            if let (Some(ids), Some(expires)) = (ids, time(a.expires)) {
+                m.authcerts.insert(ids, (expires, a.text));
+            }
+        }
+        for d in snap.microdescs {
+            if let (Some(digest), Some(listed)) = (digest(&d.digest), time(d.listed)) {
+                m.microdescs.insert(digest, (listed, d.text));
+            }
+        }
+    });
+    true
 }

@@ -565,6 +565,7 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       const t = text(ptr, len);
       if (num === 2) {
         torReady = true;
+        later(saveTorCache);
         $('tor-state').textContent = `Reachable through Tor while this tab is open (${t.slice(0, 8)}….onion): by your invites, and by your contacts when you are signed in.`;
         if (!$('v-start').hidden) status('Tor ready', 'ok');
       } else if (num === 3) {
@@ -1291,10 +1292,35 @@ function connectContact(hex, name) {
 
 // Test hook: the offline lab (checks/tor-lab) sets `ephemTorLab` before the page loads (its own
 // broker, bridge and Tor network). A page script cannot set it: the CSP allows only our files.
-function startTor() {
+async function startTor() {
   const c = globalThis.ephemTorLab || SNOWFLAKE;
   if (globalThis.ephemTorLab?.log) app.tor_log(globalThis.ephemTorLab.log);
-  app.tor_start(c.broker, c.fingerprint, c.ice, c.nat, c.network);
+  torCacheKey = `dir:${c.fingerprint}`;
+  app.tor_start(c.broker, c.fingerprint, c.ice, c.nat, c.network, await torCache());
+  setInterval(saveTorCache, 30 * 60 * 1000);
+}
+
+// Warm start (§28.3): the public Tor directory (consensus, authority certificates,
+// microdescriptors) is kept in IndexedDB between sessions. Nothing about chats, peers or keys.
+let torCacheKey = '';
+function torDb(mode, fn) {
+  return new Promise((resolve) => {
+    const req = indexedDB.open('ephem-tor', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('dir');
+    req.onerror = () => resolve('');
+    req.onsuccess = () => {
+      const db = req.result;
+      const t = db.transaction('dir', mode);
+      const r = fn(t.objectStore('dir'));
+      t.oncomplete = () => { db.close(); resolve(r.result ?? ''); };
+      t.onerror = () => { db.close(); resolve(''); };
+    };
+  });
+}
+const torCache = () => torDb('readonly', (s) => s.get(torCacheKey)).catch(() => '');
+function saveTorCache() {
+  const snap = app.tor_cache();
+  if (snap) torDb('readwrite', (s) => s.put(snap, torCacheKey)).catch(() => {});
 }
 
 // ---- boot ----------------------------------------------------------------------------------

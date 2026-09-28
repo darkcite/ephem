@@ -6,8 +6,8 @@
 |---|---|
 | Product | **Ephem** |
 | Document | The **single** project document. It replaces the earlier SPEC, REVIEW, plans and spike notes (all merged here on 2026-09-28) |
-| Spec level | v0.9 (see the decision log, §25) |
-| Status | MVP-1, MVP-2 and MVP-3 built and tested end to end. **Gate G2 passed on desktop and iOS**; Tor mode and public channels are now gated only by G3–G4 (need TOR-1 code) (§23.3) |
+| Spec level | v1.0 (see the decision log, §25) |
+| Status | MVP-1, MVP-2 and MVP-3 built and tested end to end. **Tor mode (TOR-1…TOR-4) built and tested end to end in an offline Tor lab** (1:1, contacts, rooms; §24.2). Gate G2 passed on desktop and iOS; G3/G4 pass in the lab and still need the live Tor network on the owner's devices (§23.3) |
 | Deployment | GitHub Pages, project site `https://<owner>.github.io/ephem/` |
 | Runtime | Browser PWA. **Only our WASM app is built: no native programs (P10)** |
 | Implementation | Rust (edition 2024) → `wasm32-unknown-unknown` |
@@ -40,7 +40,8 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 | Built | **MVP-1 feature-complete, 41/41 end-to-end checks in Chromium** (APP-E2E, §24.2): landing page; `/app/` PWA; temporary or saved identity (encrypted key file, one identity per tab); invite → answer by QR (camera scanner in wasm), link or paste, hand-off between tabs; Noise KK; SAS policy; 1:1 chat with pending queue and ticks 🕓 ✓ ✓✓, typing, reply, edit, delete, self-destruct timers; T3 reconnect codes; diagnostics with relay rejection; "what your peer sees" panel and IPv6 warning; version-pinned service worker, SRI, offline start. 188 KB gzip wasm. 33 native unit tests |
 | Built (MVP-2) | **MVP-2 feature-complete, 18/18 end-to-end checks** (APP-E2E-MVP2, §24.2): up to 8 remembered identities (IndexedDB) with sign-in from the list; nicknames; contacts in the key file (verified by SAS, SAS skipped next time, impersonation warning, backup-out-of-date notice); reactions; identity transfer to another device over P2P; in-band ICE restart T1 (perfect negotiation, triggered by a stuck path, a network change or by hand); full diagnostics. 40 native unit tests |
 | Built (MVP-3) | **Rooms, 18/18 end-to-end checks with four browsers** (APP-E2E-ROOM, §24.2): owner-controlled rooms of up to 16 with member and **observer** roles; the owner-signed room state (Ed25519) verified by every member; introductions through the owner with **sealed** signalling (the owner forwards what it cannot read); full mesh; one sequence number per sender on every link; sender labels, replies across members, delivery "✓ k/N"; owner moderation and room timer; removal, leaving, disposal; **T2** (lost member links come back by themselves through the owner). 225 KB gzip wasm. 46 native unit tests |
-| Next | 1. Tor mode: TOR-1 steps E3–E5 (gates G3, G4), then TOR-2… (§28, Appendix C). Work continues on the development branch; **merge to `main`, public repo and Pages only once Tor is fully implemented** (§23.1a, owner decision 2026-09-28). 2. Device runs of the room flow (S9: 16 links on iOS Safari). Camera/QR work waits until Tor is in (owner decision) |
+| Built (Tor) | **Tor mode, in the offline lab** (`checks/tor-lab/`: private Tor network + the real Go Snowflake broker, proxy and server): Snowflake client in Rust (Turbotunnel, KCP, smux; 10 MB interop with the Go server, fuzzed); arti in the page over Snowflake; **onion service hosted from a tab**; `app/tor.html` with the Tor build of the app. **1:1 chat over Tor 16/16** (APP-E2E-TOR: one-way TOR_INVITE, Noise IK, same SAS, chat, receipts, stream loss → redial, contacts connect with no code) and **rooms over Tor 9/9** (APP-E2E-TOR-ROOM: owner + 2 members, introductions onion to onion, redial). Bootstrap 5.8 s in the lab; Tor build 2.08 MB gzip |
+| Next | 1. **Live Tor network on the owner's laptop and iPhone** (T-10: G3 bootstrap times, G4 memory on iOS), then merge to `main`, public repo and Pages (§23.1a: only once Tor is fully implemented, owner decision 2026-09-28). 2. Tor leftovers: AMP-cache rendezvous, card-based dial (needs CARDS). 3. Device runs of the room flow (S9). Camera/QR work waits until Tor is in (owner decision) |
 | Blocked on devices | S3, S6, S7, S9 (phones, real networks) |
 
 ---
@@ -173,13 +174,16 @@ ephem/
 │   │   ├── messages.rs             # message table: TTL, edit, delete, replies, reactions, ticks (§11.7)
 │   │   ├── transport.rs            # Transport = Direct(WebRTC) | Tor(embedded), mode guard (§28.5)
 │   │   └── io.rs                   # Input / Action enums, ActionSink (fixed capacity)
-│   └── wasm/                       # the ONLY crate touching the browser
-│       ├── lib.rs                  # #[wasm_bindgen] App facade, events to JS, identity save/load
-│       ├── rtc.rs                  # web-sys RTCPeerConnection / RTCDataChannel adapter, getStats path check
-│       ├── qr.rs                   # qrcode (encode) + rqrr (decode; BarcodeDetector is used from JS when present)
-│       ├── (key files, contacts, transfer in lib.rs; IndexedDB slots ≤ 8 in app/slots.js: it stores only the encrypted key file)
-│       └── tor/                    # embedded Tor (§28): arti runtime shim, Snowflake transport, IndexedDB dir cache
-│                                   # built as a separate lazily-loaded WASM module (tor_bg.wasm), used only by tor.html
+│   ├── wasm/                       # the ONLY crate touching the browser
+│   │   ├── lib.rs                  # #[wasm_bindgen] App facade, events to JS, identity save/load
+│   │   ├── rtc.rs                  # web-sys RTCPeerConnection / RTCDataChannel adapter, getStats path check
+│   │   ├── qr.rs                   # qrcode (encode) + rqrr (decode; BarcodeDetector is used from JS when present)
+│   │   ├── room.rs                 # rooms: owner-signed state, introductions, T2 (§14)
+│   │   ├── tor.rs                  # Tor build only (feature `tor`): chat links over Tor streams, onion service (§28)
+│   │   └── (key files, contacts, transfer in lib.rs; IndexedDB slots ≤ 8 in app/slots.js: it stores only the encrypted key file)
+│   ├── snowflake/                  # sans-IO Snowflake client: Turbotunnel, encapsulation, KCP, smux (§28.3)
+│   └── tor/                        # arti in the page: runtime shim, Snowflake carrier, bridge-as-TCP, TLS (§28.3)
+├── vendor/                         # four arti 0.46 crates with small wasm-only patches (vendor/README.md)
 ├── app/                            # static web app (§4.1): index.html, app.js, app.css, sw.js, manifest, icons, pkg/
 ├── index.html, site.css            # landing page (§23.1a)
 ├── tools/                          # stamp.py (integrity, §17.2), make_icons.py
@@ -1059,10 +1063,10 @@ Members     4 / 8  (links 5 / 6)
 | **MVP-2** | T1 in-band ICE restart and `NetChanged` handling; full diagnostics; **contacts; several identities (IndexedDB slots, Web Locks); identity transfer over P2P; reactions** | MVP-1; S3 |
 | **MVP-3** | Owner-controlled rooms of up to 16 members, with **observer role** and owner moderation (delete); introductions by the owner with sealed signalling; owner-signed room state (v0.9, no MLS); room disposal; T2 recovery through the owner | MVP-2; S9 |
 | **CARDS** | Contact cards and card secrets | MVP-2 |
-| **TOR-1** | Embedded Tor in WASM (Appendix C steps E2–E7): runtime shim, Snowflake transport in Rust (KCP + smux), IndexedDB directory cache, onion hosting from a tab | Gates G2–G4 |
-| **TOR-2** | Tor mode for 1:1: transport guard, TOR_INVITE (one-way), Noise IK, stream framing, "VIA TOR" UI | TOR-1 |
-| **TOR-3** | Contacts reconnect through stable onion addresses (no QR); card-based Tor dial | TOR-2, CARDS |
-| **TOR-4** | Rooms over Tor | TOR-3, MVP-3 |
+| **TOR-1** | Embedded Tor in WASM (Appendix C steps E2–E7): runtime shim, Snowflake transport in Rust (KCP + smux), IndexedDB directory cache, onion hosting from a tab | Gates G2–G4. **Built (lab)** |
+| **TOR-2** | Tor mode for 1:1: transport guard, TOR_INVITE (one-way), Noise IK, stream framing, "VIA TOR" UI | TOR-1. **Built (lab)** |
+| **TOR-3** | Contacts reconnect through stable onion addresses (no QR); card-based Tor dial | TOR-2, CARDS. **Built (lab)**, except the card-based dial (CARDS) |
+| **TOR-4** | Rooms over Tor | TOR-3, MVP-3. **Built (lab)** |
 | **CH-1…CH-5** | Public channels with a Tor-only owner, hosted from the owner's tab (Appendix D) | TOR-1, E8 |
 | **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16 | — |
 
@@ -1075,7 +1079,7 @@ Members     4 / 8  (links 5 / 6)
   |---|---|
   | `/` | **Landing page** (static HTML, no scripts needed): **Ephem**: what the messenger is, how a chat starts (two codes, in person or by link), what is and is not protected (§21), supported browsers, and a prominent **Start** link to `/app/` |
   | `/app/` | The PWA: `index.html`, `app.js` (DOM glue only), `app.css`, `sw.js`, `manifest.webmanifest`, `icons/`, `pkg/ephem.js` + `pkg/ephem_bg.wasm` (built and stamped by `./build.sh`, committed) (§4.1) |
-  | `/app/tor.html` | Tor-mode entry (§28.6), once TOR-2 ships |
+  | `/app/tor.html` | Tor-mode entry (§28.2, §28.6): generated from `index.html` by `tools/stamp.py`, loads `pkg/ephem_tor.js` + `pkg/ephem_tor_bg.wasm` |
   | `/checks/web/` | The checkpoint page (§24) |
   | `/docs/P2P-CHAT.md` | This document |
 
@@ -1099,8 +1103,8 @@ MVP-1 does not depend on Tor. The Tor track runs in parallel and is dropped clea
 |---|---|---|---|
 | G1 | arti builds for `wasm32` without forking its core | ✅ Passed at compile level (E1) | — |
 | G2 | Snowflake broker rendezvous and a DataChannel to a proxy work from a browser, on desktop **and** iOS Safari | ✅ **Passed** (2026-09-28): Chrome 153 and Safari 26.5 on macOS; **iPhone Safari (iOS 18.7)**: rendezvous 0.5–0.7 s, DataChannel open 1.4–2.2 s, through both the CDN URL and the direct broker | No Tor mode; no public channels; IP privacy via VPN/WARP only |
-| G3 | Tor bootstrap ≤ 60 s cold, ≤ 10 s warm; an onion connects on desktop and iOS | ⏳ needs TOR-1 code | Same as G2 |
-| G4 | `tor_bg.wasm` ≤ 5 MB compressed; no iOS memory kills; onion hosting from a tab works | ⏳ needs TOR-1 code | Client-only Tor (dial, no hosting): no one-way invites from Tor hosts in tabs, no channels |
+| G3 | Tor bootstrap ≤ 60 s cold, ≤ 10 s warm; an onion connects on desktop and iOS | ✅ **Lab, Chromium:** bootstrap 5.5–17 s (small private network), a tab's onion reached in 1–12 s. ⏳ **Live network** (real directory through Snowflake; iOS) on the owner's devices | Same as G2 |
+| G4 | Tor build ≤ 5 MB compressed; no iOS memory kills; onion hosting from a tab works | ✅ **Size: 2.08 MB gzip** (5.49 MB raw, before `wasm-opt`). ✅ **Onion hosting from a tab** (lab). ⏳ iOS memory | Client-only Tor (dial, no hosting): no one-way invites from Tor hosts in tabs, no channels |
 
 ## 24. Checkpoints
 
@@ -1117,11 +1121,12 @@ E8REAL=1 ONLY=e8real ./checks/run_all.sh e8   # E8 in your real Chrome, Safari a
                                                # switch to another tab in each for ≥ 6 min, then come back
 BROWSERS=chrome,firefox ONLY=browser ./checks/run_all.sh firefox   # Firefox (brew install node@22; picked up automatically)
 NET=0 SKIP_ARTI=1 ./checks/run_all.sh quick   # offline, fast
+./build.sh && ONLY=tor ./checks/run_all.sh tor-live   # Tor mode on the real Tor network (T-10): 1:1, contacts, rooms
 ```
 
 - **Needs:** Node ≥ 20, Python ≥ 3.9, Rust (rustup). For E1 only: an LLVM clang with the WebAssembly backend (Linux `clang`; macOS `brew install llvm`, because Apple's clang has none). Runs on macOS or Linux; on Windows, use WSL2.
 - **`SAFARI=1`** also runs the page in your real Safari, **including cross-engine S1** (Chrome ↔ Safari in both directions, exchanging only the minimal fields through a local mailbox).
-- **`ONLY=`** limits a run to some sections: `app, stun, gateways, browser, safari, iphone, sizes, argon2, arti`. `ONLY=app` runs the MVP-1 native tests and the end-to-end chat test (`checks/e2e_app.mjs`) in your installed Chrome.
+- **`ONLY=`** limits a run to some sections: `app, tor, stun, gateways, browser, safari, iphone, sizes, argon2, arti`. `ONLY=tor` runs the Tor-mode e2e tests on the real Tor network (and in the offline lab when `checks/tor-lab/lab.sh up` is running). `ONLY=app` runs the MVP-1 native tests and the end-to-end chat test (`checks/e2e_app.mjs`) in your installed Chrome.
 - **Two real devices while the repo is private:** `node checks/serve_app.mjs` serves the landing page and `/app/` from the laptop through a free Cloudflare quick tunnel (`brew install cloudflared`) and prints the HTTPS address and a QR code. Only the static files use the tunnel; the chat is direct WebRTC. Use it for S3, S10 (two devices) and the iPhone app.
 - **Building the app:** `./build.sh` (needs the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` 0.2.129; uses `wasm-opt` if present) writes `app/pkg/`. Native tests: `cargo test --workspace`.
 - **iPhone while the repo is private:** `IPHONE=1` serves `checks/web/` from the laptop through a free Cloudflare quick tunnel (`brew install cloudflared`, no account), prints a QR code, and collects the results automatically. `S6_SECONDS` sets the S6 target (default 120 s).
@@ -1153,11 +1158,19 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 | S10 | NAT mapping type (IPv4): does one local socket keep the same public port toward different servers? | ✅ Measured (macOS, 2026-09-28, one socket, two servers). **Home ISP router: endpoint-independent (cone)**, same port `55298` for both, so direct P2P from home normally works. **Cloudflare WARP: address-dependent (symmetric)**, `50104` vs `49370`. **Consequence:** WARP hides the IP (TS3 ✅) but direct connections through it succeed only if the other peer is easy to reach (public IPv6, or a cone NAT that is not port-restricted). WARP ↔ WARP and WARP ↔ strict mobile carrier NAT are expected to fail with `E_NO_DIRECT_PATH`, because there is no relay (P8). **Tor mode does not depend on NAT type** (onion services only make outbound connections), so it is the robust IP-hiding option. The UI suggests it on `E_NO_DIRECT_PATH`, explicitly and never automatically. **Confirmed with MVP-1 (2026-09-28, laptop + iPhone via `checks/serve_app.mjs`):** without WARP they connect and chat; **with WARP on the laptop and the iPhone on home Wi-Fi they do not** (`E_NO_DIRECT_PATH`), as predicted for symmetric ↔ port-restricted NAT. **Across networks: laptop on home Wi-Fi ↔ iPhone on mobile data works, with and without WARP on the laptop.** So WARP fails only against a port-restricted home router; the carrier side is reachable | 🤖 | §9, §28, §29.1 |
 | E1 | arti on `wasm32` (**G1**) | ✅ **Linux and macOS (arm64)**: arti 0.46.0, 16/16 crates, plus `arti-client` with onion client and service, ephemeral keystore, bridges, PT, rustls. Upstream has wasm stubs; `coarsetime` uses `performance.now()`. TLS: **ring** with `wasm32_unknown_unknown_js`. **Without the `compression` feature** (zstd/xz), **ring is the only C code**; it needs an LLVM clang with the WebAssembly backend (Linux clang; macOS `brew install llvm`). Extension point for Snowflake: `AbstractPtMgr` / `ChanMgr::set_pt_mgr` | 🤖 | §28 |
 | E2 | Snowflake from a browser (**G2**) | ✅ **Live:** Chrome 153, Safari 26.5, **Firefox 142** (macOS) and iPhone Safari (iOS 18.7) get a proxy answer from the broker and open a DataChannel to a volunteer proxy, through **both** the CDN URL (`1098762253.rsc.cdn77.org`, no domain fronting needed) and `snowflake-broker.torproject.net`. Rendezvous 0.7–4.8 s; DataChannel open 2–6 s after start; sometimes the first tries report no proxy available, so retry. Protocol: `POST /client`, body `1.0\n{"offer": <JSON SDP>, "nat": "unknown", "fingerprint": <bridge fp>}`; stack: WebRTC → encapsulation → KCP → smux. ⏳ iPhone | 🤖 | §28 |
-| E3–E7 | Turbotunnel, bootstrap, onion hosting, size, hardening | ⏳ needs TOR-1 code | — | G3, G4 |
+| E3 | Turbotunnel (KCP + smux) against the real Snowflake server | ✅ **Native interop** (`crates/snowflake/tests/interop.rs`): our client ↔ Go snowflake server v2.14.1 (as a proxy talks to it) ↔ echo, **10 MB both ways in 0.68 s, with a proxy switch mid-transfer** keeping the stream. ✅ Browser: lab broker → DataChannel → Go proxy → server. ⏳ 10 min against the real bridge | 🤖 lab | G3 |
+| E4 | arti in the page over Snowflake: bootstrap, dial an onion | ✅ **Lab, Chromium** (`checks/tor-lab/e2e_tor.mjs`): bootstrap 5.5 s, lab onion echo 9.6 s; native twin (`crates/tor/tests/lab_native.rs`) 2.3 s. arti 0.46 upstream with four small wasm-only patches (`vendor/README.md`) | 🤖 lab | G3 |
+| E5 | Onion hosting from a tab | ✅ **Lab:** a tab hosts an onion service (key from the seed); another browser, with its own arti and Snowflake, reaches it and they talk both ways (33 s first time, including descriptor publication) | 🤖 lab | G4 |
+| E6 | Size, memory, warm start | ✅ Tor build **2.08 MB gzip** (direct build 232 KB). ✅ Warm start: the directory snapshot is kept in IndexedDB and a reload loads it ("Loaded a good directory from cache"; lab snapshot 18 KB, a real one is a few MB). ⏳ iOS memory and battery (device); warm-start time on the real network | 🤖 / ✋ iPhone | G4 |
+| E7 | Fuzzing and review of our Tor-side parsers | ✅ `crates/snowflake/tests/fuzz.rs`: encapsulation, KCP, smux and the whole session take random and mutated server traffic (bit flips, inserts, drops, splices, extreme length fields) without panics, failing only with their typed errors; deterministic seeds, `FUZZ_ITERS` for longer runs. TOR_INVITE decoding is strict (exact length). Review items: §28.4 accept rules, transport guard (§28.5) | 🤖 | Sign-off |
+| APP-E2E-TOR | Does 1:1 chat work over Tor, end to end? | ✅ **Lab, Chromium, 16/16** (`checks/tor-lab/e2e_tor_app.mjs`, two browsers each with its own arti): mode routing (`#t=` → `tor.html`, `#i=` → direct page); Alice's onion up; **one 104-byte TOR_INVITE, no answer**; Bob dials, Noise IK, **same SAS**; messages both ways (50–120 ms in the lab), ✓; **stream lost on either side → the dialler redials, queued message delivered**; both save each other as contacts → later **Bob connects with no code** (after Alice signed out and in: her onion service follows the identity); no CSP violations | 🤖 lab | §28 |
+| APP-E2E-TOR-ROOM | Do rooms work over Tor? | ✅ **Lab, Chromium, 9/9** (`checks/tor-lab/e2e_tor_room.mjs`, three browsers): owner invites B and C with TOR_INVITEs (no answer box); **B and C are introduced by the owner and connect onion to onion**; no IP-exposure prompt; a member's message reaches everyone; a member's links dropped → redialled, queued message delivered | 🤖 lab | §28.7 |
 | E8 | Does a hidden desktop tab with an open DataChannel keep its timers? | ✅ **Chrome 153: yes** (604 s hidden, max gap 2.0 s). ✅ **Firefox 142: yes** (611 s hidden, max gap 1.5 s). ❌ **Safari 26.5: no**, confirmed twice (198 s hidden → 103 s gap; 604 s hidden → **150 s gap**). **Consequences:** (1) Tor mode and channel hosting (§27, §28) stay reachable from a background tab in Chrome and Firefox, but **not in Safari**, where the UI says "keep this tab visible" and recommends Chrome or Firefox for channel owners; (2) app-level PING timing tolerates throttled peers (§12) | 🤖 (E8=1) / E8REAL=1 | §12, §27, §28.3 |
 | C-P1 | Gateways: trustless CAR with CORS | ✅ `trustless-gateway.link`: CAR served to Chrome, Safari and iPhone (119 874 B), CORS `*`. **Resolved:** `ipfs.io` and `dweb.link` answer trustless requests with a **301 redirect to `trustless-gateway.link` that has no CORS header**, so browsers refuse it. They are aliases, not independent gateways. **Default list: `trustless-gateway.link` only** (one operator: availability risk, §D.6.3) | 🤖 | App. D |
 | C-P2, C-P3, C-P5 | Two onions in one tab; loading 1 000 posts; OPFS quota | ⏳ after TOR-1 | — | App. D |
 | C-P4 | Republishing signed IPNS records; browser PUT | ✅ **Live:** Chrome, Safari and **iPhone** `PUT` a signed record to `delegated-ipfs.dev` (200), and `trustless-gateway.link` serves back the **identical 397-byte record**. Kubo `name put` also accepts third-party records (source) | 🤖 | App. D |
+
+**The offline Tor lab** (`checks/tor-lab/lab.sh up`, Appendix C.5) stands in for the Tor network, which this container cannot reach; the live-network runs are T-10.
 
 **Container limits (why some checks are still open):** no outbound UDP, no IPv6, and HTTPS only to an allow-list (crates.io and the Go proxy). The Snowflake broker, IPFS gateways and STUN were unreachable, and only Chromium was installed.
 
@@ -1203,6 +1216,10 @@ The v0.1 points that were **confirmed** are kept throughout: principles P1–P9,
 | v0.7 | Visual style shared with the owner's other projects (darkcite/trading-engine-multivenue dashboard): dark panels, one monospace face, uppercase accent section titles, status chips; dark-only | §23.1a |
 | v0.8 | MVP-2: IDENTITY_READY (0x41) orders the transfer; SIGNAL body = §8.3 ICE layout; T1 by perfect negotiation with DTLS roles kept; remembered identities in IndexedDB hold only the encrypted key file | §7.6, §11.2, §13 |
 | v0.9 | **Rooms by owner-signed state instead of MLS**: pairwise Noise links carry every message; the owner signs the member table (Ed25519) and every member verifies it; member-to-member signalling relayed by the owner, sealed with the static-static X25519 key; the greater `PeerId` offers; T2 = resume codes through the owner; record types ROOM_STATE 0x30, ROOM_SIGNAL 0x31, ROOM_LEAVE 0x32; one `chat_seq` per sender on every link | §10.3, §11.2, §13, §14 |
+| v1.0 | **Tor mode as a second build of the same app**, not a separate `tor_bg.wasm` beside it: `crates/wasm` feature `tor` → `app/pkg/ephem_tor_bg.wasm` (adapter + arti + Snowflake), loaded only by `tor.html`; the direct build contains no Tor code and never downloads it (the service worker caches the Tor files on first use only) | §28.2, §17 |
+| v1.0 | **The Snowflake bridge is a "TCP" address**: arti dials the bridge line's placeholder address and our runtime returns the Snowflake stream for exactly that address and refuses every other one (the transport guard of §28.5 inside Tor), so no pluggable-transport manager is needed; a warm pool of Snowflake proxies absorbs arti's fixed 5 s channel timeout | App. C.5 |
+| v1.0 | Onion key = HKDF(seed, "p2pchat/onion-ed25519"), separate from the signing key; the service is re-hosted when the identity changes. Contact dials: prologue `p2pchat/contact`, zero `invite_id`, accepted only from a contact's key and only while the tab has no chat. Room introductions carry sealed TOR_INVITEs; the offering member hosts, the other dials; no T2 over Tor (the dialler redials) | §28.4, §28.7 |
+| v1.0 | Streams naming nothing of ours are dropped unanswered (no `E_NOT_A_CONTACT` is sent: nothing is told to an unknown dialler) | §28.4 |
 | v0.7 | "Simulate network loss" in the diagnostics drops the path without GOODBYE, so users (and the e2e test) can exercise T3; in a room (v0.9) it drops the member's links to other members, exercising T2 | §13, §18 |
 
 ### 25.3 Open questions
@@ -1243,29 +1260,31 @@ None.
 - **P10 (only our WASM):** the Tor client is built **into the web app**. There is no native helper.
 - **How a browser reaches Tor:** a web page cannot open TCP connections to Tor relays. The only transport it can use is **Snowflake**: WebRTC to a volunteer proxy, which relays to the Tor Project's Snowflake bridge. Tor mode therefore always runs **through bridges**, which matches the "bridges on by default" decision.
 - **Targets:** desktop Chrome, Edge, Firefox and Safari, **and iOS Safari**.
-- **Status: research-gated.** Tor mode ships only if gates G2–G4 (§28.9) pass. The compile-level gate G1 **passed** on 2026-09-28: arti 0.46.0 builds for `wasm32-unknown-unknown` with onion-service client and hosting, bridges, pluggable transports and ring-based TLS (spike E1).
+- **Status: built, tested in the offline lab.** Tor mode ships once gates G3–G4 (§28.9) also pass on the live Tor network. G1 (arti builds for `wasm32-unknown-unknown`) and G2 (Snowflake from browsers, desktop and iOS) passed on 2026-09-28; TOR-1…TOR-4 pass end to end in the lab (§24.2 APP-E2E-TOR, APP-E2E-TOR-ROOM).
 
 ### 28.2 Mode selection and isolation
 
 - The connection mode is chosen **per signed-in session**, on the sign-in screen: **Direct** (the default) or **Tor**.
 - It cannot be changed without signing out, so a single session never mixes the two.
-- **A Tor session runs on its own page, `tor.html`,** which loads the separate `tor_bg.wasm` module. Direct sessions never download the Tor code.
+- **A Tor session runs on its own page, `tor.html`,** which loads the **Tor build** of the app, `pkg/ephem_tor_bg.wasm` (the same adapter compiled with the cargo feature `tor`: arti and Snowflake inside, the WebRTC chat transport refused). Direct sessions never download the Tor code; the service worker caches the Tor files only when `tor.html` is used.
+- `tor.html` is generated from `index.html` (`tools/stamp.py`): the same page with `data-mode="tor"`, its own CSP (§28.6) and the Tor build. A `#t=` link opened on the direct page moves to `tor.html`, and a direct code opened on `tor.html` moves to the direct page, before anything else runs.
 
 ### 28.3 Embedded Tor client
 
 ```
-tor.html ── core (sans-IO, Noise, rooms) ── Transport::Tor
+tor.html ── core (sans-IO, Noise, rooms) ── Tor streams (crates/wasm feature `tor`)
               │
-              └─ tor_bg.wasm
+              └─ ephem_tor_bg.wasm
                    ├─ arti-client 0.46+ (upstream crates; features: onion-service-client/-service,
                    │   ephemeral-keystore, bridge-client, pt-client, keymgr, rustls. NOT compression: no zstd/xz C code)
                    ├─ runtime shim: spawn_local, setTimeout timers, inline "blocking", TCP/UDP = unsupported
                    ├─ TLS: rustls + ring (wasm32_unknown_unknown_js)
-                   ├─ state: in-memory, with guards and the directory cache persisted to IndexedDB (public data only)
+                   ├─ state: in memory for the session (vendored patches); the public directory (consensus,
+                   │   authority certificates, microdescriptors) is snapshotted to IndexedDB for warm starts
                    ├─ keys: arti ephemeral keystore (the onion key is derived from the seed, §7.1, and kept in RAM only)
-                   └─ PT manager (AbstractPtMgr) = Snowflake in Rust:
+                   └─ bridge "TCP" stream = Snowflake in Rust (no PT manager, App. C.5):
                         broker fetch (CORS *) → RTCPeerConnection to a proxy (web-sys)
-                        → Snowflake encapsulation → KCP → smux → bridge byte stream
+                        → Turbotunnel → KCP → smux → bridge byte stream
 ```
 
 - **Bridge lines:** the Snowflake bridge lines and broker URL are built in, as in Tor Browser, and updated with app releases.
@@ -1295,7 +1314,8 @@ The virtual port is fixed. There are no ICE candidates, fingerprints or answer.
   2. the payload names a **live, unused** `invite_id`;
   3. the payload carries the current, unexpired **`card_secret`** (§7.5). The user is then asked "Bob (from your contact card) wants to connect", and the key is added as a contact if they accept.
 
-  Everything else is closed with `E_NOT_A_CONTACT` before any application data. This blocks spam, which was Tox's "nospam" problem.
+  Everything else is dropped before any application data, unanswered (nothing is told to an unknown dialler). This blocks spam, which was Tox's "nospam" problem.
+- **As built:** cases 1 and 2. A contact's stream is accepted only while the tab has no chat open (a tab holds one chat or one room); case 3 waits for contact cards (CARDS). Every incoming stream is offered to the tab's waiting chats first: its first frame (IK message 1) is decrypted with each chat's prologue until one accepts it. A link to a room member accepts only the key the signed room state names. The virtual port is 1.
 - **SAS:** prompted for every non-contact (§10.4), because Alice has no out-of-band proof of Bob's key.
 
 ### 28.5 Transport rules
@@ -1311,11 +1331,12 @@ The virtual port is fixed. There are no ICE candidates, fingerprints or answer.
 ### 28.6 CSP of `tor.html`
 
 ```
-default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self';
-img-src 'self' data: blob:; worker-src 'self'; manifest-src 'self';
-connect-src 'self' https://snowflake-broker.torproject.net https://cdn.ampproject.org;
-base-uri 'none'; form-action 'none'
+default-src 'none'; script-src 'self' 'wasm-unsafe-eval' '<import-map hash>'; style-src 'self';
+img-src 'self' data: blob:; connect-src 'self' https://snowflake-broker.torproject.net;
+worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'
 ```
+
+- Written by `tools/stamp.py`, as for `index.html` (§17.2). The AMP-cache rendezvous (`https://cdn.ampproject.org`) is added when it is implemented.
 
 - Only the broker (and the AMP-cache rendezvous) can be reached with `fetch`. Snowflake's WebRTC is not governed by CSP (§17.3 limit).
 - **Everything else goes through Tor**, including the channel owner's IPNS publishing (§27, which uses a Tor exit).
@@ -1325,7 +1346,8 @@ base-uri 'none'; form-action 'none'
 - **Contacts:** a contact entry with `onion_pk` (§7.5) enables **"Connect"**. It dials the stored onion address directly, from any network, whenever the contact has a Tor session open.
   - The onion address comes from the identity seed, so it is stable for saved identities and survives moving to another device (§7.6).
   - While signed in in Tor mode, the tab keeps the onion service up. The UI shows "Reachable by contacts via Tor while this tab is open".
-- **Rooms:** the same owner model (§14), with each member hosting an onion service. The owner sends each new member's `onion_pk` to the others, and members dial each other **directly**. The cap is 16.
+- **Rooms:** the same owner model (§14), with each member hosting an onion service. The owner invites with TOR_INVITEs; members are introduced through the owner as in direct mode, but the sealed code is a TOR_INVITE (it carries the offering member's `onion_pk`), so the other member dials that onion **directly**. Nothing is answered, and nobody is asked about IP exposure (§29.2 does not apply). A lost member link is redialled by its dialler (no T2). The cap is 16.
+- **As built:** a contact saved after a Tor chat stores its `onion_pk`; "Connect" in the contact list dials it (prologue `p2pchat/contact`, zero `invite_id`). The onion service follows the signed-in identity (re-hosted on sign-in and sign-out).
 
 ### 28.8 What Tor mode hides, and its limits
 
@@ -1346,8 +1368,8 @@ base-uri 'none'; form-action 'none'
 |---|---|---|
 | G1 | arti builds for `wasm32` without forking its core | ✅ Passed at compile level (spike E1, 2026-09-28) |
 | G2 | Broker rendezvous and a DataChannel to a Snowflake proxy work from `github.io`, on desktop **and** iOS Safari | ✅ Passed: desktop Chrome and Safari, and iPhone Safari from `darkcite.github.io` (live, 2026-09-28) |
-| G3 | Bootstrap ≤ 60 s cold and ≤ 10 s warm; an onion connects on desktop and iOS | ⏳ |
-| G4 | `tor_bg.wasm` ≤ 5 MB compressed, lazily loaded; no iOS memory kills; onion hosting from a tab works | ⏳ |
+| G3 | Bootstrap ≤ 60 s cold and ≤ 10 s warm; an onion connects on desktop and iOS | ✅ lab (Chromium); ⏳ live network, iOS (§23.3) |
+| G4 | Tor build ≤ 5 MB compressed, lazily loaded; no iOS memory kills; onion hosting from a tab works | ✅ 2.08 MB gzip, loaded only by `tor.html`; ✅ hosting from a tab (lab); ⏳ iOS memory |
 
 ## 29. IP-address privacy
 
@@ -1458,14 +1480,14 @@ Candidate line: `a=candidate:{foundation} 1 udp {priority} {addr} {port} typ {ho
 
 ```
 ┌──────────────────────────── tor.html (own CSP, §28.6) ────────────────────────────┐
-│ core (sans-IO) ── Transport::Tor ──▶ tor_bg.wasm                                  │
+│ core (sans-IO) ── Tor streams ──▶ ephem_tor_bg.wasm (Tor build of the app)        │
 │                                     ├─ arti-client 0.46+ (upstream, no fork)       │
 │                                     ├─ runtime shim: spawn_local, setTimeout,      │
 │                                     │  inline blocking, TCP/UDP = unsupported      │
 │                                     ├─ TLS: rustls + ring (wasm32_unknown_unknown_js)│
-│                                     ├─ state: in-memory; dir cache → IndexedDB     │
+│                                     ├─ state: in memory; dir snapshot → IndexedDB  │
 │                                     ├─ keys: ephemeral keystore (onion key in RAM) │
-│                                     └─ AbstractPtMgr = Snowflake (Rust)            │
+│                                     └─ bridge "TCP" stream = Snowflake (Rust)      │
 │                                          broker fetch → RTCPeerConnection to proxy │
 │                                          → encapsulation → KCP → smux              │
 └─────────────────────────────────────┬─────────────────────────────────────────────┘
@@ -1481,10 +1503,10 @@ Candidate line: `a=candidate:{foundation} 1 udp {priority} {addr} {port} typ {ho
 |---|---|---|---|
 | Runtime shim | `tor_rtcompat::Runtime`: Spawn, SleepProvider, CoarseTimeProvider, Blocking, NetStreamProvider/UdpProvider (unsupported), TlsProvider | arti's swappable runtime traits; `coarsetime` is already wasm-aware | Medium |
 | `!Send` browser objects | The Snowflake transport runs in a local task, bridged to arti through `Send` channels | `futures::channel::mpsc` | Medium |
-| Directory cache | Persist the consensus, microdescriptors and guards to IndexedDB (public data) for warm starts | arti uses in-memory state on wasm | Medium |
+| Directory cache | Persist the consensus, microdescriptors and guards to IndexedDB (public data) for warm starts | Built: `MemoryStore` (vendored `tor-dirmgr` patch) with JSON snapshots (`cache_export` / `cache_import`); the page keeps the snapshot in IndexedDB (`ephem-tor`), saved when Tor is ready and every 30 min, imported before the next start. arti re-validates it on load. Guards are not kept (the guard is the Snowflake bridge) | Medium |
 | Snowflake client | Broker rendezvous (§24.2 E2 format), WebRTC to the proxy, encapsulation, **KCP** (Rust `kcp` crate), **smux v2** (our own, small) | Reference Go client; broker CORS `*` | **High** |
 | Onion hosting | `tor-hsservice` from a tab | Compiles for wasm (E1) | Medium–High |
-| Size | Lazily loaded `tor_bg.wasm` | — | ⏳ G4 |
+| Size | Lazily loaded Tor build | 2.08 MB gzip | ✅ G4 size |
 
 ### C.3 Behaviour and limits
 
@@ -1530,26 +1552,26 @@ Candidate line: `a=candidate:{foundation} 1 udp {priority} {addr} {port} typ {ho
 **Crates and pages:**
 
 - `crates/snowflake` (sans-IO, no wasm-bindgen): encapsulation, KCP, smux, Turbotunnel session (redial on a new DataChannel keeps the KCP/smux session). Native tests + interop tests against the Go server.
-- `crates/tor` → `app/pkg/tor_bg.wasm` (lazy, only on `tor.html`): browser runtime for arti (`CompoundRuntime`: spawn via `spawn_local`, timers via `setTimeout`, `web-time` clock, blocking work inline, UDP/listen unsupported, rustls + ring TLS), the Snowflake transport (broker rendezvous by `fetch`, `RTCPeerConnection` to proxies), arti-client, onion service hosting, and the Tor transport for `core`.
-- `vendor/arti-client` (0.46.0): **one documented patch**: on wasm, the state manager is the in-memory `TestingStateMgr` instead of `unimplemented!()`. Upstream marks this spot "TODO wasm"; the patch is dropped as soon as arti ships wasm storage. arti's core crates stay unmodified (G1).
-- `app/tor.html` + `app/tor.js`: the Tor session page (own CSP, §28.6), same UI components as `/app/`.
+- `crates/tor` (a library of the Tor build; `checks/tor-lab/build_web.sh` also builds it alone, with the `js-api` feature, for the lab page): browser runtime for arti (`CompoundRuntime`: spawn via `spawn_local`, timers via `setTimeout`, `web-time` clock, blocking work inline, UDP/listen unsupported, rustls + ring TLS), the Snowflake transport (broker rendezvous by `fetch`, `RTCPeerConnection` to proxies), arti-client, onion service hosting, and the Tor transport for `core`.
+- `vendor/` (arti 0.46.0): **four small wasm-only patches**, listed in `vendor/README.md` and marked "Ephem patch": `arti-client` (in-memory state manager instead of `unimplemented!()`), `tor-persist` (in-memory state directory), `tor-hsservice` (ephemeral replay logs), `tor-dirmgr` (in-memory directory store instead of SQLite). Native builds compile the upstream paths. arti's core crates stay unmodified (G1). Each patch is dropped when upstream covers wasm.
+- `crates/wasm` feature `tor` → `app/pkg/ephem_tor_bg.wasm`: the app adapter with chat links over Tor streams (`src/tor.rs`), used by `app/tor.html` (generated, own CSP, §28.6) with the same `app.js` in Tor mode.
 
-**Offline Tor lab** (`checks/tor-lab/`, no Internet needed, because this container cannot reach torproject.org): chutney builds a private Tor network (directory authorities, relays, exits with `TestingTorNetwork`), plus one **bridge** whose ORPort is fed by the real **Go snowflake server**; the real Go **broker** and a **standalone proxy** run on localhost. arti is configured with the lab's authorities and the lab bridge. This exercises every layer end to end (browser included) exactly as on the real network; only the broker URL, bridge line and authorities differ. Live-network runs happen on the owner's laptop (`checks/run_all.sh tor`).
+**Offline Tor lab** (`checks/tor-lab/`, no Internet needed, because this container cannot reach torproject.org): chutney builds a private Tor network (directory authorities, relays, exits with `TestingTorNetwork`), plus one **bridge** whose ORPort is fed by the real **Go snowflake server**; the real Go **broker** and a **standalone proxy** run on localhost. arti is configured with the lab's authorities and the lab bridge. This exercises every layer end to end (browser included) exactly as on the real network; only the broker URL, bridge line and authorities differ. Live-network runs happen on the owner's laptop (`ONLY=tor ./checks/run_all.sh`: the same e2e tests with `LIVE=1`, the real broker, bridge and Tor network, the page unchanged).
 
 **Steps:**
 
-| # | Work | Proof |
-|---|---|---|
-| T-1 | Lab: chutney network + Go broker, proxy, server | a native Tor client (system `tor`) bootstraps through the lab |
-| T-2 (E3) | `crates/snowflake`: encapsulation, KCP, smux, Turbotunnel | unit tests; **native interop**: our client ↔ Go snowflake server (WebSocket, as a proxy would) ↔ TCP echo, 10 MB both ways; proxy switch mid-transfer keeps the stream |
-| T-3 (E3) | Browser Snowflake: broker rendezvous, DataChannel, redial | Chromium ↔ lab broker/proxy/server ↔ echo |
-| T-4 (E4) | arti runtime shim + vendored patch; bootstrap over Snowflake; dial an onion (lab onion service) | **G3** in the lab: bootstrap time cold/warm, onion echo round trip, in Chromium |
-| T-5 (E5) | Onion service hosted from the tab (key from the seed, §7.1); directory cache in IndexedDB | two Chromium tabs reach each other's onion |
-| T-6 (TOR-2) | `tor.html`; TOR_INVITE (kind 5); Noise IK over the onion stream (u16 framing); accept rules (§28.4); SAS; the same chat features | e2e: 1:1 chat over Tor in the lab |
-| T-7 (TOR-3) | Contacts with `onion_pk`: "Connect" without a QR | e2e reconnect of saved contacts |
-| T-8 (TOR-4) | Rooms over Tor: owner-signed state carries `onion_pk`; members dial each other | e2e room of 3 over Tor |
-| T-9 (E6, E7) | Size (G4), memory; fuzz the Snowflake parsers; review | numbers in §24.2 |
-| T-10 | Live network on the owner's laptop and iPhone | G3/G4 on the real Tor network |
+| # | Work | Proof | Status |
+|---|---|---|---|
+| T-1 | Lab: chutney network + Go broker, proxy, server | a native Tor client (system `tor`) bootstraps through the lab | ✅ |
+| T-2 (E3) | `crates/snowflake`: encapsulation, KCP, smux, Turbotunnel | unit tests; **native interop**: our client ↔ Go snowflake server (WebSocket, as a proxy would) ↔ TCP echo, 10 MB both ways; proxy switch mid-transfer keeps the stream | ✅ |
+| T-3 (E3) | Browser Snowflake: broker rendezvous, DataChannel, redial | Chromium ↔ lab broker/proxy/server ↔ echo | ✅ |
+| T-4 (E4) | arti runtime shim + vendored patch; bootstrap over Snowflake; dial an onion (lab onion service) | **G3** in the lab: bootstrap time cold/warm, onion echo round trip, in Chromium | ✅ |
+| T-5 (E5) | Onion service hosted from the tab (key from the seed, §7.1); directory cache in IndexedDB | two Chromium tabs reach each other's onion | ✅ (warm start: "Loaded a good directory from cache") |
+| T-6 (TOR-2) | `tor.html`; TOR_INVITE (kind 5); Noise IK over the onion stream (u16 framing); accept rules (§28.4); SAS; the same chat features | e2e: 1:1 chat over Tor in the lab | ✅ 16/16 |
+| T-7 (TOR-3) | Contacts with `onion_pk`: "Connect" without a QR | e2e reconnect of saved contacts | ✅ |
+| T-8 (TOR-4) | Rooms over Tor: introductions carry sealed TOR_INVITEs (with `onion_pk`); members dial each other | e2e room of 3 over Tor | ✅ 9/9 |
+| T-9 (E6, E7) | Size (G4), memory; fuzz the Snowflake parsers; review | numbers in §24.2 | ✅ size, fuzzing; ⏳ iOS memory |
+| T-10 | Live network on the owner's laptop and iPhone | G3/G4 on the real Tor network | ⏳ |
 
 ## Appendix D: Public channels, detailed design
 
