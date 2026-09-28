@@ -73,6 +73,38 @@ def in_warp_range(ip: str) -> bool:
     return ip.startswith(WARP_V4) or ip.lower().startswith(WARP_V6_PREFIXES)
 
 
+def nat_mapping() -> str:
+    """S10: send from ONE local socket to two STUN servers and compare the mapped ports.
+
+    Same public port for both = endpoint-independent mapping ("cone" NAT): direct P2P usually works.
+    Different ports = address-dependent mapping ("symmetric" NAT): direct P2P with another NATed
+    peer usually fails without a relay (which this design forbids).
+    """
+    targets = []
+    for host, port in SERVERS[:2]:
+        try:
+            targets.append(socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)[0][4])
+        except socket.gaierror:
+            return "INCONCLUSIVE: DNS failed"
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(3.0)
+    mapped = []
+    try:
+        for addr in targets:
+            tid = os.urandom(12)
+            sock.sendto(struct.pack("!HHI", 0x0001, 0, MAGIC) + tid, addr)
+            mapped.append(xor_mapped(sock.recvfrom(2048)[0], tid))
+    except OSError as exc:
+        return f"INCONCLUSIVE: no reply ({exc.__class__.__name__})"
+    finally:
+        sock.close()
+    local = "one local socket"
+    if mapped[0] == mapped[1]:
+        return f"endpoint-independent (cone): {local} -> {mapped[0]} for both servers; direct P2P usually works"
+    return (f"address-dependent (SYMMETRIC): {local} -> {mapped[0]} and {mapped[1]}; direct P2P with another "
+            "NATed peer usually FAILS without a relay")
+
+
 def https_view() -> dict:
     """Public IP as seen over HTTPS (TCP), and Cloudflare's WARP flag."""
     try:
@@ -116,6 +148,7 @@ def main() -> int:
     else:
         verdict = "INFO: no WARP detected; TCP and UDP leave from the same IP. If a VPN is supposed to be on, it is not active"
     print(f"TS3 verdict: {verdict}")
+    print(f"S10 NAT mapping (IPv4): {nat_mapping()}")
     return 0 if ok else 1
 
 

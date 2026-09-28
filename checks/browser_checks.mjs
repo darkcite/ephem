@@ -181,7 +181,11 @@ if (NET) {
       const r = await P.page.evaluate((s) => C.srflx(s), DEFAULT_STUN);
       const v4 = r.srflx.filter((a) => !a.includes(':')), v6 = r.srflx.filter((a) => a.includes(':'));
       rec('S8', `${b} srflx via Google+Cloudflare STUN`, r.srflx.length ? 'PASS' : 'FAIL', { v4, v6, gatherComplete: r.complete });
-      if (v4.length && v6.length) rec('TS4', `${b} both IPv4 and IPv6 visible`, 'INFO', 'If you are on a v4-only VPN, the IPv6 address above is your real one (P2P-CHAT.md §29.2)');
+      const warp = (x) => x.startsWith('104.28.') || /^2a09:bac[0-7]:/i.test(x);
+      if (v4.length && v6.length) {
+        if ([...v4, ...v6].every(warp)) rec('TS4', `${b} both IPv4 and IPv6 visible`, 'INFO', 'Both are Cloudflare WARP addresses: no bypass');
+        else rec('TS4', `${b} both IPv4 and IPv6 visible`, 'INFO', 'If you are on a v4-only VPN, the IPv6 address above is your real one (P2P-CHAT.md §29.2)');
+      }
     } catch (e) { rec('S8', `${b} srflx`, 'FAIL', e.message.split('\n')[0]); }
     finally { await closeB(P && P.browser); }
   }
