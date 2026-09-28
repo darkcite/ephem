@@ -1,21 +1,41 @@
-# P2P Ephemeral Chat — Rust/WASM Specification
+# P2P Ephemeral Chat: design, specification and plan
 
-| Field          | Value |
-|----------------|-------|
-| Version        | 0.6 |
-| Status         | Architecture / Protocol Draft. Owner decisions up to v0.6 applied (§25). **Only our WASM app is built: no native companion programs** (§2 P10). Spike results: [`../spikes/RESULTS-2026-09-28.md`](../spikes/RESULTS-2026-09-28.md) |
-| Supersedes     | v0.5 (companion removed; Tor and hidden channel owners are WASM-only; spike results applied), v0.4, v0.3, v0.2, v0.1 (rationale in [`REVIEW-v0.1.md`](REVIEW-v0.1.md)) |
-| Deployment     | GitHub Pages, project site `https://<owner>.github.io/p2p-chat/` |
-| Runtime        | Browser PWA |
+| Field | Value |
+|---|---|
+| Document | The **single** project document. It replaces the earlier SPEC, REVIEW, plans and spike notes (all merged here on 2026-09-28) |
+| Spec level | v0.6 (see the decision log, §25) |
+| Status | Architecture and protocol draft. MVP-1 is ready to start; Tor mode and public channels are behind gates G2–G4 (§23.3) |
+| Deployment | GitHub Pages, project site `https://<owner>.github.io/p2p-chat/` |
+| Runtime | Browser PWA. **Only our WASM app is built: no native programs (P10)** |
 | Implementation | Rust (edition 2024) → `wasm32-unknown-unknown` |
-| Transport      | **Direct mode:** WebRTC DataChannel (SCTP / DTLS / ICE / UDP). **Tor mode** (opt-in, research-gated): a Tor client built into the WASM app, reaching Tor through Snowflake (§28) |
-| Signalling     | Two-way out-of-band exchange (QR, link, paste, share). **No signalling server** |
-| Relay          | None in direct mode: TURN is disabled locally and relay candidates are rejected from the peer. Tor mode routes through the volunteer Tor network, by explicit user choice only (§28) |
-| STUN           | Public, free, no registration: Google and Cloudflare by default; the list is user-editable (§9.3). Needed in practice for any connection that is not on the same LAN |
-| Persistence    | No messages, ever. Identity keys and the contacts list are saved only if the user chooses to, and only encrypted (§7.3) |
-| Targets        | Desktop Chrome, Edge, Firefox and Safari; iOS Safari, both as a tab and as an installed PWA (§17.5) |
+| Transport | **Direct mode:** WebRTC DataChannel (SCTP / DTLS / ICE / UDP). **Tor mode** (opt-in, gated): a Tor client built into the WASM app, reaching Tor through Snowflake (§28) |
+| Signalling | Two-way out-of-band exchange (QR, link, paste, share) in direct mode; one-way invite in Tor mode. **No signalling server** |
+| Relay | None in direct mode (TURN disabled, relay candidates rejected). Tor mode routes through the volunteer Tor network, by explicit user choice only |
+| STUN | Public, free, no registration: Google and Cloudflare by default (both dual-stack); user-editable (§9.3) |
+| Persistence | No messages, ever. Identity keys and contacts only if the user saves them, and only encrypted (§7.3) |
+| Targets | Desktop Chrome, Edge, Firefox and Safari; iOS Safari, as a tab and as an installed PWA (§17.5) |
+| Checkpoints | `checks/run_all.sh` (§24) |
 
 Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in RFC 2119.
+
+## How to read this document
+
+| Part | Sections | Content |
+|---|---|---|
+| 0 | Status at a glance | Where the project stands and what comes next |
+| I | §1–§3 | Summary, principles, layers |
+| II | §4–§22, §26–§29 | Normative specification: infrastructure, architecture, identity, rendezvous, WebRTC, crypto, wire protocol, state machines, groups, PWA, security, Tor mode, IP privacy, public channels |
+| III | §23–§25 | **Plan**: phases, gates, checkpoints with results, decision log |
+| IV | Appendices A–E | SDP template, end-to-end flows, embedded-Tor engineering, public-channel design, features considered and rejected |
+
+## Status at a glance (2026-09-28)
+
+| Area | State |
+|---|---|
+| Design | Complete up to MVP-3, plus Tor mode and public channels |
+| Proven | SDP rebuild from ~150-byte codes connects (Chromium); camera permission exposes the real IP (Chromium); crypto, QR and MLS crates fit in 293 KB gzip; Argon2id cost measured; default STUN servers are dual-stack; **arti (Tor) builds for WASM with onion services, bridges and ring TLS (gate G1)**; Snowflake broker, IPFS gateways and delegated routing allow browser access (from source) |
+| Next | 1. Run `checks/run_all.sh` on a laptop (all three browser engines, live network): closes S1, S2, S4 for Firefox and WebKit, S8, TS3, TS4, **G2 (live Snowflake)**, C-P1, C-P4, E8. 2. Start MVP-1. 3. In parallel, TOR-1 steps E3–E5 |
+| Blocked on devices | S3, S6, S7, S9 (phones, real networks) |
 
 ---
 
@@ -274,7 +294,7 @@ The app opens on a sign-in screen:
 
 ### 7.4 Wallet identity: deferred
 
-Wallet sign-in is removed from the MVP plan. When it comes back, the design in REVIEW A13 applies: the wallet signs a binding to the `PeerId`, the binding is only sent inside the encrypted channel, and WalletConnect is excluded.
+Wallet sign-in is removed from the MVP plan. When it comes back, the design in §7.4 applies: the wallet signs a binding to the `PeerId`, the binding is only sent inside the encrypted channel, and WalletConnect is excluded.
 
 ### 7.5 Contacts (saved identities only)
 
@@ -335,7 +355,7 @@ This is Telegram's "log in with a QR code", done without a server:
 
 ### 8.1 The exchange is always two-way
 
-Browser WebRTC cannot finish DTLS or ICE without the remote description (REVIEW R1). Every new pairwise link therefore needs exactly one **invite → answer** exchange. The first link is done out of band. Later links inside a room are signalled through the owner (§14.4).
+Browser WebRTC cannot finish DTLS or ICE without the remote description (§25.1 R1). Every new pairwise link therefore needs exactly one **invite → answer** exchange. The first link is done out of band. Later links inside a room are signalled through the owner (§14.4).
 
 ```
 Alice (offerer)                                   Bob (answerer)
@@ -712,7 +732,7 @@ Answerer: NEW → CODE_PARSED → GATHERING → ANSWER_READY ─────┤
                                                         CLOSED (keys zeroized)
 ```
 
-- `AWAITING_ANSWER` times out at `expires_at` with `E_EXPIRED_INVITE`. There is **no retry before the first connection** (REVIEW R7).
+- `AWAITING_ANSWER` times out at `expires_at` with `E_EXPIRED_INVITE`. There is **no retry before the first connection** (§25.1 R7).
 - **Liveness:** ICE consent freshness (RFC 7675) is the authority on the path. The application PING is sent every 15 s when idle, and 2 missed PONGs lead to `DEGRADED`. This catches frozen or backgrounded tabs.
 - **Retry backoff** in `RECOVERING`: 1 s, 2 s, 4 s, 8 s, capped at 15 s, with ±20 % jitter.
 
@@ -756,7 +776,7 @@ Honest baseline: when a device's **only** network changes, all of its links drop
 
 ### 14.3 Propagation
 
-- The sender sends each message **directly** to every connected member. There is **no flooding and no forwarding** (REVIEW R6). Forwarding is deferred and is not part of any current phase.
+- The sender sends each message **directly** to every connected member. There is **no flooding and no forwarding** (§25.1 R6). Forwarding is deferred and is not part of any current phase.
 - Deduplication uses `last_chat_seq[leaf_idx]`, a fixed array of 16.
 - A member without a direct link to the sender does not receive the message. The UI shows that link as missing ("no direct path to Carol").
 
@@ -1002,94 +1022,125 @@ Members     4 / 8  (links 5 / 6)
 | crossbeam bounded channels | **Not applicable** (single thread). Fixed rings in `core` instead |
 | Build profile | `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`; `wasm-opt -O3` (or `-Oz` if binary size wins, decided by spike S5) |
 
-## 23. Delivery plan
+## 23. Plan
 
-| Phase | Scope |
-|---|---|
-| **MVP-1** | Sign-in (temporary identity, or saved identity with an encrypted key file); 1:1 in direct mode; two-way exchange by QR, link and paste; binary codes with SDP reconstruction; STUN defaults, privacy modes and **Drop IPv6**; relay prohibition; Noise KK; SAS policy; T3 resume code; **pending queue and ticks; replies, edit, delete, self-destruct timers; typing and read receipts**; **IP disclosure features (§29.2)**; basic diagnostics; CSP, SRI and a version-pinned service worker; desktop browsers and iOS Safari |
-| **MVP-2** | T1 in-band ICE restart and `NetChanged` handling; full diagnostics; **contacts; several identities (IndexedDB slots, Web Locks); identity transfer over P2P; reactions** |
-| **MVP-3** | Owner-controlled rooms of up to 16 members, with **observer role** and owner moderation (delete); introductions by the owner; MLS with the owner as single committer; room disposal; T2 recovery through the owner |
-| **TOR-1** | Embedded Tor in WASM (plan steps E2–E7): runtime shim, Snowflake transport in Rust (KCP + smux), IndexedDB directory cache, onion hosting from a tab; gates G2–G4 |
-| **TOR-2** | Tor mode in the PWA for 1:1: transport guard, TOR_INVITE (one-way), Noise IK, stream framing, "VIA TOR" UI |
-| **TOR-3** | Reconnecting contacts through stable onion addresses, with no QR |
-| **TOR-4** | Rooms over Tor (the owner shares members' onion addresses; members dial each other directly) |
-| **CARDS** | Contact cards and card secrets; card-based Tor dial (with TOR-3) |
-| **CH-1…CH-5** | Public channels with a Tor-only owner, hosted from the owner's tab (plan v3). Requires TOR-1 |
-| **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16 |
+### 23.1 Phases
 
-## 24. Validation spikes (must finish before the design they gate is frozen)
-
-| ID | Question | Gates |
+| Phase | Scope | Depends on |
 |---|---|---|
-| S1 | Does the Appendix A template SDP work as a remote description in Chrome, Firefox and Safari, desktop and mobile, in all 9 offerer/answerer combinations? | §8 |
-| S2 | Measured code sizes (ufrag and pwd lengths, candidate counts) per browser | §8.5 |
-| S3 | T0 behaviour per browser: continual gathering, backup pairs, recovery through a peer-reflexive path | §13 |
-| S4 | Does camera permission disable mDNS obfuscation, and does that persist after the camera track stops? | §9.4 |
-| S5 | Size of `snow`, and later `openmls`, on `wasm32`; `-O3` vs `-Oz` | §22 |
-| S6 | iOS lifetime of a pending `RTCPeerConnection` while in the background during sharing. **Gates the remote flow on iOS** | §17.4, §17.5 |
-| S7 | Link hand-off on desktop browsers (`BroadcastChannel`). On iOS it is already known not to work between a tab and the PWA; the paste fallback is the design | §8.7 |
-| S8 | IPv6 reachability (AAAA records) of the default STUN servers, and srflx-v6 gathering on each target | §9.3 |
-| S9 | 15 simultaneous peer connections on iOS Safari: memory, keepalive and battery | §14.1 |
-| TS3 | WebRTC through Cloudflare WARP and 2–3 common VPNs, on desktop and iOS: does the srflx address show the VPN's exit? | §29.1 |
-| TS4 | How often does IPv6 bypass a v4-only VPN in practice (the §29.2 warning)? | §29.2 |
-| E8 | Does an open `RTCDataChannel` (Snowflake) exempt a hidden desktop tab from Chromium's intensive timer throttling? (Channel owners, reachability) | §28.3, §27 |
+| **MVP-1** | Sign-in (temporary identity, or saved identity with an encrypted key file); 1:1 in direct mode; two-way exchange by QR, link and paste; binary codes with SDP reconstruction; STUN defaults, privacy modes and **Drop IPv6**; relay prohibition; Noise KK; SAS policy; T3 resume code; **pending queue and ticks; replies, edit, delete, self-destruct timers; typing and read receipts**; **IP disclosure features (§29.2)**; basic diagnostics; CSP, SRI and a version-pinned service worker; desktop browsers and iOS Safari | Checkpoints S1, S2, S4 on all engines |
+| **MVP-2** | T1 in-band ICE restart and `NetChanged` handling; full diagnostics; **contacts; several identities (IndexedDB slots, Web Locks); identity transfer over P2P; reactions** | MVP-1; S3 |
+| **MVP-3** | Owner-controlled rooms of up to 16 members, with **observer role** and owner moderation (delete); introductions by the owner; MLS with the owner as single committer; room disposal; T2 recovery through the owner | MVP-2; S9 |
+| **CARDS** | Contact cards and card secrets | MVP-2 |
+| **TOR-1** | Embedded Tor in WASM (Appendix C steps E2–E7): runtime shim, Snowflake transport in Rust (KCP + smux), IndexedDB directory cache, onion hosting from a tab | Gates G2–G4 |
+| **TOR-2** | Tor mode for 1:1: transport guard, TOR_INVITE (one-way), Noise IK, stream framing, "VIA TOR" UI | TOR-1 |
+| **TOR-3** | Contacts reconnect through stable onion addresses (no QR); card-based Tor dial | TOR-2, CARDS |
+| **TOR-4** | Rooms over Tor | TOR-3, MVP-3 |
+| **CH-1…CH-5** | Public channels with a Tor-only owner, hosted from the owner's tab (Appendix D) | TOR-1, E8 |
+| **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16 | — |
 
-Results of the spikes run on 2026-09-28 (S1, S2, S4, S5, S8, E1, E2 source, C-P1 source, C-P4) are in [`../spikes/RESULTS-2026-09-28.md`](../spikes/RESULTS-2026-09-28.md). TS1 and TS2 were removed with the companion.
+### 23.2 Order of work
 
-## 25. Owner decisions
+```
+now ──▶ checks/run_all.sh on a laptop ──▶ MVP-1 ──▶ MVP-2 ──▶ MVP-3
+              │                                     │
+              └──▶ G2 live ──▶ TOR-1 (E3–E7) ──▶ TOR-2 ──▶ TOR-3 ──▶ TOR-4
+                                    │
+                                    └──▶ CH-1…CH-5 (needs E8)
+```
 
-### 25.1 Decisions in v0.3 (open questions from v0.2)
+MVP-1 does not depend on Tor. The Tor track runs in parallel and is dropped cleanly if a gate fails (§23.3).
 
-| # | Topic | Decision | Where |
+### 23.3 Gates
+
+| Gate | Criterion | Status | If it fails |
 |---|---|---|---|
-| Q1 | Exchange scenario | Both in person and remote. The SAS policy follows the code source | §8.2, §10.4 |
-| Q2 | STUN | Google and Cloudflare by default, public and free; the list is editable | §9.3 |
-| Q3 | Room cap | 16 members | §14.1, §20 |
-| Q4 | Room authority | Only the owner admits members. When the owner leaves, the room is disposed | §14.2, §14.6 |
-| Q5 | Wallet | Deferred. Users generate keys at sign-in and may save them encrypted for reuse | §7.2–§7.4 |
-| Q6 | Peer forwarding | Deferred | §14.3 |
-| Q7 | Hosting | GitHub Pages project site | Header, §4.1 |
-| Q8 | Browsers | Desktop Chrome, Edge, Firefox, Safari, plus iOS Safari | §17.5 |
+| G1 | arti builds for `wasm32` without forking its core | ✅ Passed at compile level (E1) | — |
+| G2 | Snowflake broker rendezvous and a DataChannel to a proxy work from a browser, on desktop **and** iOS Safari | 🔬 CORS allows it (source); ⏳ `checks/run_all.sh` (E2) | No Tor mode; no public channels; IP privacy via VPN/WARP only |
+| G3 | Tor bootstrap ≤ 60 s cold, ≤ 10 s warm; an onion connects on desktop and iOS | ⏳ needs TOR-1 code | Same as G2 |
+| G4 | `tor_bg.wasm` ≤ 5 MB compressed; no iOS memory kills; onion hosting from a tab works | ⏳ needs TOR-1 code | Client-only Tor (dial, no hosting): no one-way invites from Tor hosts in tabs, no channels |
 
-### 25.2 Decisions in v0.4
+## 24. Checkpoints
 
-| Topic | Decision | Where |
-|---|---|---|
-| Messaging | Replies, edit, delete, self-destruct timers, reactions, typing indicators, read ticks, pending queue | §11.2, §11.3, §11.7 |
-| Identities | Contacts in the encrypted key file; several identities per device; identity transfer over P2P | §7.2, §7.3, §7.5, §7.6 |
-| Rooms | Observer (read-only) role | §14.2 |
-| Tor | A second, separate transport, with all features that fit the architecture (built into WASM since v0.6) | §28 |
-| IP privacy | VPN or Cloudflare WARP, Tor mode, LAN-only mode; three disclosure features in MVP-1 | §29 |
+### 24.1 How to run
 
-### 25.3 Decisions in v0.5
+```sh
+./checks/run_all.sh home-wifi                 # everything automatable (~10–20 min; arti build is the slow part)
+./checks/run_all.sh warp-on                   # again with Cloudflare WARP / your VPN on (TS3)
+E8=1 ./checks/run_all.sh hidden-tab           # adds the 7-minute hidden-tab test (visible Chromium window)
+NET=0 SKIP_ARTI=1 ./checks/run_all.sh quick   # offline, fast
+```
 
-| # | Topic | Decision | Where |
+- **Needs:** Node ≥ 20, Python ≥ 3.9, Rust (rustup) and clang. Runs on macOS or Linux; on Windows, use WSL2.
+- **Output:** `checks/out/<timestamp>-<label>/REPORT.md`, plus raw JSON and logs.
+
+### 24.2 Checkpoint list and results
+
+Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from source code · ⏳ open · 🤖 automated in `checks/run_all.sh` · ✋ manual.
+
+| ID | Question | Result so far (container, 2026-09-28) | Run | Gates |
+|---|---|---|---|---|
+| S1 | Does the Appendix A template SDP connect, in every offerer × answerer browser pair? | ✅ Chromium ↔ Chromium, with raw-IP and mDNS candidates. ⏳ Firefox, WebKit, and iOS | 🤖 | §8 |
+| S2 | Real code sizes per browser | ✅ Chromium: ufrag 4, pwd 24, `actpass`/`active`, mid 0, sctp-port 5000. Invite 141 B (IPv4 host), 153 B (mDNS), about 179 B (plus srflx v4 and v6), versus 587–657 B of raw SDP | 🤖 | §8.5 |
+| S3 | Path switch without signalling (T0) | ⏳ | ✋ two devices | §13 |
+| S4 | Does camera permission disable mDNS obfuscation? | ✅ **Yes (Chromium)**: just granting permission gives raw IPs, and they stay after the camera stops. ⏳ Firefox, WebKit | 🤖 | §9.4 |
+| S5 | WASM sizes of the protocol crates | ✅ gzip: Noise 37 KB; key-file crypto 130 KB; QR 34 KB; all three 176 KB; with openmls 293 KB. Notes: `hkdf::SimpleHkdf` for BLAKE2s; explicit `snow` features | 🤖 | §22 |
+| S5b | Argon2id cost in WASM | ✅ m 19 MiB: t 2 = 42–50 ms, t 4 = 61 ms; m 64 MiB t 3 = 210 ms (memory 85 MiB, never shrinks). The spec uses m 19 MiB, t 4 | 🤖 | §7.3 |
+| S6 | iOS: does a pending connection survive the background? | ⏳ | ✋ iPhone | §17.5 |
+| S7 | Answer-link hand-off between tabs | ⏳ | ✋ | §8.7 |
+| S8 | Default STUN servers dual-stack; srflx gathering | ✅ DNS: Google and Cloudflare have A + AAAA; Twilio A only. ⏳ live STUN | 🤖 | §9.3 |
+| S9 | 15 connections on iOS | ⏳ | ✋ iPhone | §14.1 |
+| TS3 | WebRTC through WARP or a VPN shows the VPN exit | ⏳ | 🤖 (run twice) | §29.1 |
+| TS4 | IPv6 bypassing a v4-only VPN | ⏳ | 🤖 | §29.2 |
+| E1 | arti on `wasm32` (**G1**) | ✅ arti 0.46.0: 16/16 crates, plus `arti-client` with onion client and service, ephemeral keystore, bridges, PT, rustls. Upstream has wasm stubs; `coarsetime` uses `performance.now()`. TLS: **ring** with `wasm32_unknown_unknown_js` (the pure-Rust provider is only alpha); `rustls-pki-types` needs `web`. Extension point for Snowflake: `AbstractPtMgr` / `ChanMgr::set_pt_mgr` | 🤖 | §28 |
+| E2 | Snowflake from a browser (**G2**) | 🔬 Broker `/client` sends CORS `*`. Protocol: `POST /client`, body `1.0\n{"offer": <JSON SDP>, "nat": "unknown", "fingerprint": <bridge fp>}`. Client stack: WebRTC → encapsulation → KCP → smux. The CDN broker URL (`1098762253.rsc.cdn77.org`) is callable from a browser **without** domain fronting. ⏳ live | 🤖 | §28 |
+| E3–E7 | Turbotunnel, bootstrap, onion hosting, size, hardening | ⏳ needs TOR-1 code | — | G3, G4 |
+| E8 | Does a hidden desktop tab with an open DataChannel keep its timers? | ⏳ | 🤖 (E8=1) | §27, §28.3 |
+| C-P1 | Gateways: trustless CAR with CORS | 🔬 The gateway software defaults to CORS `*`. ⏳ live | 🤖 | App. D |
+| C-P2, C-P3, C-P5 | Two onions in one tab; loading 1 000 posts; OPFS quota | ⏳ after TOR-1 | — | App. D |
+| C-P4 | Republishing signed IPNS records; browser PUT | 🔬 Kubo `name put` accepts third-party records; `delegated-ipfs.dev` accepts `PUT /routing/v1/ipns/{name}` with CORS. ⏳ live round trip | 🤖 | App. D |
+
+**Container limits (why some checks are still open):** no outbound UDP, no IPv6, and HTTPS only to an allow-list (crates.io and the Go proxy). The Snowflake broker, IPFS gateways and STUN were unreachable, and only Chromium was installed.
+
+## 25. Decision log
+
+### 25.1 Rejected claims of the original draft (v0.1)
+
+| # | v0.1 claim | Why rejected | Replacement |
 |---|---|---|---|
-| QN2 | Tor mode scope | Chosen per signed-in session | §28.2 |
-| QN3 | Typing and read receipts | On in 1:1, off in rooms, reciprocal | §11.7 |
-| QN4 | Moderation | The room owner can delete any message | §11.7 |
-| QN5 | Observers | Strictly read-only (no reactions, no typing) | §11.7 |
-| QN6 | Self-destruct control | Either person in 1:1; only the owner in rooms; changes shown to all | §11.7 |
-| QN7 | Tor bridges | On by default (Snowflake first) | §28.3 |
-| QN8 | After identity transfer | The old device keeps it by default | §7.6 |
-| QN9 | Contact cards | Yes, with a revocable card secret | §7.5, §28.4 |
-| QN10 | Edit and delete time limit | None (session-scoped) | §11.7 |
-| QN11 | Remembered identities | 8 per device | §7.2 |
-| QN12 | Public channels | Desktop-only publishing; the owner is always hidden (Tor-only onion); no link to the chat identity; 4 KiB posts; republishing and gateways as designed in plan v2 | §27 |
-| — | Tor without the companion | Research track with gates (Snowflake + arti in WASM) | §28.1, EMBEDDED-TOR-WASM.md |
+| R1 | Single-QR connection with no reply | The browser needs the peer's DTLS fingerprint and ICE credentials (from the answer) before it can connect, and it cannot import a pre-chosen certificate | Two-way exchange of ~150–190 B codes (§8). One-way invites exist only in Tor mode (§28.4) |
+| R2 | No new QR after a network change | An ICE restart needs signalling, and the only channel dies with the path | Recovery ladder T0–T3 with a resume code (§13) |
+| R3 | `chat://join/…` links | A PWA cannot register custom schemes | `https://…/#i=…`, using the fragment (§8.7) |
+| R4 | CBOR + compression for invites | High-entropy data does not compress; SDP is mostly rebuildable boilerplate | Fixed binary layout + SDP template (§8.3, Appendix A) |
+| R5 | Reusing candidates from other connections | No browser API exposes them | Removed |
+| R6 | Flood-forwarding in a mesh | Multiplies traffic and turns peers into relays (P8) | Direct fan-out only; forwarding deferred |
+| R7 | Retrying the first connection | Nothing to retry without a channel | Explicit failure with a new invite (§12) |
 
-### 25.4 Decisions in v0.6
+The v0.1 points that were **confirmed** are kept throughout: principles P1–P9, Rust owning the state, identity ≠ transport, no history, honest privacy claims (§21), full mesh with a cap, and MLS for groups.
 
-| Topic | Decision | Where |
+### 25.2 Owner decisions
+
+| Version | Decision | Where |
 |---|---|---|
-| Native programs | **None.** Only our WASM app is built (P10). The companion is removed | §2, §28 |
-| Tor mode | Built into WASM (arti + Snowflake in Rust), on desktop and iOS, gated by G2–G4 | §28 |
-| Public channels | The owner hosts the onion service from a desktop browser tab; only offered once Tor mode passes its gates | §27 |
-| Argon2id | t raised from 2 to 4 (spike S5b) | §7.3 |
+| v0.3 | Both in-person and remote exchange; the SAS policy follows the code source | §8.2, §10.4 |
+| v0.3 | STUN: Google + Cloudflare by default, editable | §9.3 |
+| v0.3 | Rooms up to 16; only the owner admits; the owner leaving disposes the room | §14 |
+| v0.3 | Wallet deferred; users generate keys at sign-in and may save them encrypted | §7 |
+| v0.3 | Peer forwarding deferred; GitHub Pages hosting; desktop browsers + iOS Safari | §14.3, §17.5 |
+| v0.3 | iOS is PWA-only (no App Store) | §17.5 |
+| v0.3 | Public channels as the single opt-in exception to "no history" | §27, P7, §4.3 |
+| v0.4 | Replies, edit, delete, self-destruct, reactions, typing, read ticks, pending queue | §11 |
+| v0.4 | Contacts in the key file; several identities; identity transfer over P2P; observer role | §7, §14.2 |
+| v0.4 | Tor as a second transport; IP privacy via LAN-only, VPN/WARP, Tor; three disclosure features in MVP-1 | §28, §29 |
+| v0.5 | Tor per session; read/typing on in 1:1, off in rooms, reciprocal; the owner may delete any message; observers strictly read-only; self-destruct set by either person (1:1) or the owner (rooms) | §28.2, §11.7 |
+| v0.5 | Tor bridges on by default; identity transfer keeps the old copy; contact cards; no edit/delete time limit; 8 identities per device | §28.3, §7 |
+| v0.5 | Public channels: desktop-only publishing, owner always hidden via Tor, no link to the chat identity, 4 KiB posts | §27 |
+| v0.6 | **No native programs** (P10): Tor is built into WASM; channel owners host from a browser tab | §2, §27, §28 |
+| v0.6 | Argon2id t = 4 | §7.3 |
 
-### 25.5 Open questions
+### 25.3 Open questions
 
-None. (v0.5's QN1, code signing for the companion, no longer applies: there is no companion.)
+None.
 
 ## 26. Out of scope
 
@@ -1101,7 +1152,7 @@ None. (v0.5's QN1, code signing for the companion, no longer applies: there is n
 - TURN fallback.
 - Persistent history.
 - Multi-frame QR.
-- Single-QR bootstrap in **direct mode** (impossible, REVIEW R1). Tor mode supports it (§28.4).
+- Single-QR bootstrap in **direct mode** (impossible, §25.1 R1). Tor mode supports it (§28.4).
 - Traffic obfuscation in direct mode. Tor bridges in Tor mode are the only exception.
 
 ## 27. Public channels (opt-in exception to P7 and §4.3)
@@ -1115,7 +1166,7 @@ None. (v0.5's QN1, code signing for the companion, no longer applies: there is n
   - **This depends on Tor mode passing its gates** (§28.9). Until then, public channels cannot be offered with a hidden owner, so they are not offered at all.
   - The channel's keys and onion address are derived one-way and are **not linked** to the owner's chat identity. The owner is known only if they say so in the channel.
 - **Content format:** IPFS-native (CIDs, dag-cbor, CAR, IPNS V2 records), verified in Rust. Followers may mirror a channel over their own onion, or, accepting that their own IP becomes visible, to public IPFS. That is what lets readers without Tor read it through public gateways.
-- Details and phases: [`../plans/PUBLIC-CHANNELS-IPFS.md`](../plans/PUBLIC-CHANNELS-IPFS.md) (plan v3, WASM-only).
+- Details and phases: Appendix D.
 
 ## 28. Tor mode (a second, separate transport, built into the WASM app)
 
@@ -1220,7 +1271,7 @@ base-uri 'none'; form-action 'none'
 - **iOS:** reachable **only while the app is in the foreground**. In the background, Snowflake and all circuits pause. On return, Tor re-attaches (warm start from the IndexedDB cache) and contacts can dial again.
 - **Censored networks:** where the broker and the AMP cache are blocked, Tor mode is unavailable (no domain fronting in browsers, and nothing native, P10).
 
-### 28.9 Gates (details in [`../plans/EMBEDDED-TOR-WASM.md`](../plans/EMBEDDED-TOR-WASM.md))
+### 28.9 Gates (details in Appendix C)
 
 | Gate | Criterion | Status |
 |---|---|---|
@@ -1327,3 +1378,253 @@ Candidate line: `a=candidate:{foundation} 1 udp {priority} {addr} {port} typ {ho
 2. T0 is tried. If the DataChannel is still alive, T1 (MVP-2). In a group, T2 (MVP-3).
 3. Otherwise the link moves to `SUSPENDED`, and a resume code is shared (T3).
 4. The link returns to `CONNECTED` with the same `PeerId`, `RoomId` and `chat_seq`, and unacknowledged messages are resent.
+
+---
+
+## Appendix C: Embedded Tor, engineering detail
+
+### C.1 Architecture
+
+```
+┌──────────────────────────── tor.html (own CSP, §28.6) ────────────────────────────┐
+│ core (sans-IO) ── Transport::Tor ──▶ tor_bg.wasm                                  │
+│                                     ├─ arti-client 0.46+ (upstream, no fork)       │
+│                                     ├─ runtime shim: spawn_local, setTimeout,      │
+│                                     │  inline blocking, TCP/UDP = unsupported      │
+│                                     ├─ TLS: rustls + ring (wasm32_unknown_unknown_js)│
+│                                     ├─ state: in-memory; dir cache → IndexedDB     │
+│                                     ├─ keys: ephemeral keystore (onion key in RAM) │
+│                                     └─ AbstractPtMgr = Snowflake (Rust)            │
+│                                          broker fetch → RTCPeerConnection to proxy │
+│                                          → encapsulation → KCP → smux              │
+└─────────────────────────────────────┬─────────────────────────────────────────────┘
+                                      │ WebRTC (UDP)
+                             volunteer Snowflake proxy
+                                      │ WebSocket
+                             Snowflake bridge (Tor Project) ──▶ Tor network ──▶ peer's onion
+```
+
+### C.2 Work items
+
+| Component | What we build | Base | Risk |
+|---|---|---|---|
+| Runtime shim | `tor_rtcompat::Runtime`: Spawn, SleepProvider, CoarseTimeProvider, Blocking, NetStreamProvider/UdpProvider (unsupported), TlsProvider | arti's swappable runtime traits; `coarsetime` is already wasm-aware | Medium |
+| `!Send` browser objects | The Snowflake transport runs in a local task, bridged to arti through `Send` channels | `futures::channel::mpsc` | Medium |
+| Directory cache | Persist the consensus, microdescriptors and guards to IndexedDB (public data) for warm starts | arti uses in-memory state on wasm | Medium |
+| Snowflake client | Broker rendezvous (§24.2 E2 format), WebRTC to the proxy, encapsulation, **KCP** (Rust `kcp` crate), **smux v2** (our own, small) | Reference Go client; broker CORS `*` | **High** |
+| Onion hosting | `tor-hsservice` from a tab | Compiles for wasm (E1) | Medium–High |
+| Size | Lazily loaded `tor_bg.wasm` | — | ⏳ G4 |
+
+### C.3 Behaviour and limits
+
+| Topic | Desktop | iOS |
+|---|---|---|
+| Bootstrap | Cold: a few MB of directory through Snowflake, tens of seconds. Warm: from IndexedDB | Same; re-attaches on every return to the foreground |
+| Being reachable (onion hosting) | While the tab is open (hidden tab: E8) | **Foreground only** |
+| One-way invite | ✓ | ✓, but the inviter must stay in the foreground until the peer dials |
+| Latency | 0.5–2 s per message | Same |
+| Censored networks | Broker via direct HTTPS or the CDN URL; **no domain fronting** in browsers; no fallback (P10) | Same |
+
+**Privacy:** the Snowflake proxy and broker see your IP and that you use Snowflake, but not your destination. The broker's TLS SNI shows Tor use unless the CDN URL is used.
+
+### C.4 Research steps
+
+| Step | Work | Gate |
+|---|---|---|
+| E1 | arti for wasm32 | **G1 ✅** |
+| E2 | Live broker rendezvous and a DataChannel to a proxy, desktop and iOS | **G2** (`checks/run_all.sh`) |
+| E3 | Turbotunnel (KCP + smux) to the real bridge; stable for 10 min | — |
+| E4 | arti over E3: bootstrap, circuit, dial a known onion | **G3** |
+| E5 | Onion hosting from a tab | — |
+| E6 | Size, iOS memory, battery | **G4** |
+| E7 | Fuzz the Snowflake/Turbotunnel parsers; security review | Sign-off |
+
+**Effort:** this is the largest item in the project. The ongoing cost is tracking arti releases and Tor protocol changes, and applying Tor security fixes quickly.
+
+## Appendix D: Public channels, detailed design
+
+Normative summary: §27. **This depends on Tor mode passing gates G2–G4.**
+
+### D.1 Goal and owner decisions
+
+| # | Decision |
+|---|---|
+| D1 | Publishing is **desktop only**, and that is acceptable |
+| D2 | The **owner's IP is always hidden**, so channels are published **only over Tor** |
+| D3 | Republishing: whatever works best (D.5.3) |
+| D4 | The channel is **not linked** to the owner's chat identity. The owner is known only if they choose to say so in a post |
+| D5 | Posts are limited to **4 KiB** of text |
+| D6 | Gateways: whatever works best (D.6.3) |
+| D7 | **No native programs.** Hosting happens in the owner's browser tab |
+
+### D.2 Design
+
+- **The data is IPFS-native:** CIDs, dag-cbor blocks, CAR files and IPNS V2 signed records, all verified in Rust.
+- **The owner's browser tab serves it as a Tor onion service,** using the embedded Tor client (§28).
+- The owner never takes part in the public IPFS network, and never makes a direct connection.
+
+```
+ OWNER (desktop browser tab, hidden)                           READERS
+ ┌──────────────────────────────────────┐                     ┌───────────────────────────────────┐
+ │ channel.html (Tor session)           │                     │ channel.html#c=<ipns-name>&o=…    │
+ │  Rust: sign posts, build CAR,        │                     │  Rust: verify record, CIDs and    │
+ │  sign the IPNS V2 record             │                     │  post signatures                  │
+ │  store: OPFS folder = pinning folder │                     └──────┬────────────────┬───────────┘
+ │  onion service (embedded Tor):       │                            │ Tor (embedded) │ HTTPS (optional)
+ │  read-only trustless-gateway API     │ ◀──── Tor network ─────────┘                v
+ │  IPNS PUT to delegated-ipfs.dev      │ ── via Tor exit ──▶ delegated routing   public IPFS gateways
+ │  (optional)                          │                                        (only if a follower
+ └──────────────────────────────────────┘                                         mirrors to IPFS with
+                                                                                  their own Kubo)
+```
+
+1. **The channel folder (the pinning folder).** The channel lives in the browser's **Origin Private File System (OPFS)**, at `channels/<name>/` (blocks, the latest signed record, and the manifest). OPFS works in every target browser, including Safari. The app calls `navigator.storage.persist()` so the browser does not evict it.
+   - **Optional mirror to a real folder** on the owner's disk through the File System Access API (Chromium desktop).
+   - **"Export channel as CAR"** downloads a full backup, and "Import CAR" restores it on another machine.
+2. **Serving.** While the owner's tab is open, the embedded Tor client hosts the channel's **dedicated onion address**. It serves a read-only subset of the **IPFS trustless-gateway API**:
+   - `GET /ipfs/<cid>?format=car` (and `format=raw`);
+   - `GET /ipns/<name>?format=ipns-record`.
+3. **Readers** use the same verifying client as for a public gateway. The "gateway" is the owner's `.onion` (or a mirror's), reached through the reader's embedded Tor.
+
+### D.3 Identity separation (D4)
+
+- Channel signing key = `HKDF(seed, "p2pchat/channel/" ‖ u32 index)` (Ed25519). The IPNS name is that key.
+- Channel onion key = `HKDF(seed, "p2pchat/channel-onion/" ‖ u32 index)`. It is a **different onion address** from the owner's chat onion.
+- HKDF is one-way. Nothing in a channel can be linked to the owner's `PeerId`, chat onion, nickname or contacts. The manifest has no owner field: only a `title` and an `about` text the owner writes.
+- **Caveats shown when the channel is created:** writing style and posting times can identify you. Anyone who obtains the key file can link the channel to your chat identity, so the UI recommends a **separate identity** just for the channel (§7.2).
+
+### D.4 Availability (the honest limit)
+
+| Host | When the channel is online |
+|---|---|
+| The owner's tab | While it is open on the desktop. Leaving a tab open is possible; whether a hidden tab keeps working is spike E8 |
+| Followers' mirror tabs (D.7.1) | While any mirror tab is open |
+| A follower's own Kubo (D.7.2, third-party and optional) | While their node runs. **Their** IP is public, never the owner's |
+
+**No always-on host exists without native software (P10).** A channel whose owner and mirrors are all offline cannot be read, except from a follower's Kubo mirror or from gateway caches.
+
+### D.5 Data and publishing
+
+#### D.5.1 Blocks (dag-cbor)
+
+- **Root**: manifest, head page, post count, last update time.
+- **Manifest**: title, about, `channel_pk`, created, an optional signed mirror list, and a signature.
+- **Page**: up to 64 posts, and a link to the previous page.
+- **Post**: `seq`, timestamp, body (≤ 4 KiB), `reply_to`, `deleted` flag, and a signature.
+
+Deleting a post rewrites it with `deleted = true` and an empty body. Older copies may survive on mirrors, and the UI says so before the first post.
+
+#### D.5.2 Posting (the owner's desktop tab, Tor session)
+
+1. Sign the post, then rebuild the head page and the root.
+2. Write the changed blocks and the new IPNS V2 record (`sequence = count`, `validity = now + 30 days`, `ttl = 60 s`) to OPFS.
+3. Serve them on the onion address at once.
+4. Optionally publish the record through a **Tor exit stream** to `https://delegated-ipfs.dev/routing/v1/ipns/<name>` (`PUT`, CORS `*`, spike C-P4). This makes the name resolvable on the public IPFS network **without revealing the owner**. It only matters if some IPFS mirror holds the content.
+
+#### D.5.3 Republishing (D3)
+
+- The onion serves the latest record directly, so the owner never has to republish.
+- The record is valid for 30 days, so mirrors and Kubo followers can republish the owner's signed record (`ipfs name put`, spike C-P4) without the owner's key.
+- The owner's app re-signs on every post, and whenever it opens and the record is older than 7 days.
+
+### D.6 Reading
+
+#### D.6.1 Channel link
+
+```
+https://<owner>.github.io/p2p-chat/channel.html#c=<ipns-name>&o=<channel-onion>[&m=<mirror-onion>…]
+```
+
+- The IPNS name is the channel's identity. The onion addresses are **hints**, because everything is verified against the IPNS key.
+- The manifest can carry a **signed mirror list**.
+
+#### D.6.2 Readers by platform
+
+| Reader | Path | Reader's IP |
+|---|---|---|
+| Desktop or iOS, Tor session | Embedded Tor → owner or mirror onion | Hidden |
+| Any browser without Tor | Public IPFS gateways, **only if** a follower mirrors the channel to IPFS with their own Kubo | Visible to the gateway (never to the owner) |
+
+#### D.6.3 Default gateways (D6)
+
+- `trustless-gateway.link`, `ipfs.io` and `dweb.link`, used in order with a 4 s timeout; the reader keeps the highest valid record.
+- The gateway software defaults to CORS `*` and supports trustless CAR and IPNS-record responses (spike C-P1, from source).
+
+### D.7 Followers and mirrors
+
+#### D.7.1 Onion mirror in the browser (keeps the follower hidden)
+
+- **Mirror this channel** copies and verifies the channel into the follower's OPFS (`mirrors/<name>/`).
+- While the follower's Tor-session tab is open, it serves the channel on the follower's own mirror onion. Every 10 minutes it checks the owner's onion for a newer record, and updates only when the new record verifies with a **higher** sequence.
+
+#### D.7.2 IPFS mirror (optional; the follower's own third-party software)
+
+- A follower who runs **Kubo themselves** (not built or required by us, P10) can press **Also mirror to public IPFS**.
+- The app shows the two Kubo commands to run:
+  - `ipfs dag import channel.car` (the app downloads the CAR);
+  - `ipfs name put <record>`.
+- The app itself never talks to Kubo.
+- The UI states: "Your IP will be visible as a host of this channel."
+
+### D.8 Security
+
+| Threat | Mitigation |
+|---|---|
+| Finding the owner's IP | The owner is reachable only as an onion service, and any clearnet publishing goes through a Tor exit |
+| Linking the channel to the chat identity | Separate HKDF keys, a separate onion, no owner field, and a dedicated identity recommended |
+| Forged or changed posts | CID checks, the post signature, and the signed IPNS record |
+| An old version served | IPNS sequence high-water marks, and several sources tried |
+| Someone else posts | Impossible: only the channel key can sign |
+| Losing the channel data | OPFS with `persist()`, the optional real-folder mirror, and CAR export |
+
+### D.9 Phases (after TOR-1 passes G2–G4)
+
+| Phase | Scope |
+|---|---|
+| CH-1 | `channel` crate: keys, IPNS V2, dag-cbor, CAR, verification |
+| CH-2 | Onion hosting of the read-only gateway subset from a tab; OPFS store; CAR export and import |
+| CH-3 | Owner UI (desktop): create a channel, post, delete, the warnings; optional IPNS PUT via a Tor exit |
+| CH-4 | Reader UI: Tor session, and public gateways for IPFS-mirrored channels |
+| CH-5 | Mirrors: browser onion mirrors, the signed mirror list, Kubo mirror instructions |
+
+### D.10 Spikes
+
+| ID | Question | Status |
+|---|---|---|
+| C-P1 | Gateways serve CAR and IPNS records with CORS | 🔬 Confirmed from source (boxo defaults to CORS `*`); ⏳ live |
+| C-P2 | A tab hosting 2 onion services at once (the chat onion and one channel onion) | ⏳ (after TOR-1) |
+| C-P3 | Time to load a channel with 1 000 posts over an onion | ⏳ |
+| C-P4 | Republishing a signed IPNS record without the key | ✅ Confirmed from source: Kubo `name put`; `delegated-ipfs.dev` `PUT` with CORS |
+| C-P5 | OPFS quota and eviction with `persist()` on each browser | ⏳ |
+| E8 | A hidden desktop tab with an open DataChannel keeps its timers running | ⏳ |
+
+## Appendix E: Features considered from Tox/qTox and Telegram
+
+**Rule:** a feature is adopted only if it works with **no application server**. It may use the peers' own devices and free, no-registration third-party services.
+
+### E.1 Adopted
+
+| Source | Feature | Here |
+|---|---|---|
+| Tox | Identity = key pair; passphrase-encrypted profile | §7.1, §7.3 |
+| Tox | Friend list of verified keys; "nospam" | Contacts and contact cards (§7.5) |
+| Tox (NGC) | Group roles | Owner, member, observer (§14.2) |
+| qTox | "Will send when online" | Pending queue (§11.3) |
+| Telegram | Secret-chat emoji key visualisation | SAS emoji (§10.4) |
+| Telegram | Self-destruct timers, reply, edit, delete, reactions, typing, read ticks | §11.7 |
+| Telegram | QR login to link a device | Identity transfer over P2P (§7.6) |
+| Telegram | Several accounts | Several identities (§7.2) |
+| Telegram | Channels (owner posts, others read) | Public channels (§27, Appendix D) |
+
+### E.2 Rejected
+
+| Feature | Needs | Why not |
+|---|---|---|
+| Tox DHT discovery | UDP sockets or a DHT in the browser, plus bootstrap nodes | Browsers cannot; Tor onion addresses give contact reconnect instead (§28.7) |
+| Tox TCP relays, TURN | A relay | P8 |
+| Cloud history, sync, offline mailbox | A server | P7, §4.3 |
+| Usernames, global search, channel view counters | A directory or counter service | P1 |
+| Push notifications, bots | A server | P1 |
+| Automatic link previews | Fetching the link | Reveals the IP to third parties |
+| Channel comments | Write access for readers | Breaks read-only; "message the owner" through a normal invite instead |
+

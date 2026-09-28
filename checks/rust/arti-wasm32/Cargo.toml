@@ -1,0 +1,12 @@
+[package]
+name = "arti-wasm32-check"
+version = "0.1.0"
+edition = "2024"
+
+# E1 / gate G1: the feature set Tor mode needs (SPEC §28.3), built for wasm32-unknown-unknown.
+[dependencies]
+arti-client = { version = "0.46", default-features = false, features = ["onion-service-client", "onion-service-service", "ephemeral-keystore", "bridge-client", "pt-client", "compression", "keymgr", "rustls"] }
+rustls-pki-types = { version = "1", features = ["web"] }
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
