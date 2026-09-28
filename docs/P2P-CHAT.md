@@ -1028,7 +1028,7 @@ Members     4 / 8  (links 5 / 6)
 
 | Phase | Scope | Depends on |
 |---|---|---|
-| **MVP-1** | Sign-in (temporary identity, or saved identity with an encrypted key file); 1:1 in direct mode; two-way exchange by QR, link and paste; binary codes with SDP reconstruction; STUN defaults, privacy modes and **Drop IPv6**; relay prohibition; Noise KK; SAS policy; T3 resume code; **pending queue and ticks; replies, edit, delete, self-destruct timers; typing and read receipts**; **IP disclosure features (§29.2)**; basic diagnostics; CSP, SRI and a version-pinned service worker; desktop browsers and iOS Safari | Checkpoints S1, S2, S4 on all engines |
+| **MVP-1** | Sign-in (temporary identity, or saved identity with an encrypted key file); 1:1 in direct mode; two-way exchange by QR, link and paste; binary codes with SDP reconstruction; STUN defaults, privacy modes and **Drop IPv6**; relay prohibition; Noise KK; SAS policy; T3 resume code; **pending queue and ticks; replies, edit, delete, self-destruct timers; typing and read receipts**; **IP disclosure features (§29.2)**; basic diagnostics; CSP, SRI and a version-pinned service worker; desktop browsers and iOS Safari; **a static landing page** (what the messenger is, how it works, privacy claims as allowed by §21, and a **Start** link to the app) | Checkpoints S1, S2, S4 on all engines |
 | **MVP-2** | T1 in-band ICE restart and `NetChanged` handling; full diagnostics; **contacts; several identities (IndexedDB slots, Web Locks); identity transfer over P2P; reactions** | MVP-1; S3 |
 | **MVP-3** | Owner-controlled rooms of up to 16 members, with **observer role** and owner moderation (delete); introductions by the owner; MLS with the owner as single committer; room disposal; T2 recovery through the owner | MVP-2; S9 |
 | **CARDS** | Contact cards and card secrets | MVP-2 |
@@ -1038,6 +1038,21 @@ Members     4 / 8  (links 5 / 6)
 | **TOR-4** | Rooms over Tor | TOR-3, MVP-3 |
 | **CH-1…CH-5** | Public channels with a Tor-only owner, hosted from the owner's tab (Appendix D) | TOR-1, E8 |
 | **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16 | — |
+
+### 23.1a Release and site layout
+
+- **The repository stays private until MVP-1 is finished**, then it becomes public and GitHub Pages is switched on (Settings → Pages → Deploy from a branch, repository root; `.nojekyll` is already present).
+- **Pages layout** (project site `https://<owner>.github.io/p2p-chat/`):
+
+  | Path | Content |
+  |---|---|
+  | `/` | **Landing page** (static HTML, no scripts needed): what the messenger is, how a chat starts (two codes, in person or by link), what is and is not protected (§21), supported browsers, and a prominent **Start** link to `/app/` |
+  | `/app/` | The PWA (index.html, boot.js, app_bg.wasm, service worker, manifest; §4.1) |
+  | `/app/tor.html` | Tor-mode entry (§28.6), once TOR-2 ships |
+  | `/checks/web/` | The checkpoint page (§24) |
+  | `/docs/P2P-CHAT.md` | This document |
+
+- The landing page follows the same CSP rules (§17.3), uses no third-party fonts, scripts or analytics, and is part of the MVP-1 definition of done.
 
 ### 23.2 Order of work
 
@@ -1069,13 +1084,17 @@ SAFARI=1 ./checks/run_all.sh home-wifi        # installed Chrome + your real Saf
 ./checks/run_all.sh home-wifi                 # installed Chrome only (arti build is the slow part)
 BROWSERS=chrome,firefox,webkit ./checks/run_all.sh all-engines   # adds Firefox (downloaded once)
 ./checks/run_all.sh warp-on                   # again with Cloudflare WARP / your VPN on (TS3)
-E8=1 ./checks/run_all.sh hidden-tab           # adds the 7-minute hidden-tab test (visible Chromium window)
+E8=1 ONLY=browser ./checks/run_all.sh e8     # only the browser checks + the 7-minute hidden-tab test (visible Chrome window)
+IPHONE=1 ONLY=iphone ./checks/run_all.sh iphone   # iPhone via a free Cloudflare quick tunnel + QR code (works while the repo is private)
+BROWSERS=chrome,firefox ONLY=browser ./checks/run_all.sh firefox   # Firefox (brew install node@22; picked up automatically)
 NET=0 SKIP_ARTI=1 ./checks/run_all.sh quick   # offline, fast
 ```
 
 - **Needs:** Node ≥ 20, Python ≥ 3.9, Rust (rustup). For E1 only: an LLVM clang with the WebAssembly backend (Linux `clang`; macOS `brew install llvm`, because Apple's clang has none). Runs on macOS or Linux; on Windows, use WSL2.
 - **`SAFARI=1`** also runs the page in your real Safari, **including cross-engine S1** (Chrome ↔ Safari in both directions, exchanging only the minimal fields through a local mailbox).
-- **iPhone (G2, S6, S4):** open **https://darkcite.github.io/p2p-chat/checks/web/** in Safari. Tap **1** (automatic checks), **2** (S6: leave the app for about 60 s, then come back), **3** (S4: allow the camera), then **Share** or **Copy** the results. The page is `checks/web/` served by GitHub Pages from this branch (repo root, with `.nojekyll`). Refresh the test IPNS record in `checks/web/config.json` with `node checks/make_web_config.mjs`.
+- **`ONLY=`** limits a run to some sections: `stun, gateways, browser, safari, iphone, sizes, argon2, arti`.
+- **iPhone while the repo is private:** `IPHONE=1` serves `checks/web/` from the laptop through a free Cloudflare quick tunnel (`brew install cloudflared`, no account), prints a QR code, and collects the results automatically. `S6_SECONDS` sets the S6 target (default 120 s).
+- **iPhone once the repo is public (G2, S6, S4):** open **https://darkcite.github.io/p2p-chat/checks/web/** in Safari. Tap **1** (automatic checks), **2** (S6: leave the app for about 60 s, then come back), **3** (S4: allow the camera), then **Share** or **Copy** the results. The page is `checks/web/` served by GitHub Pages from this branch (repo root, with `.nojekyll`). Refresh the test IPNS record in `checks/web/config.json` with `node checks/make_web_config.mjs`.
 - **Output:** `checks/out/<timestamp>-<label>/REPORT.md`, plus raw JSON and logs.
 
 ### 24.2 Checkpoint list and results
@@ -1094,7 +1113,7 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 | S7 | Answer-link hand-off between tabs | ⏳ | ✋ | §8.7 |
 | S8 | Default STUN servers dual-stack; srflx gathering | ✅ DNS: Google and Cloudflare have A + AAAA; Twilio A only. ✅ Live (macOS, home Wi-Fi): all three answer over IPv4 and both browsers get the same srflx-v4. That network has **no IPv6**, so srflx-v6 is untested | 🤖 | §9.3 |
 | S9 | 15 connections on iOS | ⏳ | ✋ iPhone | §14.1 |
-| TS3 | WebRTC through WARP or a VPN shows the VPN exit | ⏳ | 🤖 (run twice) | §29.1 |
+| TS3 | WebRTC through WARP or a VPN shows the VPN exit | ⚠️ **First WARP run (macOS, 2026-09-28): not effective.** With WARP reported as on, every STUN reply (what a peer sees) still showed the home ISP address. Either WARP was in DNS-only (1.1.1.1) mode or it did not carry this UDP. The script now prints an automatic verdict (HTTPS IP and `warp=` flag vs STUN/UDP IP). ⏳ Rerun with WARP in "WARP" mode. **Design consequence confirmed:** users cannot tell whether their VPN covers WebRTC, so the "what your peer sees" panel (§29.2) is essential | 🤖 | §29.1 |
 | TS4 | IPv6 bypassing a v4-only VPN | ⏳ | 🤖 | §29.2 |
 | E1 | arti on `wasm32` (**G1**) | ✅ **Linux and macOS (arm64)**: arti 0.46.0, 16/16 crates, plus `arti-client` with onion client and service, ephemeral keystore, bridges, PT, rustls. Upstream has wasm stubs; `coarsetime` uses `performance.now()`. TLS: **ring** with `wasm32_unknown_unknown_js`. **Without the `compression` feature** (zstd/xz), **ring is the only C code**; it needs an LLVM clang with the WebAssembly backend (Linux clang; macOS `brew install llvm`). Extension point for Snowflake: `AbstractPtMgr` / `ChanMgr::set_pt_mgr` | 🤖 | §28 |
 | E2 | Snowflake from a browser (**G2**) | ✅ **Live, desktop:** Chrome 153 and Safari 26.5 (macOS) get a proxy answer from the broker and open a DataChannel to a volunteer proxy, through **both** the CDN URL (`1098762253.rsc.cdn77.org`, no domain fronting needed) and `snowflake-broker.torproject.net`. Rendezvous 0.7–4.8 s; DataChannel open 2–6 s after start; sometimes the first tries report no proxy available, so retry. Protocol: `POST /client`, body `1.0\n{"offer": <JSON SDP>, "nat": "unknown", "fingerprint": <bridge fp>}`; stack: WebRTC → encapsulation → KCP → smux. ⏳ iPhone | 🤖 | §28 |

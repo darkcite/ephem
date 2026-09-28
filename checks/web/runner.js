@@ -79,14 +79,16 @@
     $('s6').disabled = true;
     await C.bgStart();
     s6armed = true;
-    log('S6 armed: switch to another app (e.g. Messages) for about 60 s, then come back to this tab.');
+    log(`S6 armed: switch to another app (e.g. Messages) and stay away at least ${cfg.s6Seconds || 120} s, then come back to this tab.`);
   }
   document.addEventListener('visibilitychange', async () => {
     if (!s6armed || document.visibilityState !== 'visible') return;
     s6armed = false;
     await new Promise((r) => setTimeout(r, 500));
     const r = await C.bgFinish();
-    add('S6', `${cfg.label} pending offer after ${r.hiddenSeconds} s in background`, r.ok ? 'PASS' : 'FAIL', r);
+    const want = cfg.s6Seconds || 120;
+    const status = !r.ok ? 'FAIL' : (r.hiddenSeconds >= want ? 'PASS' : 'INCONCLUSIVE');
+    add('S6', `${cfg.label} pending offer after ${r.hiddenSeconds} s in background (target ≥ ${want} s)`, status, r);
     $('s6').disabled = false;
     await send(false);
   });

@@ -10,6 +10,9 @@
 #                chrome   = your installed Google Chrome (no download)
 #                chromium, firefox, webkit = Playwright builds (downloaded once; webkit = Safari's engine)
 #   FORCE_BROWSER_INSTALL=1   re-download Playwright engines even if cached
+#   ONLY=a,b       run only these sections: stun, gateways, browser, safari, iphone, sizes, argon2, arti
+#   IPHONE=1       serve the checks page to your iPhone through a free Cloudflare quick tunnel
+#                  (needs `brew install cloudflared`; works while the repo is private). S6_SECONDS=120
 #   SAFARI=1       also run the checks in your real Safari (macOS; opens a Safari tab, results collected automatically)
 #   NET=0          skip live-network checks (Snowflake, STUN, IPFS)
 #   E8=1           also run the 7-minute hidden-tab test (opens a visible Chrome window)
@@ -29,6 +32,7 @@ WASM_FLAGS='--cfg getrandom_backend="wasm_js"'
 say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing: $1 ($2)"; MISSING=1; }; }
 bytes(){ wc -c < "$1" | tr -d ' '; }
+want() { [ -z "${ONLY:-}" ] || case ",$ONLY," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 
 # ---------------------------------------------------------------- prerequisites
 say "Prerequisites"
@@ -75,6 +79,15 @@ fi
 
 # ---------------------------------------------------------------- browsers
 BROWSERS="${BROWSERS:-chrome}"
+# Playwright's engine installer hangs on Node > 24. If Playwright engines are requested and a
+# Node 22 (Homebrew node@22) exists, use it for this run.
+case ",$BROWSERS," in *,firefox,*|*,webkit,*|*,chromium,*)
+  if [ "$(node -p 'process.versions.node.split(".")[0]')" -gt 24 ]; then
+    for d in "$(brew --prefix node@22 2>/dev/null)" /opt/homebrew/opt/node@22 /usr/local/opt/node@22; do
+      if [ -n "$d" ] && [ -x "$d/bin/node" ]; then export PATH="$d/bin:$PATH"; echo "using Node $(node --version) from $d for Playwright engines"; break; fi
+    done
+  fi ;;
+esac
 # npm: only when node_modules is missing or older than package.json / package-lock.json
 if [ ! -d "$ROOT/node_modules/playwright" ] || [ "$ROOT/package.json" -nt "$ROOT/node_modules/.package-lock.json" ] \
    || [ "$ROOT/package-lock.json" -nt "$ROOT/node_modules/.package-lock.json" ]; then
@@ -114,13 +127,13 @@ if [ -n "$DL" ]; then
 fi
 
 # ---------------------------------------------------------------- S8 / TS3 raw STUN
-if [ "${NET:-1}" != 0 ]; then
-  say "S8 / TS3: raw STUN over UDP (what a peer sees)"
+if [ "${NET:-1}" != 0 ] && want stun; then
+  say "S8 / TS3: raw STUN over UDP (what a peer sees) + VPN/WARP verdict"
   { echo "## S8 / TS3: raw STUN over UDP"; echo; python3 "$ROOT/stun_udp.py" "$LABEL"; echo; } | tee -a "$OUT/REPORT.md"
 fi
 
 # ---------------------------------------------------------------- C-P1 diagnostic (outside the browser)
-if [ "${NET:-1}" != 0 ]; then
+if [ "${NET:-1}" != 0 ] && want gateways; then
   say "C-P1 diagnostic: gateway status, redirects and CORS headers (curl)"
   CID=bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi
   {
@@ -140,18 +153,32 @@ if [ "${NET:-1}" != 0 ]; then
 fi
 
 # ---------------------------------------------------------------- browser checks
+if want browser; then
 say "Browser checks: S1 S2 S4 S8 TS4 E2 C-P1 C-P4 ${E8:+E8}"
 ( cd "$ROOT" && NET="${NET:-1}" E8="${E8:-0}" BROWSERS="$BROWSERS" node browser_checks.mjs "$OUT" ) 2>&1 | tee "$OUT/browser.log"
 { echo "## Browser checks"; echo; cat "$OUT/browser.md" 2>/dev/null || echo "browser checks did not produce a report (see browser.log)"; echo; } >> "$OUT/REPORT.md"
+fi
 
 # ---------------------------------------------------------------- real Safari (macOS)
-if [ "${SAFARI:-0}" = 1 ]; then
+if [ "${SAFARI:-0}" = 1 ] && want safari; then
   say "Real Safari: S1 (one tab + Chrome↔Safari cross-engine) S2 S4 S8 E2 C-P1 C-P4 (a Safari tab opens; leave it until DONE)"
   ( cd "$ROOT" && NET="${NET:-1}" node safari_checks.mjs "$OUT" ) 2>&1 | tee "$OUT/safari.log"
   { echo "## Real Safari"; echo; cat "$OUT/safari.md" 2>/dev/null || echo "Safari checks did not produce a report (see safari.log)"; echo; } >> "$OUT/REPORT.md"
 fi
 
+# ---------------------------------------------------------------- iPhone over a Cloudflare quick tunnel
+if [ "${IPHONE:-0}" = 1 ] && want iphone; then
+  say "iPhone: G2 S1 S2 S4 S6 S8 C-P1 C-P4 via a Cloudflare quick tunnel (scan the QR code with the iPhone)"
+  if command -v cloudflared >/dev/null 2>&1; then
+    ( cd "$ROOT" && S6_SECONDS="${S6_SECONDS:-120}" node iphone_checks.mjs "$OUT" ) 2>&1 | tee "$OUT/iphone.log"
+    { echo "## iPhone"; echo; cat "$OUT/iphone.md" 2>/dev/null || echo "no iPhone results (see iphone.log)"; echo; } >> "$OUT/REPORT.md"
+  else
+    echo "cloudflared is not installed: brew install cloudflared" | tee -a "$OUT/REPORT.md"
+  fi
+fi
+
 # ---------------------------------------------------------------- S5: wasm sizes
+if want sizes; then
 say "S5: WASM sizes of protocol crates"
 {
   echo "## S5: WASM sizes (opt-level=s, LTO, gzip -9)"; echo
@@ -166,8 +193,10 @@ say "S5: WASM sizes of protocol crates"
   done
   echo
 } | tee -a "$OUT/REPORT.md"
+fi
 
 # ---------------------------------------------------------------- S5b: Argon2id timing
+if want argon2; then
 say "S5b: Argon2id timing in WASM (V8)"
 {
   echo "## S5b: Argon2id in WASM (V8)"; echo
@@ -179,9 +208,12 @@ say "S5b: Argon2id timing in WASM (V8)"
   fi
   echo
 } | tee -a "$OUT/REPORT.md"
+fi
 
 # ---------------------------------------------------------------- E1 / G1: arti for wasm32
-if [ "${SKIP_ARTI:-0}" != 1 ] && [ -z "$WASM_CC" ]; then
+if ! want arti; then
+  :
+elif [ "${SKIP_ARTI:-0}" != 1 ] && [ -z "$WASM_CC" ]; then
   { echo "## E1 / G1: arti for wasm32"; echo; echo "SKIPPED: needs an LLVM clang with a wasm32 backend (macOS: \`brew install llvm\`)."; echo; } | tee -a "$OUT/REPORT.md"
 elif [ "${SKIP_ARTI:-0}" != 1 ]; then
   say "E1 / G1: arti-client (Tor) for wasm32 with the Tor-mode feature set (slow the first time)"
