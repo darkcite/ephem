@@ -2,9 +2,9 @@
 
 | Field          | Value |
 |----------------|-------|
-| Version        | 0.4 |
-| Status         | Architecture / Protocol Draft. Owner decisions up to v0.4 applied (§25); open questions in §25.3 |
-| Supersedes     | v0.3 (messaging features, contacts, identities, Tor, IP privacy), v0.2, v0.1 (rationale in [`REVIEW-v0.1.md`](REVIEW-v0.1.md)) |
+| Version        | 0.5 |
+| Status         | Architecture / Protocol Draft. Owner decisions up to v0.5 applied (§25); open question in §25.4 |
+| Supersedes     | v0.4 (answers to QN2–QN12, contact cards, Tor-only channel owners, embedded-Tor research), v0.3, v0.2, v0.1 (rationale in [`REVIEW-v0.1.md`](REVIEW-v0.1.md)) |
 | Deployment     | GitHub Pages, project site `https://<owner>.github.io/p2p-chat/` |
 | Runtime        | Browser PWA |
 | Implementation | Rust (edition 2024) → `wasm32-unknown-unknown` |
@@ -104,7 +104,7 @@ Only a static host is required:
 Application backend, WebSocket or HTTP signalling, TURN, chat relay, message database, Redis, Kafka, IPFS message storage, a central presence service, central authentication, analytics or telemetry, remote logging, and third-party scripts. These bans apply **fully and without exception to private chats (1:1 and rooms)**.
 
 - IPFS MAY mirror the **static assets**.
-- **The only exception** is the separate, opt-in **public channels** feature (§27). It stores **public** posts on IPFS through the owner's own local IPFS node and free public gateways. Private-chat data (messages, keys, codes, membership) MUST NOT enter it. In code this is enforced by crate and page isolation: the `channel` crate has no API that accepts chat data, and it runs only on `channel.html`, which has its own CSP.
+- **The only exception** is the separate, opt-in **public channels** feature (§27). Its **public** posts use the IPFS data format, are served by the owner **only over a Tor onion service**, and may be mirrored by followers (optionally to public IPFS). Private-chat data (messages, keys, codes, membership) MUST NOT enter it. In code this is enforced by crate and page isolation: the `channel` crate has no API that accepts chat data, and it runs only on `channel.html`, which has its own CSP.
 
 ## 5. Trust base
 
@@ -258,7 +258,8 @@ The app opens on a sign-in screen:
 |---|---|---|
 | 0x01 | CONTACTS | `u16 count` (≤ 256), then one entry per contact (§7.5) |
 | 0x02 | COMPANION | `token [u8; 32]`, `port u16` (Tor mode, §28.3) |
-| 0x03 | KUBO | `u8 len` + RPC token (public channels plan) |
+| 0x03 | KUBO | `u8 len` + RPC token (only for followers who mirror to IPFS, public channels plan §7.2) |
+| 0x04 | CARD | `card_secret [u8; 16]`, `expires_at u32` (0 = never): the secret in your current contact card (§7.5) |
 | other | — | Kept unchanged on re-save, so newer app versions can add sections |
 
 - Key: Argon2id(passphrase, salt), 32 bytes. After sign-in the derived key stays in wasm memory, so the app can **re-save** after the contacts change without asking again. It is zeroized on sign-out. The Argon2id defaults are the OWASP minimum.
@@ -296,6 +297,25 @@ Wallet sign-in is removed from the MVP plan. When it comes back, the design in R
   - **reconnecting without a QR** in Tor mode, through the stored `onion_pk` (§28.6).
 - **Privacy:** a contacts list records who you talk to. It is only as safe as the key file's passphrase (§21).
 
+**Contact cards** (saved identities only)
+
+- A contact card is a QR code or link (`#k=`) that lets someone add you **without chatting first**. In Tor mode it also lets them **dial you later** (§28.4). It works like Tox's "nospam".
+- **Layout** (`kind = 6 CONTACT_CARD`, about 89 B plus the nickname):
+
+  | Size | Field |
+  |---|---|
+  | 4 | header (§8.3) |
+  | 32 | `peer_id` |
+  | 32 | `onion_pk` |
+  | 16 | `card_secret` |
+  | 4 | `expires_at` |
+  | 1 + n | suggested nickname (≤ 32 B) |
+
+- **Adding from a card** creates an **unverified** contact. The first connection still prompts the SAS, which then sets `verified`.
+- **Revoking:** "Reset my contact card" generates a new `card_secret` (TLV 0x04). Every card shared before stops working for first contact. Contacts already added are not affected.
+- **Default expiry:** 30 days, or "never".
+- **Direct mode:** a card only pins the key and nickname. A connection still needs the invite and answer exchange (§8), because there is no rendezvous without signalling.
+
 ### 7.6 Moving an identity to another device (P2P, no cloud)
 
 This is Telegram's "log in with a QR code", done without a server:
@@ -305,7 +325,7 @@ This is Telegram's "log in with a QR code", done without a server:
 3. **The SAS is mandatory**, even when both codes were scanned in person, because the whole identity is at stake.
 4. After the SAS is confirmed on both sides, the old device sends its **encrypted key-file blob** (§7.3) in IDENTITY_CHUNK records (§11.2). The blob is still encrypted with the passphrase.
 5. The new device asks for the passphrase. It decrypts the blob and offers to remember it in a slot, and to download a backup.
-6. The old device then offers "Keep this identity here" or "Remove it from this device".
+6. The old device then offers "Keep this identity here" (**the default**) or "Remove it from this device".
 
 - There is **no sync afterwards**: each device holds its own copy.
 - Two devices using the same identity **at the same time** in the same 1:1 or room are refused. The second session gets `E_DUPLICATE_SESSION` from the peer or the room owner, who sees two live sessions with one `PeerId`.
@@ -349,7 +369,7 @@ Alice (offerer)                                   Bob (answerer)
 | Off | Size | Field | Notes |
 |---|---|---|---|
 | 0 | 1 | `ver` | Protocol major version = `1` |
-| 1 | 1 | `kind` | `1` = INVITE, `2` = ANSWER, `3` = RESUME_INVITE, `4` = RESUME_ANSWER, `5` = TOR_INVITE (§28.4) |
+| 1 | 1 | `kind` | `1` = INVITE, `2` = ANSWER, `3` = RESUME_INVITE, `4` = RESUME_ANSWER, `5` = TOR_INVITE (§28.4), `6` = CONTACT_CARD (§7.5) |
 | 2 | 1 | `flags` | bit0 `LAN_ONLY`, bit1 `GROUP` (MVP-3), bit2 `TRANSFER` (identity transfer, §7.6), bit3 `OBSERVER` (room invite for a read-only member, §14.2). Other bits are reserved and MUST be 0 |
 | 3 | 1 | `n_cand` | 0..=8 |
 
@@ -623,7 +643,7 @@ All of these exist only in RAM, reach only peers who are connected (or who come 
 | ✓ | **Delivered** | ACK |
 | ✓✓ | **Read** | READ. In a room: "read by k/N" in the message details, and ✓✓ once every current member has read it |
 
-**Read receipts and typing** are on by default in 1:1 and off in rooms (open question QN3). They are **reciprocal**: if you turn off read receipts, you stop sending READ and you also stop seeing others' ✓✓. The same applies to typing.
+**Read receipts and typing** are on by default in 1:1 and off in rooms. They are **reciprocal**: if you turn off read receipts, you stop sending READ and you also stop seeing others' ✓✓. The same applies to typing.
 
 - **READ** is sent when the message is on screen and the page is visible, coalesced to at most one per second.
 - **TYPING** is sent at most once every 3 s while typing. The receiver clears the indicator after 6 s without a refresh, or on `0`.
@@ -636,12 +656,12 @@ All of these exist only in RAM, reach only peers who are connected (or who come 
 
 **Edit**
 
-- Only your own messages can be edited.
+- Only your own messages can be edited. **There is no time limit**: messages only exist for the session anyway, and a limit would add clock-skew problems between peers without adding any privacy.
 - The EDIT record carries the full new text. Receivers replace the text and show "edited". There is no edit history.
 
 **Delete**
 
-- **Delete for everyone:** the sender can delete their own messages. In a room, the **owner** can delete any member's message (moderation; open question QN4).
+- **Delete for everyone:** the sender can delete their own messages. In a room, the **owner** can delete any member's message (moderation).
 - Receivers overwrite the text slot with zeros and show "Message deleted".
 - **Delete for me:** local only.
 
@@ -653,6 +673,7 @@ All of these exist only in RAM, reach only peers who are connected (or who come 
 **Self-destruct timer** (`rflags.bit1`)
 
 - `ttl_s` ∈ {5, 30, 60, 300, 3 600, 86 400} seconds, chosen per chat and applied to every message sent while it is set.
+- **Who sets it:** in 1:1, **either person**. In a room, **only the owner**. A change is shown to everyone as a notice in the chat ("Alice set messages to disappear after 1 min"). The setting is sent as a CHAT with `rflags.bit3 SETTING` and an empty body.
 - **Recipient:** the countdown starts when the message is first on screen, which is when READ would be sent.
 - **Sender:** the countdown starts when READ arrives. If the peer has read receipts off (HELLO bit3 = 0), it starts at ACK.
 - On expiry, both sides overwrite the text slot with zeros, remove it from the DOM, and any reply quoting it shows "Message unavailable". A pending message does not start its countdown until it is delivered.
@@ -660,8 +681,8 @@ All of these exist only in RAM, reach only peers who are connected (or who come 
 
 **Rooms and observers** (§14.2)
 
-- Every receiver drops CHAT, EDIT, TYPING and REACT from observers (open question QN5 for REACT).
-- An observer sends only ACK, READ, PING/PONG and GOODBYE.
+- Observers are **strictly read-only**: every receiver drops CHAT, EDIT, DELETE, TYPING and REACT from an observer (`E_NOT_PERMITTED`).
+- An observer sends only protocol records: ACK, READ (if read receipts are on), PING/PONG and GOODBYE.
 
 ## 12. Connection state machine (per pairwise link)
 
@@ -991,7 +1012,10 @@ Members     4 / 8  (links 5 / 6)
 | **TOR-2** | Tor mode in the PWA for 1:1: transport guard, TOR_INVITE (one-way), Noise IK, stream framing, "VIA TOR" UI |
 | **TOR-3** | Reconnecting contacts through stable onion addresses, with no QR |
 | **TOR-4** | Rooms over Tor (the owner shares members' onion addresses; members dial each other directly) |
-| **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16; in-browser Tor (research) |
+| **CARDS** | Contact cards and card secrets; card-based Tor dial (with TOR-3) |
+| **CH-1…CH-5** | Public channels, Tor-only owner (plan v2 §9) |
+| **TOR-E (research)** | Tor built into WASM through Snowflake, for iOS and desktop without the companion. Gates G1–G4 in `EMBEDDED-TOR-WASM.md` |
+| **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16 |
 
 ## 24. Validation spikes (must finish before the design they gate is frozen)
 
@@ -1036,14 +1060,26 @@ Members     4 / 8  (links 5 / 6)
 | Tor | A second, separate transport through a local companion, with all features that fit the architecture | §28 |
 | IP privacy | VPN or Cloudflare WARP, Tor mode, LAN-only mode; three disclosure features in MVP-1 | §29 |
 
-### 25.3 Open questions (asked in chat, 2026-09-28)
+### 25.3 Decisions in v0.5
 
-QN1–QN12 are listed in the chat of the same date. Once answered, the defaults below become decisions:
+| # | Topic | Decision | Where |
+|---|---|---|---|
+| QN2 | Tor mode scope | Chosen per signed-in session | §28.2 |
+| QN3 | Typing and read receipts | On in 1:1, off in rooms, reciprocal | §11.7 |
+| QN4 | Moderation | The room owner can delete any message | §11.7 |
+| QN5 | Observers | Strictly read-only (no reactions, no typing) | §11.7 |
+| QN6 | Self-destruct control | Either person in 1:1; only the owner in rooms; changes shown to all | §11.7 |
+| QN7 | Tor bridges | On by default (Snowflake first) | §28.3 |
+| QN8 | After identity transfer | The old device keeps it by default | §7.6 |
+| QN9 | Contact cards | Yes, with a revocable card secret | §7.5, §28.4 |
+| QN10 | Edit and delete time limit | None (session-scoped) | §11.7 |
+| QN11 | Remembered identities | 8 per device | §7.2 |
+| QN12 | Public channels | Desktop-only publishing; the owner is always hidden (Tor-only onion); no link to the chat identity; 4 KiB posts; republishing and gateways as designed in plan v2 | §27 |
+| — | Tor without the companion | Research track with gates (Snowflake + arti in WASM) | §28.1, EMBEDDED-TOR-WASM.md |
 
-- **QN3:** read receipts and typing on in 1:1, off in rooms.
-- **QN4:** the owner can delete any message in a room.
-- **QN5:** observers cannot react.
-- **QN7:** Tor bridges are used only on request.
+### 25.4 Open question
+
+- **QN1:** code signing for `p2pchat-companion`. Either ship unsigned, with instructions for getting past macOS Gatekeeper and Windows SmartScreen, or pay for signing (Apple Developer about $99 a year, plus a Windows code-signing certificate).
 
 ## 26. Out of scope
 
@@ -1061,17 +1097,21 @@ QN1–QN12 are listed in the chat of the same date. Once answered, the defaults 
 ## 27. Public channels (opt-in exception to P7 and §4.3)
 
 - A public channel is a permanent, **public** broadcast feed. Only its owner can post, and everyone else can only read.
-- It is stored on IPFS: pinned by the owner's local Kubo, and read through free public gateways with every block checked in Rust.
-- It is a **publication, not a chat**, and it is fully separate from private chats: its own page (`channel.html`), its own CSP, its own crate, and its own signing key derived from the saved identity.
-- Private-chat data MUST NOT flow into a channel.
-- The design, limits (desktop-only publishing, the owner's IP visible as provider, practical permanence) and phases are in [`../plans/PUBLIC-CHANNELS-IPFS.md`](../plans/PUBLIC-CHANNELS-IPFS.md). This section becomes normative once that plan's decisions D1–D6 are made.
+- Posts are limited to 4 KiB of text.
+- It is a **publication, not a chat**, and is fully separate from private chats: its own page (`channel.html`), its own CSP, its own crate, and its own keys. Private-chat data MUST NOT flow into a channel.
+- **The owner is always hidden:**
+  - The owner publishes **only through a Tor onion service**, run by the companion on a desktop. The owner never takes part in the public IPFS network, so the owner's IP is never exposed.
+  - The channel's keys and onion address are derived one-way and are **not linked** to the owner's chat identity. The owner is known only if they say so in the channel.
+- **Content format:** IPFS-native (CIDs, dag-cbor, CAR, IPNS V2 records), verified in Rust. Followers may mirror a channel over their own onion, or, accepting that their own IP becomes visible, to public IPFS. That is what lets readers without Tor read it through public gateways.
+- Details and phases: [`../plans/PUBLIC-CHANNELS-IPFS.md`](../plans/PUBLIC-CHANNELS-IPFS.md) (plan v2).
 
 ## 28. Tor mode (a second, separate transport)
 
 ### 28.1 Why a separate transport
 
 - WebRTC data runs over UDP, and Tor carries only TCP streams. Tor Browser and Onion Browser also disable WebRTC entirely. So Tor mode is **not** "WebRTC over Tor": it is a different transport, under the **same** protocol above it (Noise, records, rooms, contacts, messaging features).
-- **Availability:** desktop Chrome, Edge and Firefox, plus desktop Safari if spike TS2 passes. **Not iOS**, because iOS cannot run the companion. iOS users get IP privacy from a VPN or WARP (§29.1).
+- **Availability with the companion:** desktop Chrome, Edge and Firefox, plus desktop Safari if spike TS2 passes.
+- **Without the companion (research track):** Tor **built into the WASM app** through Snowflake, for iOS and desktop. It is feasible in principle, with gates and limits: on iOS the onion is reachable **only while the app is in the foreground**. See [`../plans/EMBEDDED-TOR-WASM.md`](../plans/EMBEDDED-TOR-WASM.md). Until gate G3 passes, iOS users get IP privacy from a VPN or WARP (§29.1).
 
 ### 28.2 Mode selection and isolation
 
@@ -1096,7 +1136,7 @@ QN1–QN12 are listed in the chat of the same date. Once answered, the defaults 
   - one **control** WebSocket, carrying `HOST(onion_secret)`, `DIAL(onion_pk)` and incoming-stream notifications;
   - one WebSocket per Tor stream, carrying raw bytes.
 - The onion secret key is sent at session start and kept **in RAM only** by the companion *(spike TS1)*. It is dropped when the control socket closes.
-- **Bridges** (for networks that block Tor): off by default, with a "Tor is blocked on my network" toggle (open question QN7).
+- **Bridges are on by default.** Snowflake is first, then obfs4 and WebTunnel from the built-in lists. The companion bundles the pluggable-transport binaries (lyrebird and snowflake-client). Settings offer "Connect to Tor directly" for faster bootstrap where Tor is not blocked.
 
 ### 28.4 One-way invite (single QR) and handshake
 
@@ -1115,7 +1155,13 @@ The virtual port is fixed. There are no ICE candidates, fingerprints or answer.
 
 - **Single QR:** Bob dials Alice's onion address straight from the invite. **No answer code is needed.** This is the one-way bootstrap that v0.1 wanted, and it becomes possible under Tor.
 - **Handshake:** `Noise_IK_25519_ChaChaPoly_BLAKE2s`. The initiator is the dialler (Bob, or a contact reconnecting). The prologue is the invite bytes, or `"p2pchat/contact"` for contact reconnects. The first handshake payload carries `invite_id` (16 B) and the initiator's `onion_pk`.
-- **Who is accepted:** an incoming stream is accepted only if its static key is in **contacts**, or the payload names a **live, unused** `invite_id`. Everything else is closed with `E_NOT_A_CONTACT` before any application data. This blocks spam, which was Tox's "nospam" problem.
+- **Who is accepted:** an incoming stream is accepted only in one of these cases:
+  1. its static key is in **contacts**;
+  2. the payload names a **live, unused** `invite_id`;
+  3. the payload carries the current, unexpired **`card_secret`** (§7.5). The user is then asked "Bob (from your contact card) wants to connect", and the key is added as a contact if they accept.
+
+  Everything else is closed with `E_NOT_A_CONTACT` before any application data. This blocks spam, which was Tox's "nospam" problem.
+- For a card-based dial, the first handshake payload carries `card_secret` (16 B) in place of `invite_id`.
 - **SAS:** prompted for every non-contact (§10.4), because Alice has no out-of-band proof of Bob's key.
 
 ### 28.5 Transport rules

@@ -1,244 +1,172 @@
-# Plan: Permanent public channels on IPFS (owner-only posting, read-only for others)
+# Plan: Permanent public channels, with the owner hidden behind Tor and IPFS-format content
 
 | Field | Value |
 |---|---|
-| Status | **Proposal, principles approved.** The exception to SPEC P7 and §4.3 has been added (SPEC §27). The details below await decisions D1–D6 (§12) |
-| Relates to | [`SPEC.md`](../spec/SPEC.md) v0.3 |
-| Constraint | Every IPFS component must be **free and need no registration**: no paid pinning, no accounts, no API keys |
+| Status | **Plan v2, owner decisions applied.** The principle is in SPEC §27. The details here become normative once spikes C-P1…C-P5 pass |
+| Relates to | [`SPEC.md`](../spec/SPEC.md) v0.5 §27, §28; [`EMBEDDED-TOR-WASM.md`](EMBEDDED-TOR-WASM.md) |
+| Constraint | Free, with no registration. **The owner's IP address and chat identity are never revealed by the system** |
 | Date | 2026-09-28 |
+| Replaces | Plan v1 (the owner's Kubo announced the channel on the public IPFS DHT, which revealed the owner's IP) |
 
 ---
 
-## 1. Goal
+## 1. Goal and owner decisions
 
-A user can optionally create a **public channel**:
+| # | Decision |
+|---|---|
+| D1 | Publishing is **desktop only**, and that is acceptable |
+| D2 | The **owner's IP is always hidden**, so channels are published **only over Tor** |
+| D3 | Republishing: whatever works best (§5.3) |
+| D4 | The channel is **not linked** to the owner's chat identity. The owner is known only if they choose to say so in a post |
+| D5 | Posts are limited to **4 KiB** of text |
+| D6 | Gateways: whatever works best (§6.3) |
 
-- It has a stable link and is **permanent**: it stays available as long as someone pins it.
-- **Only the owner can post.** Everyone else can only read.
-- The content is stored on **IPFS** and pinned from a folder on the **owner's own device**.
-- There is no server, no paid pinning service and no registration.
+## 2. Why v1 could not hide the owner
 
-## 2. Is it possible? Yes, with three hard constraints
+An IPFS node (Kubo) announces its own IP address in the public DHT as a *provider* of the content it hosts. Kubo cannot run its libp2p networking over Tor in a supported way. Anyone who looks up the channel's content would find the owner's address. **So the owner must never take part in the public IPFS network.**
 
-| # | Constraint | Why | Consequence |
-|---|---|---|---|
-| C1 | **The owner must publish from a desktop running a local IPFS node**: Kubo, or IPFS Desktop, which bundles Kubo. Both are free, open source and need no account | A browser tab cannot be a reliable IPFS host. It stops serving when the tab closes, and browser nodes cannot accept incoming connections, so public gateways cannot fetch from them. iOS cannot run Kubo at all | The owner publishes from desktop Chrome, Edge or Firefox (desktop Safari to be checked in spike P2). **Readers can use any target, iPhone included** |
-| C2 | **Availability = the owner's machine uptime, plus followers who pin** | "Free + no registration" excludes every pinning service (Pinata, Filebase, web3.storage and others all need accounts) | When the owner's computer is off and no follower pins the channel, new readers cannot load it. Followers who run Kubo can pin a channel to keep it available (Phase C4) |
-| C3 | **Public data is permanent and public** | Anyone can copy content-addressed data. Gateways cache it. Followers pin it | "Delete" only removes a post from the latest version of the channel. Old copies may survive. The UI MUST say so before the first post |
+## 3. Design v2: IPFS format, Tor transport
 
-## 3. How this fits the existing principles
-
-Public channels are **publications, not chats**. They are a separate feature with their own screen and their own page. The following parts of the spec **have been amended** (SPEC P7, §4.3 and §27):
-
-- **P7 (no history)** and **§4.3 (IPFS message storage forbidden)** stay fully in force for **private chats**. The amendment adds one explicit, opt-in exception: public channels (SPEC §27) are permanent public publications on IPFS, and no private-chat data may ever enter them.
-- **P1 (no application backend)** still holds:
-  - the owner's Kubo is software the user runs on their own device;
-  - public gateways are optional third-party infrastructure, like STUN;
-  - they are untrusted, because every byte is checked against its hash and signature (§6).
-
-## 4. Architecture
+- **The data stays IPFS-native.** It uses CIDs, dag-cbor blocks, CAR files and IPNS V2 signed records, so any IPFS tool can verify it, and anyone can mirror it to IPFS.
+- **The owner serves it only as a Tor onion service.**
 
 ```
- OWNER (desktop)                                         READERS (any target, incl. iPhone PWA)
- ┌──────────────────────────────┐                        ┌──────────────────────────────────┐
- │ PWA  channel.html            │                        │ PWA  channel.html#c=<ipns-name>  │
- │  Rust/WASM `channel` crate:  │                        │  Rust/WASM `channel` crate:      │
- │   build post → dag-cbor      │                        │   fetch IPNS record + CAR        │
- │   sign (Ed25519, owner key)  │                        │   verify record sig + seq        │
- │   compute CIDs, build CAR    │                        │   verify CIDs + post signatures  │
- │   sign IPNS record           │                        │   render, read-only              │
- └──────────┬───────────────────┘                        └───────────────┬──────────────────┘
-            │ HTTP 127.0.0.1:5001 (Kubo RPC,                              │ HTTPS (trustless mode:
-            │ token-scoped, CORS for app origin)                          │  ?format=car, ipns-record)
-            v                                                             v
- ┌──────────────────────────────┐    libp2p / DHT     ┌────────────────────────────────────────┐
- │ Kubo (IPFS Desktop)          │ ◀──────────────────▶│ Public gateways (free, no account):    │
- │  MFS folder /p2p-chat/<name> │    bitswap           │ trustless-gateway.link, ipfs.io,       │
- │  = the channel folder        │                      │ dweb.link. Untrusted: content          │
- │  pins, provides to DHT,      │                      │ verified in Rust                       │
- │  republishes IPNS            │                      └────────────────────────────────────────┘
- └──────────────────────────────┘
-            ▲
-            │ optional: followers' Kubo pins the same CIDs (Phase C4)
+ OWNER (desktop, hidden)                                  READERS
+ ┌───────────────────────────────┐                        ┌────────────────────────────────┐
+ │ PWA channel.html              │                        │ PWA channel.html#c=<ipns-name>  │
+ │  Rust: sign posts, build CAR, │                        │  Rust: verify record, CIDs and  │
+ │  sign the IPNS V2 record      │                        │  post signatures                │
+ └───────────┬───────────────────┘                        └───────┬──────────────┬──────────┘
+             │ loopback, token-scoped                              │ Tor           │ HTTPS (optional)
+             v                                                    v               v
+ ┌───────────────────────────────┐   onion service    ┌──────────────────┐  ┌──────────────────────┐
+ │ p2pchat-companion             │ ◀────────────────▶ │ reader's Tor:    │  │ public IPFS gateways │
+ │  channel store (a folder on   │   (Tor network)    │ companion, or    │  │ (only if a follower  │
+ │  disk = the pinning folder)   │                    │ embedded Tor     │  │ mirrored to IPFS)    │
+ │  trustless-gateway API        │                    └──────────────────┘  └──────────────────────┘
+ │  served on <channel>.onion    │
+ └───────────────────────────────┘
 ```
 
-Design choices:
+1. **Owner.** The companion (SPEC §28.3) keeps the channel as a **folder on the owner's disk**, `<data>/channels/<name>/`: blocks and the latest signed record. This is the pinning folder. The companion serves the folder on a **dedicated onion address** as a small read-only subset of the **IPFS trustless-gateway API**:
+   - `GET /ipfs/<cid>?format=car` (and `format=raw`);
+   - `GET /ipns/<name>?format=ipns-record`.
+2. **Readers** use exactly the same verifying client as for a public gateway (§6). The difference is that the "gateway" is `http://<channel-onion>.onion`, reached through Tor.
+3. **Mirrors** (followers) keep a copy and serve it too (§7). A mirror can be another onion (the follower's IP stays hidden) or, if the follower chooses to, the public IPFS network (the follower's IP is exposed, never the owner's).
 
-1. **The channel is a folder.** The channel lives in Kubo's MFS (Mutable File System) at `/p2p-chat/channels/<name>/`. It shows up in IPFS Desktop's *Files* view and is pinned for as long as it stays there. This is the "pinning folder on the user's device". Optionally, on Chromium, the PWA also mirrors it to a real disk folder using the File System Access API.
-2. **Rust does all the cryptography and content addressing.** Kubo is used only for storage, networking, pinning and publishing. The owner's private key never leaves the PWA, unless the owner chooses automatic republishing (§6.3, option B).
-3. **Readers never trust a gateway.** Gateways are used in *trustless* mode: they return the raw CAR or IPNS-record bytes, and the Rust code verifies every hash and signature. A malicious gateway can refuse to answer or serve stale data. It cannot forge or change posts.
+## 4. Identity separation (D4)
 
-## 5. Data model
+- Channel signing key = `HKDF(seed, "p2pchat/channel/" ‖ u32 index)` (Ed25519). The **IPNS name** is that key.
+- Channel onion key = `HKDF(seed, "p2pchat/channel-onion/" ‖ u32 index)`. It is a **different onion address** from the owner's chat onion (SPEC §28.6).
+- HKDF is one-way. Nothing in a channel (keys, onion address, manifest) can be linked to the owner's `PeerId`, chat onion, nickname or contacts.
+- The `owner_peer` field is **removed** from the manifest. The manifest has a `title` and an `about` text that the owner writes; if the owner wants to be known, they say so there.
+- **Operational caveats**, which the UI states when the channel is created:
+  - writing style and posting times can identify you;
+  - the channel is owned by the same key file as your chat identity, so anyone who obtains that file can link the two. The owner MAY use a **separate identity** just for the channel, as several identities are supported (SPEC §7.2).
 
-### 5.1 Identity and the channel address
+## 5. Data and publishing
 
-- A channel needs a **saved identity** (SPEC §7.2). A temporary identity cannot own a permanent channel.
-- Channel signing key: `HKDF(seed, "p2pchat/channel/" ‖ u32 channel_index)` → an Ed25519 key pair.
-- **Channel address** = its **IPNS name**: the libp2p peer ID of that Ed25519 public key (identity multihash), written as base36 CIDv1. For example: `k51qzi5uqu5d…`.
-- Link: `https://<owner>.github.io/p2p-chat/channel.html#c=<ipns-name>`. It also works as a QR code. The address is also valid at `https://dweb.link/ipns/<ipns-name>`.
-- Because the key is derived from the identity seed, the owner can **restore channel ownership on any desktop** from the key file (SPEC §7.3).
+### 5.1 Blocks (dag-cbor)
 
-### 5.2 Blocks (dag-cbor, deterministic encoding)
+These are the same as v1, without `owner_peer`:
 
-Why dag-cbor, when the rest of the spec uses fixed binary layouts:
+- **Root**: manifest, head page, post count, last update time.
+- **Manifest**: title, about, `channel_pk`, created, and a signature.
+- **Page**: up to 64 posts, and a link to the previous page.
+- **Post**: `seq`, timestamp, body (≤ 4 KiB), `reply_to`, `deleted` flag, and a signature.
 
-- signatures need a deterministic encoding, which dag-cbor guarantees;
-- IPFS tools and gateways can read, explore and validate it with no custom code;
-- this is **cold-path** code (a human posts rarely), so the zero-allocation rule does not apply. Parsing on the reader side is still done over borrowed `&[u8]`.
+Deleting a post rewrites it with `deleted = true` and an empty body. Older copies may survive on mirrors, and the UI says so before the first post.
+
+### 5.2 Posting (owner, desktop)
+
+1. The PWA signs the post and rebuilds the head page and the root.
+2. It builds a CAR file and signs a new IPNS V2 record: `sequence = count`, `validity = now + 30 days`, `ttl = 60 s`.
+3. It sends both over loopback to the companion (`PUT /channels/<name>`, token-scoped). The companion stores them in the channel folder and serves them at once on the onion address.
+4. Nothing touches the public IPFS network, so the owner's IP is never exposed.
+
+### 5.3 Republishing (D3: the chosen design)
+
+- **There is no DHT record to expire on the owner's side.** The onion serves the latest record directly, so the owner never has to republish.
+- The IPNS record is valid for **30 days**, and the PWA re-signs it on every post and whenever the owner opens the app and the record is older than 7 days.
+- This long validity lets **any mirror republish the owner's signed record** to the IPFS DHT (§7.2) without the owner's key. Anyone may republish a valid signed IPNS record.
+- The private key never leaves the owner's PWA. The companion only ever holds signed data.
+
+### 5.4 Availability
+
+- The channel is reachable while the **owner's companion is running**. It runs in the background on desktop and can start at login.
+- It is also reachable from **any mirror** that is online.
+- The channel link lists the owner's onion plus known mirrors (§6.1), and readers try them in order.
+
+## 6. Reading
+
+### 6.1 Channel link
 
 ```
-Root  (the target of the IPNS name; rewritten on every post)
-{ v: 1, kind: "p2pchat/channel",
-  manifest: CID<Manifest>, head: CID<Page>, count: u64, updated: u64 }
-
-Manifest  (changes rarely)
-{ v: 1, title: str(≤64), about: str(≤512), owner_peer: bytes(32) /*PeerId, optional*/,
-  channel_pk: bytes(32), created: u64, sig: bytes(64) /*Ed25519 over the block without sig*/ }
-
-Page  (up to 64 posts; the head page is rewritten, full pages are sealed and immutable)
-{ v: 1, index: u64, prev: CID<Page> | null, posts: [Post; ≤64] }
-
-Post
-{ seq: u64 /*strictly increasing, never reused*/, ts: u64, body: str(≤4096 B UTF-8),
-  reply_to: u64 | null, deleted: bool, sig: bytes(64) /*Ed25519 over (channel_pk, seq, ts, body, reply_to, deleted)*/ }
+https://<owner>.github.io/p2p-chat/channel.html#c=<ipns-name>&o=<channel-onion>[&m=<mirror-onion>…]
 ```
 
-- **Two requests to open a channel:**
-  1. fetch the IPNS record;
-  2. fetch a CAR with `dag-scope=all` bounded to the root, the manifest and the head page (≤ about 300 KiB).
-- Older pages load one CAR request each, as the reader scrolls.
-- **Deleting** (C3) rewrites the post in the head page, or in a sealed page by re-sealing it, with `deleted: true` and an empty body. Old CIDs keep the original content, and the UI states this.
-- **Attachments are out of scope** here. A future phase could add UnixFS files ≤ 1 MiB linked from posts.
+- The IPNS name is the channel's identity. The onion addresses are only **hints**, because every byte is verified against the IPNS key.
+- The owner can publish a **signed mirror list** in the manifest, so readers learn new mirrors automatically.
 
-### 5.3 IPNS record
+### 6.2 Readers by platform
 
-- IPNS V2 record, signed in Rust with the channel key.
-- `sequence` = the root's `count`, so it always increases.
-- `validity` = now + 7 days. `ttl` = 60 s, which tells gateways and resolvers to refresh often.
-- **Rollback protection:** a reader who follows a channel stores the highest `sequence` it has seen in localStorage. This is not secret, and follows are opt-in. A record with a lower sequence is rejected as stale, and the reader then tries the next gateway.
-
-## 6. Owner flow (publisher)
-
-### 6.1 One-time setup (a guided wizard in the PWA)
-
-1. Install **IPFS Desktop** (or Kubo) and start it. Both are free and need no account.
-2. The wizard shows the exact config command to copy (run once), then restart Kubo:
-   ```sh
-   ipfs config --json API.HTTPHeaders.Access-Control-Allow-Origin '["https://<owner>.github.io"]'
-   ipfs config --json API.HTTPHeaders.Access-Control-Allow-Methods '["POST"]'
-   ipfs config --json API.Authorizations '{"p2pchat":{"AuthSecret":"bearer:<random-token-shown-by-wizard>","AllowedPaths":["/api/v0/dag/import","/api/v0/files","/api/v0/routing/put","/api/v0/routing/provide","/api/v0/name/publish","/api/v0/key/import","/api/v0/id"]}}'
-   ```
-   - **Scoped token (Kubo RPC authorization):** the PWA can reach only the RPC paths it needs, never the whole RPC (for example `config`, `shutdown` or `pin rm` on other data).
-   - This matters because the origin `https://<owner>.github.io` is **shared by every Pages site under that account**.
-3. The token is stored inside the owner's encrypted key file (SPEC §7.3, a new optional field), so it is only available after the owner signs in.
-4. The browser asks for **Local Network Access** permission (Chromium) the first time the page connects to `127.0.0.1`. The user allows it once.
-
-### 6.2 Posting
-
-1. The owner writes a post, and the Rust code signs it.
-2. The head page is rebuilt (or a full page is sealed and a new one started), then the root.
-3. The changed blocks are packed into a **CAR** in wasm memory.
-4. `POST /api/v0/dag/import` (the blocks are stored and pinned).
-5. `POST /api/v0/files/…` links the new root into `/p2p-chat/channels/<name>/` (MFS keeps it pinned).
-6. `POST /api/v0/routing/provide` announces the new root and head page on the DHT.
-7. The PWA signs the IPNS record and sends `POST /api/v0/routing/put /ipns/<name>` to publish it (spike P3 confirms that Kubo accepts records signed elsewhere).
-8. The UI shows "Published · seen by N providers" (from `routing/findprovs`, best effort).
-
-### 6.3 Keeping the channel alive (IPNS republishing)
-
-Records on the DHT expire after about 48 h and must be published again.
-
-| Option | How | Trade-off |
+| Reader | Reaches the channel through | Reader's IP |
 |---|---|---|
-| **A (default)** | The PWA re-signs and re-publishes when the owner opens the app, plus a reminder when the record is more than 36 h old | The key never leaves the PWA. The channel name stops resolving on the DHT if the owner does not open the app for more than about 2 days. The content stays reachable by CID, and gateways may keep a cached copy |
-| **B (opt-in)** | `key/import` the channel key into Kubo's keystore. Kubo then republishes by itself, every 4 h by default | Fully automatic, but the channel key is stored **unencrypted** in Kubo's keystore on disk. The UI warns about this, and the owner can revoke it with `ipfs key rm` |
+| Desktop with the companion | Tor (companion) → onion | Hidden |
+| Desktop or iOS with **embedded Tor** (research track, EMBEDDED-TOR-WASM.md) | Tor (in WASM, Snowflake) → onion | Hidden |
+| iOS or desktop **without Tor** | Public IPFS gateways, **only if** some follower mirrored the channel to IPFS | Visible to the gateway (not to the owner) |
 
-### 6.4 Owner exposure (MUST be shown before the channel is created)
+**Consequence:** until embedded Tor passes its gates, **an iPhone can read a channel only when a follower has mirrored it to public IPFS.** The owner's IP is hidden in every case.
 
-- Kubo announces itself as the provider of the channel on the public DHT. **The owner's home IP address becomes publicly linked to the channel.** Avoiding this needs a VPS or a paid pinning service, both of which the "free, no registration" rule excludes.
-- Everything posted is public and practically permanent (C3).
+### 6.3 Default gateways (D6: the chosen design)
 
-## 7. Reader flow (read-only, all targets including iPhone)
+- For readers without Tor, and only for channels that are mirrored to IPFS: `trustless-gateway.link`, `ipfs.io` and `dweb.link`. All are free, need no account, and support trustless CAR and IPNS-record responses (spike C-P1).
+- They are used in order with a 4 s timeout, and the reader keeps the valid record with the highest sequence.
+- They are untrusted, because everything is verified in Rust.
 
-1. Open `channel.html#c=<ipns-name>` from a link or QR code. The fragment is stripped from the URL, as in SPEC §8.7.
-2. **Resolve the name.** Request `GET https://<gw>/ipns/<name>?format=ipns-record` from the gateways in order, then:
-   - check the record's signature against the key in the name;
-   - check that it has not expired;
-   - check that its sequence is not lower than the last one seen (rollback check).
-3. **Fetch the content.** Request `GET https://<gw>/ipfs/<root>?format=car&dag-scope=…`. Rust walks the CAR and checks that every block's multihash matches its CID, then checks the manifest signature and every post signature.
-4. Render the posts. There is no compose box, because the channel is read-only by design and a post would fail signature checks anyway.
-5. **Readers with a local Kubo** (optional): the page uses `http://127.0.0.1:8080` (the local gateway) first, which reaches the channel without any third party.
+## 7. Followers and mirrors
 
-**Default gateway list** (free, no account, CORS-enabled; the list is editable; checked in spike P1):
+### 7.1 Onion mirror (recommended: keeps the follower hidden)
 
-| Gateway | Operator | Default |
-|---|---|---|
-| `https://trustless-gateway.link` | IPFS Foundation / Shipyard | yes |
-| `https://ipfs.io` | IPFS Foundation / Shipyard | yes |
-| `https://dweb.link` | IPFS Foundation / Shipyard | yes |
+- A follower with the companion presses **Mirror this channel**.
+- Their companion fetches and verifies the channel over Tor, stores it in its own folder `<data>/mirrors/<name>/`, and serves it on the follower's own mirror onion address.
+- It checks the owner's onion for a newer record every 10 minutes while running, and updates only when the new record verifies with a **higher** sequence.
 
-- Requests go to the gateways in sequence with a 4 s timeout each. When a follow is active, the reader keeps the valid response with the **highest** IPNS sequence.
-- **Reader privacy:** the gateway sees the reader's IP address and which channel they read. Readers who run a local Kubo avoid this.
+### 7.2 IPFS mirror (optional: exposes the follower, never the owner)
 
-## 8. Follower pinning ("help keep this channel alive")
+- A follower who runs Kubo and accepts that their IP will be visible can press **Also mirror to public IPFS**.
+- Their PWA imports the CAR into their Kubo (`dag/import`, pinned in MFS at `/p2p-chat/mirrors/<name>/`) and republishes the owner's signed IPNS record (`routing/put`).
+- This makes the channel readable through public gateways, for example on an iPhone without Tor.
+- The UI states: "Your IP will be visible as a host of this channel."
 
-- A reader who runs Kubo can press **Pin this channel**. It uses the same setup wizard, with a scoped token for `/api/v0/pin/add`, `/api/v0/files` and `/api/v0/name/resolve`.
-- The PWA copies the channel's root into the follower's MFS at `/p2p-chat/following/<name>/`. That folder is the follower's pinning folder.
-- The PWA re-pins when it sees a newer IPNS sequence, but only while it is open.
-- **Automatic following** without the PWA open would need a background process, which a browser cannot provide. The wizard can print a copy-paste `cron` or Task Scheduler one-liner for followers who want it: `ipfs name resolve` followed by `ipfs pin add`, which is enough because the data is signed.
-
-## 9. Security
+## 8. Security
 
 | Threat | Mitigation |
 |---|---|
-| A gateway forges or changes posts | CIDs are checked in Rust, and every post carries an Ed25519 signature from the channel key |
-| A gateway serves an old version (rollback or withholding) | The IPNS sequence check, a stored high-water mark for followed channels, and trying several gateways |
-| Someone other than the owner posts | They cannot: only the holder of the channel key can sign posts or IPNS records |
-| A compromised web page takes over Kubo | The token-scoped RPC paths (§6.1) and a CORS allowlist. The token only exists after sign-in |
-| Another Pages site on the same `github.io` account reaches Kubo | It has no token, so every call is rejected |
-| The channel key is stolen | Option A keeps it only in the passphrase-encrypted key file. Rotation means creating a new channel and posting a signed "moved to" notice in the old one |
-| Private-chat data leaks into a channel | Separate page (`channel.html`) with its own CSP, and the chat page's CSP keeps `connect-src 'self'` (SPEC §17.3). The channel crate has no API that accepts chat data |
+| Finding the owner's IP | The owner never takes part in IPFS or any direct connection. The only way in is the Tor onion service |
+| Linking the channel to the owner's chat identity | Separate keys (HKDF), a separate onion, no `owner_peer` field, and the option of a dedicated identity |
+| Forged or changed posts | CID checks, the post signature, and the signed IPNS record |
+| A mirror or gateway serves an old version | IPNS sequence high-water marks, and trying the owner's onion and several mirrors |
+| Someone else posts | They cannot: only the channel key can sign |
+| A compromised page talks to the companion | Token-scoped loopback API; the channel endpoints only accept signed data |
+| Traffic correlation against a global observer | Tor's usual limits apply (SPEC §28.8) |
 
-**CSP of `channel.html`**
+## 9. Phases
 
-```
-default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:;
-connect-src 'self' https://trustless-gateway.link https://ipfs.io https://dweb.link
-            http://127.0.0.1:5001 http://127.0.0.1:8080;
-base-uri 'none'; form-action 'none'; frame-ancestors 'none'
-```
+| Phase | Scope |
+|---|---|
+| C1 | `channel` crate: keys, IPNS V2, dag-cbor, CAR, verification (the same as v1) |
+| C2 | Companion: channel folder store, read-only trustless-gateway API on the channel onion, loopback publishing endpoint |
+| C3 | Owner UI (desktop): create a channel, post, delete, the anonymity warnings |
+| C4 | Reader UI: through the companion (desktop), through public gateways (mirrored channels), and through embedded Tor once it is ready |
+| C5 | Followers: onion mirrors, the optional IPFS mirror, the signed mirror list |
 
-`frame-ancestors` is ignored when set in a `<meta>` tag. It is listed so it is not forgotten if the site ever moves to a host that can set headers.
-
-## 10. Implementation phases
-
-| Phase | Scope | Targets |
-|---|---|---|
-| **P (spikes)** | See §11 | — |
-| **C1: `channel` crate** | Seed → channel key; IPNS name; dag-cbor codec for Root, Manifest, Page and Post; CID computation (`cid`, `multihash` with sha2-256); CAR v1 reader and writer; IPNS V2 record signing and verification; native tests with fixtures cross-checked against Kubo output | Native + wasm32 |
-| **C2: Reader** | `channel.html`; gateway client; rollback high-water mark; paginated rendering; follow list in localStorage (names and high-water marks only) | All, including iPhone |
-| **C3: Publisher** | Setup wizard; Kubo RPC client (dag/import, files, routing/put and provide); posting and deleting; option A republishing; an exposure warning that must be accepted; key-file token field | Desktop Chrome, Edge, Firefox (Safari after spike P2) |
-| **C4: Follower pinning** | "Pin this channel" through the reader's local Kubo; re-pin while open; the printed cron one-liner | Desktop |
-| **C5: Later (optional)** | Option B republishing; attachments (UnixFS ≤ 1 MiB); unlisted channels (content encrypted with a key kept in the link fragment); publishing from iPhone, where the phone signs the post and sends it over the P2P chat link to the owner's own desktop, which does the Kubo step; direct reads from the owner's Kubo over WebRTC-direct (rust-libp2p `webrtc-websys`), which removes the gateways | — |
-
-## 11. Validation spikes (before C1 is frozen)
+## 10. Spikes
 
 | ID | Question |
 |---|---|
-| P1 | Do `trustless-gateway.link`, `ipfs.io` and `dweb.link` serve `?format=car` and `?format=ipns-record` with CORS to a `github.io` origin, from desktop browsers **and iOS Safari**? What is the real latency for a freshly published name? |
-| P2 | Can a page on `https://<owner>.github.io` call `http://127.0.0.1:5001` in Chrome and Edge (Local Network Access prompt), Firefox, and **desktop Safari** (mixed-content rules for loopback)? |
-| P3 | Does Kubo's `routing/put` accept an IPNS record signed outside Kubo, for a key it does not hold, and propagate it to the DHT? |
-| P4 | Is `API.Authorizations` with `AllowedPaths` enough to confine the token to the paths listed in §6.1, on the current Kubo release? |
-| P5 | How long after `routing/provide` does a new root become fetchable through each gateway when the owner is behind a home NAT (AutoNAT, hole punching, public relays)? |
-| P6 | How much do `cid`, `multihash`, the dag-cbor codec and the CAR code add to the wasm binary? |
-
-## 12. Decisions needed from the owner
-
-| # | Question | Proposed default |
-|---|---|---|
-| D1 | Is it acceptable that **only a desktop running IPFS Desktop or Kubo can publish** (iPhone can read, and can publish later through C5)? | Yes |
-| D2 | Is it acceptable that the owner's **IP address is publicly visible** as the channel's provider on the DHT? | Yes, with the warning in §6.4 |
-| D3 | IPNS republishing: A (key stays in the PWA) or B (Kubo holds the key and republishes by itself)? | A by default, B as an opt-in |
-| D4 | Should the channel show a link to the owner's chat `PeerId` (`owner_peer` in the manifest)? | No. It links the public channel to the private chat identity |
-| D5 | Maximum post size | 4 KiB of text, the same as chat |
-| D6 | Are the three default gateways (§7) acceptable? | Yes |
+| C-P1 | Do the public gateways serve CAR and IPNS-record responses with CORS to `github.io`, including on iOS? |
+| C-P2 | Embedded arti in the companion hosting 2 onion services (the chat onion and one channel onion) at once |
+| C-P3 | Time to fetch a channel with 1 000 posts over an onion: head page and the older pages |
+| C-P4 | Does Kubo's `routing/put` accept an IPNS record signed elsewhere? (For IPFS mirrors) |
+| C-P5 | Does the companion use little enough resources to run at login and all day? |
