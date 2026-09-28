@@ -2,17 +2,17 @@
 
 | Field          | Value |
 |----------------|-------|
-| Version        | 0.3 |
-| Status         | Architecture / Protocol Draft. Owner decisions applied (§25) |
-| Supersedes     | v0.2 (owner decisions), v0.1 (the rationale for every change is in [`REVIEW-v0.1.md`](REVIEW-v0.1.md)) |
+| Version        | 0.4 |
+| Status         | Architecture / Protocol Draft. Owner decisions up to v0.4 applied (§25); open questions in §25.3 |
+| Supersedes     | v0.3 (messaging features, contacts, identities, Tor, IP privacy), v0.2, v0.1 (rationale in [`REVIEW-v0.1.md`](REVIEW-v0.1.md)) |
 | Deployment     | GitHub Pages, project site `https://<owner>.github.io/p2p-chat/` |
 | Runtime        | Browser PWA |
 | Implementation | Rust (edition 2024) → `wasm32-unknown-unknown` |
-| Transport      | WebRTC DataChannel (SCTP / DTLS / ICE / UDP) |
+| Transport      | **Direct mode:** WebRTC DataChannel (SCTP / DTLS / ICE / UDP). **Tor mode** (opt-in, desktop): onion-to-onion streams through a local companion (§28) |
 | Signalling     | Two-way out-of-band exchange (QR, link, paste, share). **No signalling server** |
-| Relay          | None. TURN is disabled locally and relay candidates are rejected from the peer |
+| Relay          | None in direct mode: TURN is disabled locally and relay candidates are rejected from the peer. Tor mode routes through the volunteer Tor network, by explicit user choice only (§28) |
 | STUN           | Public, free, no registration: Google and Cloudflare by default; the list is user-editable (§9.3). Needed in practice for any connection that is not on the same LAN |
-| Persistence    | No messages, ever. The identity key is saved only if the user chooses to (encrypted, §7.3) |
+| Persistence    | No messages, ever. Identity keys and the contacts list are saved only if the user chooses to, and only encrypted (§7.3) |
 | Targets        | Desktop Chrome, Edge, Firefox and Safari; iOS Safari, both as a tab and as an installed PWA (§17.5) |
 
 Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in RFC 2119.
@@ -49,13 +49,13 @@ There is no server, relay, database or history. Network paths can be thrown away
 | # | Principle |
 |---|---|
 | P1 | **No application backend.** No server that the application controls is needed at runtime. |
-| P2 | **Direct communication.** Chat traffic goes only between peers. |
+| P2 | **Direct communication.** In direct mode, chat traffic goes only between peers. **Tor mode** (§28) is an explicit, user-selected anonymity transport that routes through volunteer Tor relays by design. It is never an automatic fallback. |
 | P3 | **Out-of-band rendezvous.** One invite/answer round trip over QR, link, paste or share replaces a signalling server. |
 | P4 | **Identity ≠ network location.** Identity is a static key, never an IP, port, candidate or connection. |
 | P5 | **Network paths are disposable.** Paths are rebuilt; identity, room and sequence numbers survive. |
 | P6 | **Encryption is mandatory and layered.** DTLS for transport, plus application E2E. |
 | P7 | **No history.** Private chats are RAM only, and keys are zeroized when the session ends. This applies to **every private chat, with no exception**. The only exception in the whole system is a separate, opt-in feature: **public channels** (§27), which are public, permanent publications and never contain private-chat data. |
-| P8 | **Failure is explicit.** No silent relay, whether a server or a peer. If there is no direct path, the application says so. |
+| P8 | **Failure is explicit.** No silent relay, whether a server or a peer. If there is no direct path, the application says so. There is never a silent switch between direct mode and Tor mode, in either direction. |
 | P9 | **Trust is explicit.** Security is never stronger than (a) the integrity of the out-of-band channel and (b) the code served by the static host. The UI and documentation MUST say so. |
 
 ## 3. Layers
@@ -97,6 +97,7 @@ Only a static host is required:
 | Service | Purpose | What it learns | Carries chat? |
 |---|---|---|---|
 | STUN (default list in §9.3, user-editable) | Discover server-reflexive (srflx) and global IPv6 candidates | The public IP and port of each peer, and when they connect | **No** |
+| Tor network (Tor mode only, §28): volunteer relays; optional bridges (obfs4, Snowflake, WebTunnel) | Anonymous onion-to-onion transport | The guard relay (or bridge) sees your IP but not your destination. No relay sees both ends. The Snowflake broker sees that you use Snowflake | Carries **encrypted** chat by design (Noise inside Tor) |
 
 ### 4.3 Forbidden
 
@@ -113,6 +114,7 @@ Application backend, WebSocket or HTTP signalling, TURN, chat relay, message dat
 | Static host / repository owner | Serving honest code | CSP, SRI, a service worker that pins the version and asks before updating (§17), reproducible builds with published hashes |
 | Browser and OS | Everything | Out of scope (§21) |
 | STUN operator | Nothing about security. It learns metadata only | Configurable list, and a LAN-only mode |
+| `p2pchat-companion` (Tor mode only) | Moving opaque encrypted bytes, and hosting the onion service | It never sees plaintext (Noise is end-to-end in the PWA). Reproducible builds, hashes published in the Release, and a local token plus Origin check (§28.3) |
 
 ## 6. Architecture: sans-IO core
 
@@ -131,7 +133,8 @@ p2p-chat/
 │   │   └── error.rs                # ErrorCode (u16, §19)
 │   ├── crypto/
 │   │   ├── identity.rs             # 32-byte seed → X25519 static + Ed25519 signing keys, PeerId, display handle
-│   │   ├── keyfile.rs              # encrypted identity export/import (Argon2id + XChaCha20-Poly1305, §7.3)
+│   │   ├── keyfile.rs              # encrypted identity file v2: seed + contacts + TLV sections (§7.3)
+│   │   ├── contacts.rs             # fixed-capacity contact table (256), verified keys (§7.5)
 │   │   ├── noise.rs                # Noise_KK session wrapper (snow), in-place encrypt/decrypt
 │   │   ├── sas.rs                  # short authentication string from handshake hash
 │   │   └── mls.rs                  # (MVP-3) openmls group wrapper
@@ -140,6 +143,8 @@ p2p-chat/
 │   │   ├── recovery.rs             # recovery ladder T0–T3 (§13)
 │   │   ├── room.rs                 # membership, dedup high-water marks (§14)
 │   │   ├── sendq.rs                # fixed ring send queue + backpressure (§11.5)
+│   │   ├── messages.rs             # message table: TTL, edit, delete, replies, reactions, ticks (§11.7)
+│   │   ├── transport.rs            # Transport = Direct(WebRTC) | Tor(companion), mode guard (§28.5)
 │   │   └── io.rs                   # Input / Action enums, ActionSink (fixed capacity)
 │   └── wasm/                       # the ONLY crate touching the browser
 │       ├── lib.rs                  # #[wasm_bindgen] ChatApp facade
@@ -147,7 +152,9 @@ p2p-chat/
 │       ├── stats.rs                # getStats → Diagnostics
 │       ├── qr.rs                   # qrcode (encode) + BarcodeDetector / rqrr (decode)
 │       ├── share.rs                # Web Share, clipboard, BroadcastChannel hand-off
-│       └── keystore.rs             # file download/upload + optional IndexedDB slot for the encrypted identity
+│       ├── keystore.rs             # file download/upload + IndexedDB slots (≤ 8) + Web Locks (§7.2)
+│       └── tor.rs                  # WebSocket client to p2pchat-companion (§28.3)
+├── companion/                      # native binary (Linux/macOS/Windows): embedded arti + 127.0.0.1 WebSocket bridge (§28)
 ├── web/                            # static assets (§4.1)
 ├── tests/                          # native replay/fuzz of proto + core
 └── docs/spec/                      # this document
@@ -201,49 +208,107 @@ impl Core {
 - An identity is a **32-byte seed**. Two keys are derived from it with domain-separated HKDF-BLAKE2s:
   - `HKDF(seed, "p2pchat/x25519")` → the X25519 static key, used by Noise (§10.1);
   - `HKDF(seed, "p2pchat/ed25519")` → the Ed25519 signing key, used for MLS credentials (MVP-3). It is sent to peers inside the Noise channel, so it is bound to the `PeerId`.
+  - `HKDF(seed, "p2pchat/onion")` → the Ed25519 **onion service key** (Tor mode, §28). It is stable for saved identities, and temporary for temporary ones.
 - `PeerId` is the X25519 public key itself. It is not hashed.
 - While the app runs, the seed and the derived secret keys live only in wasm linear memory. They are zeroized on sign-out and on `pagehide`.
 - **Display handle:** `anon_` plus the first 6 hex digits of `BLAKE2s(PeerId)`. It is **not authentication**. Nicknames are free text that users choose, and are only ever shown inside the encrypted channel.
 - Rule: `PeerId ≠ IP ≠ port ≠ candidate ≠ RTCPeerConnection ≠ DTLS certificate`.
 
-### 7.2 Sign-in ("login")
+### 7.2 Sign-in ("login") and several identities
 
-The app opens on a sign-in screen with three choices:
+The app opens on a sign-in screen:
 
 | Choice | What happens | Privacy |
 |---|---|---|
 | **New temporary identity** (default) | A fresh seed from the CSPRNG. Nothing is saved; the identity is gone when the tab closes | Sessions cannot be linked to each other |
-| **New identity + save** | A fresh seed, then the user picks a passphrase and saves the encrypted key file (§7.3) | The same `PeerId` in every session: peers can recognise you and link your sessions. The UI MUST say so |
-| **Use saved identity** | The user loads the key file (or a copy kept on this device) and enters the passphrase | As above |
+| **New identity + save** | A fresh seed. The user picks a **label** (for example "Work"), a passphrase, and how to save the encrypted key file (§7.3) | The same `PeerId` in every session: peers can recognise you and link your sessions. The UI MUST say so |
+| **Use saved identity** | The user picks one of the identities remembered on this device, or loads a key file, then enters its passphrase | As above |
+| **Receive identity from another device** | Identity transfer over P2P (§7.6) | As above |
 
-There are no accounts and no server. "Login" only means unlocking a key the user holds.
+- **Several identities on one device.** Up to **8** remembered identities, each in its own IndexedDB slot. The sign-in list shows each slot's label and display handle. Any number of extra key files can be kept outside the app.
+- **One identity per tab.** Each tab runs its own WASM instance with at most one active identity. Different tabs may use different identities at the same time. Switching identity means signing out (keys zeroized) and signing in again.
+- **The same identity in two tabs is refused.** The tab takes the Web Lock `p2pchat-id-<first 16 hex digits of BLAKE2s(PeerId)>`. If the lock is already held, sign-in fails with `E_DUPLICATE_SESSION` ("This identity is already open in another tab").
+- There are no accounts and no server. "Login" only means unlocking a key the user holds.
 
-### 7.3 Encrypted identity key file
+### 7.3 Encrypted identity key file (v2)
 
-Layout (little-endian), about 107 bytes in total:
+**Outer layout** (little-endian):
 
 | Size | Field |
 |---|---|
 | 4 | magic `"P2PK"` |
-| 1 | `ver` = 1 |
+| 1 | `ver` = 2 (a v1 file is read and upgraded when it is next saved) |
 | 1 | `kdf` = 1 (Argon2id) |
 | 4 | KDF parameters: `u16 m_mib` (default 19), `u8 t` (default 2), `u8 p` (default 1) |
 | 16 | `salt` |
-| 24 | `nonce` |
-| 48 | `ciphertext` (32-byte seed plus a 16-byte tag) |
-| 1 + n | optional nickname (≤ 32 B), included as associated data (AAD) |
+| 24 | `nonce` (new for every save) |
+| 1 + n | `label` (≤ 32 B UTF-8). Plaintext so the sign-in list can show it; authenticated as AAD. It MUST NOT be secret, and the UI says so |
+| 4 | `ct_len` (≤ 65 536 + 16) |
+| ct_len | `ciphertext` = XChaCha20-Poly1305(body), with every outer byte above as AAD |
 
-- Encryption: Argon2id(passphrase, salt) gives a 32-byte key, used with XChaCha20-Poly1305. The header bytes are also authenticated as AAD. The Argon2id defaults are the OWASP minimum.
-- Save and load options:
-  1. **Download** it as `p2pchat-<handle>.p2pkey`, and load it back with a file picker. This is the reliable option on every target.
-  2. **Copy** it as base64url text (about 145 characters) that the user keeps in a password manager.
-  3. **Remember on this device**: keep the same encrypted blob in IndexedDB. The passphrase is still needed each time; it is never stored. **Limit:** Safari deletes storage written by scripts after 7 days without a visit, for sites used in a Safari tab (not for installed PWAs). Only option 1 or 2 is a real backup.
-- Each passphrase attempt (Argon2id) allocates about 19 MiB. This happens once, during sign-in, **before** the zero-allocation phase starts (§22).
+**Encrypted body**:
+
+| Size | Field |
+|---|---|
+| 32 | `seed` |
+| 1 + n | nickname (≤ 32 B) |
+| … | TLV sections: `u8 type`, `u16 len`, value |
+
+| TLV | Section | Value |
+|---|---|---|
+| 0x01 | CONTACTS | `u16 count` (≤ 256), then one entry per contact (§7.5) |
+| 0x02 | COMPANION | `token [u8; 32]`, `port u16` (Tor mode, §28.3) |
+| 0x03 | KUBO | `u8 len` + RPC token (public channels plan) |
+| other | — | Kept unchanged on re-save, so newer app versions can add sections |
+
+- Key: Argon2id(passphrase, salt), 32 bytes. After sign-in the derived key stays in wasm memory, so the app can **re-save** after the contacts change without asking again. It is zeroized on sign-out. The Argon2id defaults are the OWASP minimum.
+- **Save and load options:**
+  1. **Download** it as `p2pchat-<label>.p2pkey`, and load it back with a file picker. This is the reliable backup on every target.
+  2. **Copy** it as base64url text. It is about 170 characters with no contacts, and much longer with contacts, so the file is recommended then.
+  3. **Remember on this device**: keep the same encrypted blob in an IndexedDB slot. The passphrase is still needed each time; it is never stored. **Limit:** Safari deletes storage written by scripts after 7 days without a visit, for sites used in a Safari tab (not for installed PWAs).
+- **Backups can go stale.** After contacts change, the remembered slot is updated automatically, but a downloaded file cannot be. The UI shows "Backup out of date — download again" until the user does.
+- Each passphrase attempt (Argon2id) allocates about 19 MiB. This happens during sign-in, **before** the zero-allocation phase starts (§22).
 - Wrong passphrase or damaged file: `E_KEYFILE_INVALID`. There is no recovery: a lost file or passphrase means a lost identity.
 
 ### 7.4 Wallet identity: deferred
 
 Wallet sign-in is removed from the MVP plan. When it comes back, the design in REVIEW A13 applies: the wallet signs a binding to the `PeerId`, the binding is only sent inside the encrypted channel, and WalletConnect is excluded.
+
+### 7.5 Contacts (saved identities only)
+
+- A fixed-capacity table of up to **256** contacts. It exists in RAM while signed in, and on disk only inside the encrypted key-file body (TLV 0x01). It is **disabled for temporary identities**.
+- **Entry layout:**
+
+  | Size | Field |
+  |---|---|
+  | 32 | `peer_id` |
+  | 1 | `flags`: bit0 `verified` (the SAS was compared), bit1 has `onion_pk`, bit2 has `sign_pk` |
+  | 0 / 32 | `onion_pk` (Tor mode, §28) |
+  | 0 / 32 | `sign_pk` (MLS credential) |
+  | 4 | `added_at` (u32, Unix seconds) |
+  | 1 + n | local nickname (≤ 32 B), chosen by the user, not by the peer |
+
+- **Adding a contact:** after a connection, the user taps "Save contact". The flag `verified` is set only if the SAS was confirmed in that session, or later by comparing the SAS again. **No last-seen time and no message data are ever stored.**
+- **What contacts give you:**
+  - peers are shown by their local nickname instead of an anonymous handle, plus a ✔ badge when verified;
+  - **SAS skipped:** when the peer's static key matches a *verified* contact, no SAS prompt is needed, because the key is already pinned;
+  - **impersonation warning:** when a new peer calls itself by a verified contact's nickname but has a **different key**, the UI warns "This is not the Alice you verified";
+  - **reconnecting without a QR** in Tor mode, through the stored `onion_pk` (§28.6).
+- **Privacy:** a contacts list records who you talk to. It is only as safe as the key file's passphrase (§21).
+
+### 7.6 Moving an identity to another device (P2P, no cloud)
+
+This is Telegram's "log in with a QR code", done without a server:
+
+1. On the new device, choose "Receive identity from another device". It shows an invite with `flags.bit2 TRANSFER` set.
+2. The old device, signed in with that identity, scans or pastes it. The two connect with the normal flow (direct mode, or Tor mode in §28).
+3. **The SAS is mandatory**, even when both codes were scanned in person, because the whole identity is at stake.
+4. After the SAS is confirmed on both sides, the old device sends its **encrypted key-file blob** (§7.3) in IDENTITY_CHUNK records (§11.2). The blob is still encrypted with the passphrase.
+5. The new device asks for the passphrase. It decrypts the blob and offers to remember it in a slot, and to download a backup.
+6. The old device then offers "Keep this identity here" or "Remove it from this device".
+
+- There is **no sync afterwards**: each device holds its own copy.
+- Two devices using the same identity **at the same time** in the same 1:1 or room are refused. The second session gets `E_DUPLICATE_SESSION` from the peer or the room owner, who sees two live sessions with one `PeerId`.
 
 ## 8. Rendezvous
 
@@ -284,8 +349,8 @@ Alice (offerer)                                   Bob (answerer)
 | Off | Size | Field | Notes |
 |---|---|---|---|
 | 0 | 1 | `ver` | Protocol major version = `1` |
-| 1 | 1 | `kind` | `1` = INVITE, `2` = ANSWER, `3` = RESUME_INVITE, `4` = RESUME_ANSWER |
-| 2 | 1 | `flags` | bit0 `LAN_ONLY`, bit1 `GROUP` (MVP-3). Other bits are reserved and MUST be 0 |
+| 1 | 1 | `kind` | `1` = INVITE, `2` = ANSWER, `3` = RESUME_INVITE, `4` = RESUME_ANSWER, `5` = TOR_INVITE (§28.4) |
+| 2 | 1 | `flags` | bit0 `LAN_ONLY`, bit1 `GROUP` (MVP-3), bit2 `TRANSFER` (identity transfer, §7.6), bit3 `OBSERVER` (room invite for a read-only member, §14.2). Other bits are reserved and MUST be 0 |
 | 3 | 1 | `n_cand` | 0..=8 |
 
 **INVITE / RESUME_INVITE body**
@@ -407,6 +472,8 @@ Only UDP candidates with component 1 are carried.
 | `default` | host-mDNS, srflx-v4, srflx-v6 |
 | `max-connectivity` | adds raw host-v4 and host-v6 when the browser exposes them. After camera permission is granted for the QR scanner, Chromium may expose them *(spike S4)* |
 
+An extra **Drop IPv6** toggle, off by default, removes every IPv6 candidate in any mode. It is the fix offered by the IPv6-bypass warning (§29.2).
+
 The builder filters by mode **regardless of what the browser exposes**.
 
 ### 9.5 Gathering for a code
@@ -451,7 +518,9 @@ MLS (RFC 9420) via `openmls`, compiled for `wasm32`. See §14.4 for ordering.
   | At least one code opened from a link or pasted | **Prompted.** A full-width banner asks the users to compare the SAS on another channel, such as a voice call. The peer keeps an "unverified" badge until someone taps "Codes match" |
 
 - "Codes don't match" closes the link with `E_SAS_REJECTED` and shows a warning that the exchange may have been intercepted.
-- A saved identity (§7.2) does not skip the SAS, because the MVP keeps no contact list.
+- **Verified contacts skip the SAS:** if the peer's static key matches a contact marked `verified` (§7.5), no prompt is shown.
+- **Always mandatory** for identity transfer (§7.6).
+- **Tor mode:** prompted for every non-contact, because the one-way invite gives Alice no out-of-band proof of Bob's key (§28.4).
 
 ### 10.5 Primitives and randomness
 
@@ -459,7 +528,7 @@ MLS (RFC 9420) via `openmls`, compiled for `wasm32`. See §14.4 for ordering.
 - The CSPRNG is `getrandom` with the `wasm_js` backend, which calls `crypto.getRandomValues`.
 - WebCrypto is **not** on the protocol path: it is async-only and would split state between JS and Rust.
 
-## 11. Wire protocol (inside the DataChannel)
+## 11. Wire protocol (inside the DataChannel or Tor stream)
 
 ### 11.1 Outer frame (12-byte header, authenticated as AAD)
 
@@ -486,11 +555,17 @@ MLS (RFC 9420) via `openmls`, compiled for `wasm32`. See §14.4 for ordering.
 | `rtype` | Name | Body | Phase |
 |---|---|---|---|
 | 0x01 | HELLO | ver_min u8, ver_max u8, caps u32 bitset, max_msg u16, sign_pk [u8; 32] (Ed25519, §7.1), nick_len u8, nick | MVP-1 |
-| 0x02 | CHAT | chat_seq u64, UTF-8 text (≤ 4 096 B) | MVP-1 |
-| 0x03 | ACK | chat_seq u64 (cumulative) | MVP-1 |
+| 0x02 | CHAT | `chat_seq u64`; then `ttl_s u32` if `rflags.bit1`; then `reply_sender u8`, `reply_seq u64` if `rflags.bit2`; then UTF-8 text (≤ 4 096 B) | MVP-1 |
+| 0x03 | ACK | `chat_seq u64`, cumulative: **delivered** | MVP-1 |
 | 0x04 | PING / 0x05 PONG | t_ms u64 | MVP-1 |
 | 0x06 | GOODBYE | ErrorCode u16 | MVP-1 |
 | 0x07 | REKEY | – | MVP-1 |
+| 0x08 | TYPING | `u8` state (0 = stopped, 1 = typing) | MVP-1 |
+| 0x09 | READ | `chat_seq u64`, cumulative: **read** | MVP-1 |
+| 0x0A | EDIT | `target_seq u64`, new UTF-8 text (≤ 4 096 B). Own messages only | MVP-1 |
+| 0x0B | DELETE | `target_sender u8`, `target_seq u64`. Own messages; the room owner may delete any (§11.7) | MVP-1 |
+| 0x0C | REACT | `target_sender u8`, `target_seq u64`, `len u8` + emoji (0–32 B UTF-8; 0 = remove) | MVP-2 |
+| 0x40 | IDENTITY_CHUNK | `idx u16`, `total u16`, up to 12 KiB of the encrypted key-file blob. Only valid on a `TRANSFER` link after the SAS is confirmed (§7.6) | MVP-2 |
 | 0x10 | SIGNAL_OFFER / 0x11 SIGNAL_ANSWER | target conn / peer, AnswerBin-shaped body | MVP-2 (T1), MVP-3 (§14.4) |
 | 0x30… | ROOM_* / MLS_* | defined in MVP-3 | MVP-3 |
 
@@ -501,14 +576,20 @@ Unknown `rtype` values are ignored if `rflags.bit0` (IGNORABLE) is set. Otherwis
 - The transport replay check is the Noise nonce (§10.1). There is no set of seen IDs.
 - `chat_seq` is a u64 per sender that **never resets** for the whole session, including across reconnects.
 - A receiver keeps `last_chat_seq[peer_idx]`. A CHAT with `chat_seq ≤ last` is a duplicate (a resend after a reconnect) and is dropped.
-- The sender keeps unacknowledged CHATs in a fixed ring of 256 entries and **resends** them after T1, T2 or T3 recovery.
+- **Pending queue** (as in qTox's "will send when online"):
+  - The sender keeps every CHAT that has not been ACKed, including messages typed while the peer is `DEGRADED`, `RECOVERING` or `SUSPENDED`, in a fixed ring of **256** entries per link.
+  - In rooms, each ring entry carries a 16-bit mask of the members that have not yet ACKed it.
+  - Entries are **resent automatically** after T0–T3 recovery, or when a Tor contact comes back (§28.6).
+  - EDIT and DELETE of a pending message rewrite its ring slot in place, so the peer only ever receives the final version.
+  - If the ring is full, `UserSend` fails with `E_BACKPRESSURE` ("Too many messages waiting for Bob").
+  - The queue lives **in this tab's RAM only**. Closing the tab drops it, and the UI says so ("Pending messages exist only in this tab").
 - `MessageId` = `(PeerIdx u8, chat_seq u64)`. `PeerIdx` is an index into the room's member table, which is fixed-size.
 
 ### 11.4 Capabilities and versioning
 
 - Every code and frame carries `ver`.
 - If majors differ, the connection is closed with `E_PROTOCOL_MISMATCH`.
-- HELLO carries `ver_min..ver_max` and a capability bitset: bit0 group, bit1 resume, bit2 in-band restart, and so on. The session uses the intersection.
+- HELLO carries `ver_min..ver_max` and a capability bitset: bit0 group, bit1 resume, bit2 in-band restart, bit3 **sends read receipts**, bit4 **sends typing**, bit5 Tor, and so on. The session uses the intersection of the protocol bits. Bits 3 and 4 are the peer's privacy settings (§11.7).
 
 ### 11.5 Backpressure
 
@@ -529,6 +610,58 @@ Unknown `rtype` values are ignored if `rflags.bit0` (IGNORABLE) is set. Otherwis
 | TX | JS string → wasm TX slot | **1 transcode** | Unavoidable: `TextEncoder.encodeInto` writes directly into a wasm memory view |
 | TX | Encrypt | 0 | In place |
 | TX | `send(Uint8Array view of wasm memory)` | 0 on our side | The browser copies into SCTP internally. The view is created right before `send`, and memory never grows after init, so the view stays valid |
+
+### 11.7 Message features: semantics
+
+All of these exist only in RAM, reach only peers who are connected (or who come back while the message is still pending), and are gone when the session ends.
+
+**Status ticks**
+
+| Tick | Meaning | Source |
+|---|---|---|
+| 🕓 | **Pending**: in the queue, the peer is not connected (§11.3) | Local |
+| ✓ | **Delivered** | ACK |
+| ✓✓ | **Read** | READ. In a room: "read by k/N" in the message details, and ✓✓ once every current member has read it |
+
+**Read receipts and typing** are on by default in 1:1 and off in rooms (open question QN3). They are **reciprocal**: if you turn off read receipts, you stop sending READ and you also stop seeing others' ✓✓. The same applies to typing.
+
+- **READ** is sent when the message is on screen and the page is visible, coalesced to at most one per second.
+- **TYPING** is sent at most once every 3 s while typing. The receiver clears the indicator after 6 s without a refresh, or on `0`.
+
+**Replies**
+
+- A CHAT with `rflags.bit2` quotes `(reply_sender, reply_seq)`.
+- The receiver renders a quote from its own RAM copy. If that message is unknown, expired or deleted, it shows "Message unavailable".
+- Only the reference is sent, never the quoted text.
+
+**Edit**
+
+- Only your own messages can be edited.
+- The EDIT record carries the full new text. Receivers replace the text and show "edited". There is no edit history.
+
+**Delete**
+
+- **Delete for everyone:** the sender can delete their own messages. In a room, the **owner** can delete any member's message (moderation; open question QN4).
+- Receivers overwrite the text slot with zeros and show "Message deleted".
+- **Delete for me:** local only.
+
+**Reactions**
+
+- Each member has at most one reaction per message. The latest one wins, and an empty emoji removes it.
+- An emoji is 1–32 UTF-8 bytes. Multi-codepoint emoji are allowed, and anything that renders as more than one grapheme is rejected.
+
+**Self-destruct timer** (`rflags.bit1`)
+
+- `ttl_s` ∈ {5, 30, 60, 300, 3 600, 86 400} seconds, chosen per chat and applied to every message sent while it is set.
+- **Recipient:** the countdown starts when the message is first on screen, which is when READ would be sent.
+- **Sender:** the countdown starts when READ arrives. If the peer has read receipts off (HELLO bit3 = 0), it starts at ACK.
+- On expiry, both sides overwrite the text slot with zeros, remove it from the DOM, and any reply quoting it shows "Message unavailable". A pending message does not start its countdown until it is delivered.
+- **Limit (shown in the UI):** a recipient can still screenshot or copy the message. Nothing can prevent that.
+
+**Rooms and observers** (§14.2)
+
+- Every receiver drops CHAT, EDIT, TYPING and REACT from observers (open question QN5 for REACT).
+- An observer sends only ACK, READ, PING/PONG and GOODBYE.
 
 ## 12. Connection state machine (per pairwise link)
 
@@ -593,6 +726,11 @@ Honest baseline: when a device's **only** network changes, all of its links drop
   - only the owner removes members;
   - the owner is the **only MLS committer** (§14.5). Members send Proposals, such as "I am leaving".
 - There is **no succession**. When the owner leaves, the room is **disposed** (§14.6).
+- **Roles:** `owner` (exactly one), `member` (reads and writes), and **`observer`** (read-only).
+  - Only the owner assigns roles: an `OBSERVER` room invite (flag bit3), or a later role change.
+  - The role is stored in the MLS group context (a GroupContext extension changed only by owner commits), so every member knows every role.
+  - Roles are **enforced by every receiver** (§11.7): there is no central point that could filter.
+  - Observers are full mesh members for networking. **They see the other members' IP addresses, and the other members see theirs** (§29.2).
 
 ### 14.3 Propagation
 
@@ -661,11 +799,11 @@ Wallet authentication is not in any current phase (§7.4). Identity comes only f
 
 ```
 default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self';
-img-src 'self' data: blob:; connect-src 'self'; worker-src 'self';
+img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:47431; worker-src 'self';
 manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'
 ```
 
-- `connect-src 'self'` stops `fetch` or XHR from sending data anywhere. No exception is planned, because the app makes no remote HTTP calls.
+- `connect-src 'self' ws://127.0.0.1:47431` stops `fetch` or XHR from sending data anywhere. The **only** exception is the local companion's fixed WebSocket port, used in Tor mode (§28.3). It is loopback only, and useless without the companion's token.
 - **Limit:** browsers do not reliably enforce the CSP `webrtc` directive, so peer connections cannot be restricted by CSP.
 
 ### 17.4 Mobile lifecycle
@@ -709,7 +847,8 @@ Members     4 / 8  (links 5 / 6)
 ```
 
 - If the direct path fails: **DIRECT CONNECTION UNAVAILABLE**, the error code, and "share a reconnect code".
-- The UI never shows raw IP addresses unless "show addresses" is turned on in the diagnostics view.
+- The UI never shows raw IP addresses unless "show addresses" is turned on in the diagnostics view. The only exception is the **"What your peer sees"** panel (§29.2), which shows **your own** visible addresses so that you can check your VPN.
+- In Tor mode the first line reads **`VIA TOR · IP hidden`**, and there are no path or relay lines.
 
 ## 19. Error codes (stable, `u16`)
 
@@ -726,15 +865,20 @@ Members     4 / 8  (links 5 / 6)
 | 0x0020 | E_AUTH_FAILED | Static key mismatch, or an invalid signing-key binding |
 | 0x0021 | E_CRYPTO_FAILED | Noise or MLS failure, nonce gap, or bad tag |
 | 0x0022 | E_SAS_REJECTED | The user marked the SAS as a mismatch |
+| 0x0023 | E_DUPLICATE_SESSION | The identity is already open in another tab (Web Lock), or already live in this 1:1 or room from another device |
+| 0x0024 | E_NOT_A_CONTACT | Tor mode: an incoming onion stream from a key that is neither a contact nor holding a live invite |
 | 0x0030 | E_ICE_FAILED | |
 | 0x0031 | E_NO_DIRECT_PATH | No non-relay pair succeeded |
 | 0x0032 | E_RELAY_REJECTED | A relay candidate was selected or offered |
 | 0x0033 | E_CONNECTION_TIMEOUT | |
 | 0x0034 | E_NETWORK_CHANGED | |
 | 0x0035 | E_PEER_OFFLINE | |
+| 0x0036 | E_TOR_UNAVAILABLE | Tor mode: the companion is not running, not bootstrapped, or cannot reach the onion. There is **no fallback** to direct mode |
+| 0x0037 | E_COMPANION_AUTH | Tor mode: wrong companion token or Origin |
 | 0x0040 | E_PROTOCOL_MISMATCH | |
 | 0x0041 | E_MESSAGE_TOO_LARGE | |
-| 0x0042 | E_BACKPRESSURE | |
+| 0x0042 | E_BACKPRESSURE | Send queue or pending ring is full |
+| 0x0043 | E_NOT_PERMITTED | The action is not allowed for this role or sender (an observer sending, editing someone else's message) |
 | 0x0050 | E_BROWSER_UNSUPPORTED | No `RTCPeerConnection`, WASM or `crypto.getRandomValues` |
 | 0x0060 | E_KEYFILE_INVALID | Wrong passphrase, or a damaged or unsupported key file |
 
@@ -747,7 +891,14 @@ Members     4 / 8  (links 5 / 6)
 | Chat text | ≤ 4 096 B UTF-8 |
 | Frame | ≤ 16 384 B |
 | Send queue | 64 frames per connection |
-| Unacknowledged resend ring | 256 messages per peer |
+| Pending / resend ring | 256 messages per link |
+| Contacts | 256 |
+| Remembered identities per device | 8 (IndexedDB slots) |
+| Key-file body | ≤ 64 KiB |
+| Self-destruct values | 5 s, 30 s, 1 min, 5 min, 1 h, 1 day |
+| Reaction emoji | ≤ 32 B, one grapheme |
+| Typing refresh / expiry | 3 s / 6 s |
+| Tor frame | the same 16 KiB limit, with a `u16` length prefix |
 | Room size | 16 members (120 links) |
 | Owner grace (room disposal) | 10 min |
 | STUN servers | 2 by default, at most 4 |
@@ -763,13 +914,14 @@ Members     4 / 8  (links 5 / 6)
 - message confidentiality and integrity against network observers and against the static host;
 - peer authentication, pinned to the out-of-band exchange and optionally SAS-verified;
 - room membership (MLS, owner-controlled, MVP-3);
-- a saved identity key at rest (Argon2id + XChaCha20-Poly1305; as strong as the passphrase);
+- a saved identity key and **contacts list** at rest (Argon2id + XChaCha20-Poly1305; as strong as the passphrase);
+- in **Tor mode**: your IP address, hidden from the peer and from network observers (§28);
 - no central storage or relay;
 - no traffic replay across sessions.
 
 **Not protected:**
 
-- peer IP anonymity (the peer, and the STUN operator, see your public IP);
+- peer IP anonymity **in direct mode** (the peer, and the STUN operator, see your public IP). Use a VPN or Tor mode (§29);
 - traffic analysis and DPI detection (WebRTC is easy to fingerprint; no obfuscation is attempted);
 - a compromised browser, extension, OS or device;
 - a malicious static host serving altered code (mitigated, not eliminated: §17.2);
@@ -786,7 +938,8 @@ Members     4 / 8  (links 5 / 6)
 | Network observer | IPs, timing, sizes, volume | DTLS + Noise hide the contents. Metadata is accepted as exposed |
 | Out-of-band channel MITM (messenger) | Swaps invite and answer | SAS comparison on another channel |
 | Malicious peer | Fake identity, injection, replay, joining, abuse of membership, relay candidates | Keys pinned by the invite, AEAD with strict nonces, owner-only admission and MLS commits, relay filtering |
-| Thief of a key file | Offline passphrase guessing | Argon2id. The UI enforces a minimum passphrase strength |
+| Thief of a key file | Offline passphrase guessing; this also exposes the contacts list | Argon2id. The UI enforces a minimum passphrase strength |
+| Local process (Tor mode) | Connects to the companion's loopback port | 32-byte token, Origin check, and it cannot decrypt Noise traffic |
 | Static host | Serves altered code | SRI, a service worker that pins the version and asks before updating, reproducible builds |
 | STUN operator | Learns IPs and timing | Configurable list, LAN-only mode |
 | Browser extension or device | Full access | Out of scope |
@@ -798,13 +951,15 @@ Members     4 / 8  (links 5 / 6)
 - "There is no server-side or app-side chat history."
 - "Your identity is independent of your network connection."
 - "Authenticity depends on how you exchanged codes. Compare the safety code when you did not meet in person."
+- "In direct mode your peer can see your IP address. The app can use your VPN or Tor mode to hide it."
+- "In Tor mode, your IP address is hidden from your peer and from network observers."
 
 **Forbidden claims:**
 
 - "anonymous"
 - "untraceable"
 - "invisible to DPI"
-- "your IP is hidden"
+- "your IP is hidden" (except in Tor mode, and never for direct mode)
 - "works behind every NAT or firewall"
 - "no one but the peers is involved" (STUN and the code host are involved)
 
@@ -821,7 +976,7 @@ Members     4 / 8  (links 5 / 6)
 | Zero-copy networking | §11.6 lists the unavoidable copies |
 | SIMD | `-C target-feature=+simd128`, supported by all target browsers. **AVX2 is not available in WASM** |
 | Thread pinning, NUMA, lock-free SPSC across threads | **Not applicable.** WASM here is single-threaded: Pages cannot send COOP/COEP headers, so there is no `SharedArrayBuffer`. The design is single-writer by construction |
-| Raw sockets, io_uring, RDMA, kernel bypass | **Not applicable** in a browser sandbox |
+| Raw sockets, io_uring, RDMA, kernel bypass | **Not applicable** in a browser sandbox. The native `companion` is I/O glue on the cold path (Tor latency is hundreds of ms), built with the same release profile and no logging in release |
 | crossbeam bounded channels | **Not applicable** (single thread). Fixed rings in `core` instead |
 | Build profile | `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`; `wasm-opt -O3` (or `-Oz` if binary size wins, decided by spike S5) |
 
@@ -829,10 +984,14 @@ Members     4 / 8  (links 5 / 6)
 
 | Phase | Scope |
 |---|---|
-| **MVP-1** | Sign-in (temporary identity, or saved identity with an encrypted key file); 1:1; two-way exchange by QR, link and paste; binary codes with SDP reconstruction; STUN defaults and privacy modes; relay prohibition; Noise KK; SAS policy by code source; T3 resume code; no message persistence; basic diagnostics; CSP, SRI and a version-pinned service worker; desktop browsers and iOS Safari |
-| **MVP-2** | T1 in-band ICE restart and `NetChanged` handling; full diagnostics |
-| **MVP-3** | Owner-controlled rooms of up to 16 members; introductions by the owner; MLS with the owner as single committer; room disposal; T2 recovery through the owner |
-| **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16 |
+| **MVP-1** | Sign-in (temporary identity, or saved identity with an encrypted key file); 1:1 in direct mode; two-way exchange by QR, link and paste; binary codes with SDP reconstruction; STUN defaults, privacy modes and **Drop IPv6**; relay prohibition; Noise KK; SAS policy; T3 resume code; **pending queue and ticks; replies, edit, delete, self-destruct timers; typing and read receipts**; **IP disclosure features (§29.2)**; basic diagnostics; CSP, SRI and a version-pinned service worker; desktop browsers and iOS Safari |
+| **MVP-2** | T1 in-band ICE restart and `NetChanged` handling; full diagnostics; **contacts; several identities (IndexedDB slots, Web Locks); identity transfer over P2P; reactions** |
+| **MVP-3** | Owner-controlled rooms of up to 16 members, with **observer role** and owner moderation (delete); introductions by the owner; MLS with the owner as single committer; room disposal; T2 recovery through the owner |
+| **TOR-1** | `p2pchat-companion`: embedded arti client and onion service, loopback WebSocket bridge, token and Origin check, built-in bridge lists; reproducible releases for Linux, macOS and Windows |
+| **TOR-2** | Tor mode in the PWA for 1:1: transport guard, TOR_INVITE (one-way), Noise IK, stream framing, "VIA TOR" UI |
+| **TOR-3** | Reconnecting contacts through stable onion addresses, with no QR |
+| **TOR-4** | Rooms over Tor (the owner shares members' onion addresses; members dial each other directly) |
+| **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16; in-browser Tor (research) |
 
 ## 24. Validation spikes (must finish before the design they gate is frozen)
 
@@ -847,8 +1006,14 @@ Members     4 / 8  (links 5 / 6)
 | S7 | Link hand-off on desktop browsers (`BroadcastChannel`). On iOS it is already known not to work between a tab and the PWA; the paste fallback is the design | §8.7 |
 | S8 | IPv6 reachability (AAAA records) of the default STUN servers, and srflx-v6 gathering on each target | §9.3 |
 | S9 | 15 simultaneous peer connections on iOS Safari: memory, keepalive and battery | §14.1 |
+| TS1 | Embedded arti: stable onion-service hosting with a key supplied at runtime and kept **only in RAM**; onion-to-onion time to first message and RTT | §28 |
+| TS2 | Can the PWA reach `ws://127.0.0.1:47431` from `https://<owner>.github.io` in Chrome and Edge (Local Network Access prompt), Firefox, and desktop Safari? (Shared with P2 of the channels plan) | §28.3 |
+| TS3 | WebRTC through Cloudflare WARP and 2–3 common VPNs, on desktop and iOS: does the srflx address show the VPN's exit? | §29.1 |
+| TS4 | How often does IPv6 bypass a v4-only VPN in practice (the §29.2 warning)? | §29.2 |
 
-## 25. Owner decisions (resolved from v0.2 open questions)
+## 25. Owner decisions
+
+### 25.1 Decisions in v0.3 (open questions from v0.2)
 
 | # | Topic | Decision | Where |
 |---|---|---|---|
@@ -861,6 +1026,25 @@ Members     4 / 8  (links 5 / 6)
 | Q7 | Hosting | GitHub Pages project site | Header, §4.1 |
 | Q8 | Browsers | Desktop Chrome, Edge, Firefox, Safari, plus iOS Safari | §17.5 |
 
+### 25.2 Decisions in v0.4
+
+| Topic | Decision | Where |
+|---|---|---|
+| Messaging | Replies, edit, delete, self-destruct timers, reactions, typing indicators, read ticks, pending queue | §11.2, §11.3, §11.7 |
+| Identities | Contacts in the encrypted key file; several identities per device; identity transfer over P2P | §7.2, §7.3, §7.5, §7.6 |
+| Rooms | Observer (read-only) role | §14.2 |
+| Tor | A second, separate transport through a local companion, with all features that fit the architecture | §28 |
+| IP privacy | VPN or Cloudflare WARP, Tor mode, LAN-only mode; three disclosure features in MVP-1 | §29 |
+
+### 25.3 Open questions (asked in chat, 2026-09-28)
+
+QN1–QN12 are listed in the chat of the same date. Once answered, the defaults below become decisions:
+
+- **QN3:** read receipts and typing on in 1:1, off in rooms.
+- **QN4:** the owner can delete any message in a room.
+- **QN5:** observers cannot react.
+- **QN7:** Tor bridges are used only on request.
+
 ## 26. Out of scope
 
 - A custom NAT traversal, DTLS, WebRTC or cryptographic algorithm.
@@ -871,8 +1055,8 @@ Members     4 / 8  (links 5 / 6)
 - TURN fallback.
 - Persistent history.
 - Multi-frame QR.
-- Single-QR bootstrap (impossible, REVIEW R1).
-- Traffic obfuscation.
+- Single-QR bootstrap in **direct mode** (impossible, REVIEW R1). Tor mode supports it (§28.4).
+- Traffic obfuscation in direct mode. Tor bridges in Tor mode are the only exception.
 
 ## 27. Public channels (opt-in exception to P7 and §4.3)
 
@@ -881,6 +1065,115 @@ Members     4 / 8  (links 5 / 6)
 - It is a **publication, not a chat**, and it is fully separate from private chats: its own page (`channel.html`), its own CSP, its own crate, and its own signing key derived from the saved identity.
 - Private-chat data MUST NOT flow into a channel.
 - The design, limits (desktop-only publishing, the owner's IP visible as provider, practical permanence) and phases are in [`../plans/PUBLIC-CHANNELS-IPFS.md`](../plans/PUBLIC-CHANNELS-IPFS.md). This section becomes normative once that plan's decisions D1–D6 are made.
+
+## 28. Tor mode (a second, separate transport)
+
+### 28.1 Why a separate transport
+
+- WebRTC data runs over UDP, and Tor carries only TCP streams. Tor Browser and Onion Browser also disable WebRTC entirely. So Tor mode is **not** "WebRTC over Tor": it is a different transport, under the **same** protocol above it (Noise, records, rooms, contacts, messaging features).
+- **Availability:** desktop Chrome, Edge and Firefox, plus desktop Safari if spike TS2 passes. **Not iOS**, because iOS cannot run the companion. iOS users get IP privacy from a VPN or WARP (§29.1).
+
+### 28.2 Mode selection and isolation
+
+- The connection mode is chosen **per signed-in session**, on the sign-in screen: **Direct** (the default) or **Tor**.
+- It cannot be changed without signing out, so a single session never mixes the two.
+
+### 28.3 The companion (`p2pchat-companion`)
+
+```
+ PWA (core, Noise, UI)  ──ws://127.0.0.1:47431──▶  p2pchat-companion
+                                                     ├─ embedded arti (Tor client + onion service)
+                                                     ├─ optional bridges: obfs4, Snowflake, WebTunnel (built-in lists)
+                                                     └─ byte pipes only: it never sees plaintext
+```
+
+- A native single binary for Linux, macOS and Windows, built from `companion/` in this repository. Releases are reproducible, their hashes are published, and it embeds arti, so no separate Tor install is needed.
+- **Local security:**
+  - it listens on `127.0.0.1:47431` only;
+  - it rejects any `Origin` other than the app's;
+  - the first WebSocket message must carry the 32-byte **token**. The companion prints a pairing code once, and the PWA stores the token in the key file (TLV 0x02; temporary identities re-enter it each session).
+- **Protocol between the PWA and the companion:**
+  - one **control** WebSocket, carrying `HOST(onion_secret)`, `DIAL(onion_pk)` and incoming-stream notifications;
+  - one WebSocket per Tor stream, carrying raw bytes.
+- The onion secret key is sent at session start and kept **in RAM only** by the companion *(spike TS1)*. It is dropped when the control socket closes.
+- **Bridges** (for networks that block Tor): off by default, with a "Tor is blocked on my network" toggle (open question QN7).
+
+### 28.4 One-way invite (single QR) and handshake
+
+**TOR_INVITE** (`kind = 5`), about 104 B:
+
+| Size | Field |
+|---|---|
+| 4 | header (§8.3) |
+| 16 | `invite_id` |
+| 16 | `room_id` |
+| 32 | `static_pk` (X25519) |
+| 32 | `onion_pk` (Ed25519, the v3 onion address) |
+| 4 | `expires_at` |
+
+The virtual port is fixed. There are no ICE candidates, fingerprints or answer.
+
+- **Single QR:** Bob dials Alice's onion address straight from the invite. **No answer code is needed.** This is the one-way bootstrap that v0.1 wanted, and it becomes possible under Tor.
+- **Handshake:** `Noise_IK_25519_ChaChaPoly_BLAKE2s`. The initiator is the dialler (Bob, or a contact reconnecting). The prologue is the invite bytes, or `"p2pchat/contact"` for contact reconnects. The first handshake payload carries `invite_id` (16 B) and the initiator's `onion_pk`.
+- **Who is accepted:** an incoming stream is accepted only if its static key is in **contacts**, or the payload names a **live, unused** `invite_id`. Everything else is closed with `E_NOT_A_CONTACT` before any application data. This blocks spam, which was Tox's "nospam" problem.
+- **SAS:** prompted for every non-contact (§10.4), because Alice has no out-of-band proof of Bob's key.
+
+### 28.5 Transport rules
+
+- **Framing:** each frame is `u16 len` followed by an outer frame (§11.1). The same 16 KiB limit applies, and the same records apply (§11.2).
+- **No-mixing guard:** in a Tor session, `core` refuses to emit `CreatePc`, the `wasm` crate refuses to construct an `RTCPeerConnection`, and no STUN server is contacted. Any attempt aborts, because it would be a bug that leaks the IP.
+- **No fallback:** if Tor fails, the session fails with `E_TOR_UNAVAILABLE`. The app never quietly switches to direct.
+- **Network changes need no recovery ladder:** an onion address does not depend on the network. After a drop, the side that dialled simply dials again with backoff (§12), the Noise session re-handshakes, and the pending queue is resent.
+- **Latency:** 0.3–1.5 s per message (6 hops onion to onion). Text only; voice and video are out of scope for Tor.
+
+### 28.6 Contacts reconnect without a QR (TOR-3)
+
+- A contact entry with `onion_pk` (§7.5) enables **"Connect"** from the contacts list. It dials the stored onion address directly, from any network, at any time the contact is online in Tor mode.
+- The onion address comes from the identity seed, so it is stable for saved identities and survives moving to another device (§7.6).
+- While signed in in Tor mode, the PWA keeps the onion service up so contacts can reach you. The UI shows "Reachable by contacts via Tor". It stops when the tab closes.
+
+### 28.7 Rooms over Tor (TOR-4)
+
+- The same owner model (§14), with each member hosting an onion service.
+- The owner sends each new member's `onion_pk` to the others, and members dial each other **directly**. No signalling relay is needed, which is simpler than WebRTC's §14.4.
+- The member cap is 16 (15 Tor circuits per member).
+
+### 28.8 What Tor mode hides, and what it does not
+
+- **Hides:** your IP from peers and from network observers. With bridges, it also hides the fact that you use Tor.
+- **Does not hide:**
+  - what you type, including nicknames;
+  - timing correlation by a global observer;
+  - that sessions are linked when a **saved** identity is reused, because its onion address stays the same;
+  - anything the companion's host machine can see.
+
+## 29. IP-address privacy
+
+### 29.1 Supported options
+
+| Option | Hides your IP from the peer | Hides it from your ISP / network | Cost / registration | Desktop | iOS |
+|---|---|---|---|---|---|
+| **LAN-only mode** (§9.4) | The peer sees only a LAN address, and both must be on the same network | ✓ (traffic stays local) | free | ✓ | ✓ |
+| **Your own VPN with UDP support**, full tunnel, set up outside the app. **Cloudflare WARP** (1.1.1.1 app) is free and needs no account | ✓ (the peer sees the VPN exit) | ✓ (the ISP sees that a VPN is used) | depends on the VPN; WARP is free | ✓ | ✓ |
+| **Tor mode** (§28) | ✓ | ✓ (and with bridges, Tor use too) | free | ✓ | ✗ |
+
+**Not options (the UI MUST say so when relevant):**
+
+- **iCloud Private Relay:** it does not cover WebRTC UDP.
+- **Tor Browser / Onion Browser:** they disable WebRTC, so direct mode cannot run there.
+- **TURN:** forbidden (P8).
+
+### 29.2 Disclosure features (MVP-1, direct mode)
+
+1. **"What your peer sees" panel.** In the diagnostics, and one tap away from the chat header, the app lists **your own** srflx addresses: the IPv4 and IPv6 addresses the peer will see, taken from the gathered candidates and the selected pair in `getStats`. Text: *"Your peer can see this IP address. If you use a VPN, it should be the VPN's address, not your home address."*
+2. **IPv6-bypass warning.** A browser cannot tell which interface belongs to a VPN, so the rule is:
+   - Whenever gathering produced **both** a srflx-v4 and a srflx-v6, show a banner: *"Your peer can see two addresses: an IPv4 one and an IPv6 one. If you use a VPN that covers only IPv4, your IPv6 address is your real one."*
+   - The banner offers **Drop IPv6** (§9.4), which applies from the next code.
+   - The user can mark "I use a VPN" in settings. The banner is then shown on **every** session with both families, not just the first.
+3. **Room exposure warning** (MVP-3):
+   - When a code with `GROUP` set is opened: *"This is a room invite. The owner and every member (up to 16) will see your IP address."*
+   - When the owner's room state arrives, before the mesh links start: *"Connect to N other members? Each of them will see your IP address."* The user can cancel, or continue.
+   - The same text is shown to observers.
 
 ---
 

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposal**. Needs owner decisions F1–F6 (§6) |
+| Status | **Adopted into SPEC v0.4** (§7.2–§7.6, §11.2, §11.3, §11.7, §14.2). The remaining choices are open questions QN in the chat of 2026-09-28 |
 | Relates to | [`SPEC.md`](../spec/SPEC.md) v0.3, [`TOR-AND-IP-PRIVACY.md`](TOR-AND-IP-PRIVACY.md), [`PUBLIC-CHANNELS-IPFS.md`](PUBLIC-CHANNELS-IPFS.md) |
 | Rule | A feature is adopted only if it works with **no application server**. It may use the peers' own devices and free, no-registration third-party services (STUN, public IPFS gateways, Tor) |
 | Date | 2026-09-28 |

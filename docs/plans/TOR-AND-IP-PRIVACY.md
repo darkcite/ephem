@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposal**. Needs owner decisions T1–T6 (§9) before any change to the SPEC |
+| Status | **Adopted into SPEC v0.4** (§28 Tor mode, §29 IP privacy). The remaining choices are open questions QN in the chat of 2026-09-28 |
 | Relates to | [`SPEC.md`](../spec/SPEC.md) v0.3: P2, P8, §9, §13, §21 |
 | Constraint | Zero application infrastructure. Anything third-party must be free and need no registration |
 | Date | 2026-09-28 |
