@@ -1,0 +1,17 @@
+# Chutney network of the Ephem offline Tor lab (docs/P2P-CHAT.md Appendix C.5).
+#
+# 3 directory authorities + 1 bridge authority, 5 exit relays (onion services need enough
+# relays for introduction points and rendezvous), one Snowflake bridge (its ORPort is fed by
+# the real Go snowflake server, run by tor as a server transport), one plain client used by
+# `chutney verify`, and one v3 onion service in front of the lab's echo server.
+Authority = Node(tag="a", authority=1, relay=1, torrc="authority.tmpl")
+BridgeAuthority = Node(tag="ba", authority=1, bridgeauthority=1, relay=1, torrc="bridgeauthority.tmpl")
+ExitRelay = Node(tag="r", relay=1, exit=1, torrc="relay.tmpl")
+Bridge = Node(tag="br", bridge=1, relay=1, torrc="bridge-snowflake.tmpl")
+Client = Node(tag="c", client=1, torrc="client.tmpl")
+HSv3 = Node(tag="h", hs=1, torrc="hs-v3.tmpl")
+
+NODES = Authority.getN(3) + BridgeAuthority.getN(1) + ExitRelay.getN(5) + \
+    Bridge.getN(1) + Client.getN(1) + HSv3.getN(1)
+
+ConfigureNodes(NODES)

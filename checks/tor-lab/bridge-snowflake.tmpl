@@ -1,0 +1,9 @@
+${include:bridge.tmpl}
+
+# The real Go snowflake server (v2.9.2) as this bridge's server transport: proxies reach it by
+# plain WebSocket on the PT port, and it feeds the Turbotunnel streams into our ORPort.
+# Managed transports cannot run under the seccomp sandbox.
+Sandbox 0
+ServerTransportPlugin snowflake exec ${path:sf-server} -disable-tls -unsafe-logging -log ${dir}/sf-server.log
+ExtOrPort $extorport
+ServerTransportListenAddr snowflake ${ip}:${ptport}
