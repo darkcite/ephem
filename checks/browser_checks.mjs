@@ -185,15 +185,30 @@ if (NET) {
 // ---------- E8: hidden tab with an open DataChannel (Chromium, headed, ~7 min) ----------
 const e8kind = avail.find((k) => ENGINE(k) === 'chromium');
 if (E8 && e8kind) {
-  const browser = await pw.chromium.launch({ ...launchOpts(e8kind), headless: false });
+  // Playwright normally disables background throttling; E8 must measure the real behaviour.
+  const browser = await pw.chromium.launch({ ...launchOpts(e8kind), headless: false,
+    ignoreDefaultArgs: ['--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'] });
   try {
     const ctx = await browser.newContext();
     const a = await ctx.newPage(); await a.goto(ORIGIN + '/');
     await a.evaluate(() => C.e8Start());
-    const b = await ctx.newPage(); await b.goto(ORIGIN + '/'); await b.bringToFront();
-    console.log('E8: tab A is now in the background; waiting 7 minutes...');
+    // Hide tab A. 1) open a second tab from A (same window, so A goes to the background);
+    // 2) if A still reports 'visible', minimize its window through the DevTools protocol.
+    const [b] = await Promise.all([ctx.waitForEvent('page'), a.evaluate((u) => { window.open(u, '_blank'); }, ORIGIN + '/')]);
+    await b.bringToFront();
+    await new Promise((z) => setTimeout(z, 2000));
+    let method = 'second tab in the same window';
+    if (await a.evaluate(() => document.visibilityState) !== 'hidden') {
+      const cdp = await ctx.newCDPSession(a);
+      const { windowId } = await cdp.send('Browser.getWindowForTarget');
+      await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
+      await new Promise((z) => setTimeout(z, 2000));
+      method = 'window minimized';
+    }
+    const vis = await a.evaluate(() => document.visibilityState);
+    console.log(`E8: tab A visibility=${vis} (${method}); waiting 7 minutes...`);
     await new Promise((z) => setTimeout(z, 7 * 60 * 1000));
-    const r = await a.evaluate(() => C.e8Result());
+    const r = { ...(await a.evaluate(() => C.e8Result())), hiddenBy: method };
     const status = r.hiddenSamples === 0 ? 'INCONCLUSIVE' : (r.maxGapMs < 5000 ? 'PASS' : 'FAIL');
     rec('E8', 'hidden tab timers with open DataChannel', status, { ...r, note: 'PASS = timers kept running (max gap < 5 s) while hidden; intensive throttling would give ~60 s gaps' });
   } catch (e) { rec('E8', 'hidden tab', 'FAIL', e.message.split('\n')[0]); }

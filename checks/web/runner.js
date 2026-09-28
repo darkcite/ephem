@@ -4,6 +4,8 @@
 (async () => {
   const $ = (id) => document.getElementById(id);
   const cfg = await (await fetch('config.json', { cache: 'no-store' })).json();
+  const qsLabel = new URLSearchParams(location.search).get('label');
+  if (qsLabel) cfg.label = qsLabel.replace(/[^a-z0-9_-]/gi, '').slice(0, 24) || cfg.label;
   const res = [];
   const isIp = (a) => /^[0-9.]+$/.test(a) || a.includes(':');
   const log = (m) => { $('log').textContent += m + '\n'; $('log').scrollTop = 1e9; };
@@ -93,6 +95,28 @@
     await send(false);
   });
 
+  // E8: open DataChannel + 1 s timer; the user switches to ANOTHER TAB (not app) for >= 6 min.
+  let e8armed = false, e8hiddenAt = 0, e8hiddenMs = 0;
+  async function e8() {
+    $('e8').disabled = true;
+    await C.e8Start();
+    e8armed = true;
+    log('E8 armed: switch to ANOTHER TAB in this browser for at least 6 minutes (Chrome throttles hidden tabs after 5), then come back.');
+  }
+  document.addEventListener('visibilitychange', async () => {
+    if (!e8armed) return;
+    if (document.visibilityState === 'hidden') { e8hiddenAt = performance.now(); return; }
+    if (!e8hiddenAt) return;
+    e8hiddenMs += performance.now() - e8hiddenAt; e8hiddenAt = 0;
+    e8armed = false;
+    const r = { ...C.e8Result(), hiddenSeconds: Math.round(e8hiddenMs / 1000) };
+    const status = r.hiddenSeconds < 360 ? 'INCONCLUSIVE' : (r.maxGapMs < 5000 ? 'PASS' : 'FAIL');
+    add('E8', `${cfg.label}: timers in a hidden tab with an open DataChannel (${r.hiddenSeconds} s hidden)`, status,
+      { ...r, note: 'PASS: max gap < 5 s while hidden. FAIL: throttled (gaps up to ~60 s), which would break Tor/Snowflake keepalives in background tabs' });
+    $('e8').disabled = false;
+    await send(false);
+  });
+
   async function s4() {
     try { const kinds = await C.cameraOffer(); add('S4', `${cfg.label}: after camera permission`, 'INFO', 'host candidates: ' + (kinds.join(',') || 'none')); }
     catch (e) { add('S4', `${cfg.label}: after camera permission`, 'FAIL', String(e)); }
@@ -103,9 +127,10 @@
   $('run').onclick = run;
   $('s6').onclick = s6;
   $('s4').onclick = s4;
+  $('e8').onclick = e8;
   $('copy').onclick = async () => { await navigator.clipboard.writeText(text()); log('Copied.'); };
   $('share').onclick = () => navigator.share ? navigator.share({ title: 'p2p-chat checks', text: text() }) : log('Share not available; use Copy.');
   $('finish').onclick = async () => { await send(true); log(cfg.resultUrl ? 'Results sent to the laptop.' : 'No laptop connected: use Copy or Share.'); };
-  for (const id of ['s6', 's4', 'finish']) $(id).hidden = !cfg.interactive;
+  for (const id of ['s6', 's4', 'finish', 'e8']) $(id).hidden = !cfg.interactive;
   if (cfg.autorun) run();
 })();
