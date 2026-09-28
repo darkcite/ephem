@@ -1,0 +1,13 @@
+[package]
+name = "ephem-snowflake"
+description = "Snowflake client transport, sans-IO: Turbotunnel encapsulation, KCP and smux v2 (docs/P2P-CHAT.md Appendix C.5)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+# Interop tests only (native): a WebSocket client to talk to the real Go snowflake server the
+# way a Snowflake proxy does.
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
