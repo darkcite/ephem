@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposal**. Nothing here is part of SPEC v0.3 until the owner approves it (see §12) |
+| Status | **Proposal, principles approved.** The exception to SPEC P7 and §4.3 has been added (SPEC §27). The details below await decisions D1–D6 (§12) |
 | Relates to | [`SPEC.md`](../spec/SPEC.md) v0.3 |
 | Constraint | Every IPFS component must be **free and need no registration**: no paid pinning, no accounts, no API keys |
 | Date | 2026-09-28 |
@@ -28,9 +28,9 @@ A user can optionally create a **public channel**:
 
 ## 3. How this fits the existing principles
 
-Public channels are **publications, not chats**. They are a separate feature with their own screen and their own page. Two parts of the spec must be amended if this plan is approved:
+Public channels are **publications, not chats**. They are a separate feature with their own screen and their own page. The following parts of the spec **have been amended** (SPEC P7, §4.3 and §27):
 
-- **P7 (no history)** and **§4.3 (IPFS message storage forbidden)** stay fully in force for **private chats**. The amendment adds one explicit, opt-in exception: *"Public channels (§X) are permanent public publications on IPFS; no private-chat data may ever enter them."*
+- **P7 (no history)** and **§4.3 (IPFS message storage forbidden)** stay fully in force for **private chats**. The amendment adds one explicit, opt-in exception: public channels (SPEC §27) are permanent public publications on IPFS, and no private-chat data may ever enter them.
 - **P1 (no application backend)** still holds:
   - the owner's Kubo is software the user runs on their own device;
   - public gateways are optional third-party infrastructure, like STUN;

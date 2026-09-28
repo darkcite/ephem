@@ -54,7 +54,7 @@ There is no server, relay, database or history. Network paths can be thrown away
 | P4 | **Identity ≠ network location.** Identity is a static key, never an IP, port, candidate or connection. |
 | P5 | **Network paths are disposable.** Paths are rebuilt; identity, room and sequence numbers survive. |
 | P6 | **Encryption is mandatory and layered.** DTLS for transport, plus application E2E. |
-| P7 | **No history.** RAM only, and keys are zeroized when the session ends. |
+| P7 | **No history.** Private chats are RAM only, and keys are zeroized when the session ends. This applies to **every private chat, with no exception**. The only exception in the whole system is a separate, opt-in feature: **public channels** (§27), which are public, permanent publications and never contain private-chat data. |
 | P8 | **Failure is explicit.** No silent relay, whether a server or a peer. If there is no direct path, the application says so. |
 | P9 | **Trust is explicit.** Security is never stronger than (a) the integrity of the out-of-band channel and (b) the code served by the static host. The UI and documentation MUST say so. |
 
@@ -100,7 +100,10 @@ Only a static host is required:
 
 ### 4.3 Forbidden
 
-Application backend, WebSocket or HTTP signalling, TURN, chat relay, message database, Redis, Kafka, IPFS message storage, a central presence service, central authentication, analytics or telemetry, remote logging, and third-party scripts. IPFS MAY mirror the **static assets** only.
+Application backend, WebSocket or HTTP signalling, TURN, chat relay, message database, Redis, Kafka, IPFS message storage, a central presence service, central authentication, analytics or telemetry, remote logging, and third-party scripts. These bans apply **fully and without exception to private chats (1:1 and rooms)**.
+
+- IPFS MAY mirror the **static assets**.
+- **The only exception** is the separate, opt-in **public channels** feature (§27). It stores **public** posts on IPFS through the owner's own local IPFS node and free public gateways. Private-chat data (messages, keys, codes, membership) MUST NOT enter it. In code this is enforced by crate and page isolation: the `channel` crate has no API that accepts chat data, and it runs only on `channel.html`, which has its own CSP.
 
 ## 5. Trust base
 
@@ -870,6 +873,14 @@ Members     4 / 8  (links 5 / 6)
 - Multi-frame QR.
 - Single-QR bootstrap (impossible, REVIEW R1).
 - Traffic obfuscation.
+
+## 27. Public channels (opt-in exception to P7 and §4.3)
+
+- A public channel is a permanent, **public** broadcast feed. Only its owner can post, and everyone else can only read.
+- It is stored on IPFS: pinned by the owner's local Kubo, and read through free public gateways with every block checked in Rust.
+- It is a **publication, not a chat**, and it is fully separate from private chats: its own page (`channel.html`), its own CSP, its own crate, and its own signing key derived from the saved identity.
+- Private-chat data MUST NOT flow into a channel.
+- The design, limits (desktop-only publishing, the owner's IP visible as provider, practical permanence) and phases are in [`../plans/PUBLIC-CHANNELS-IPFS.md`](../plans/PUBLIC-CHANNELS-IPFS.md). This section becomes normative once that plan's decisions D1–D6 are made.
 
 ---
 
