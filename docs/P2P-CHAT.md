@@ -1,7 +1,10 @@
-# P2P Ephemeral Chat: design, specification and plan
+# Ephem: design, specification and plan
+
+**Ephem** is the product name of this ephemeral, backend-free, peer-to-peer messenger (decided 2026-09-28). The repository and its Pages path keep the working name `p2p-chat` until the owner renames them; if renamed to `ephem`, the site moves to `https://<owner>.github.io/ephem/`.
 
 | Field | Value |
 |---|---|
+| Product | **Ephem** |
 | Document | The **single** project document. It replaces the earlier SPEC, REVIEW, plans and spike notes (all merged here on 2026-09-28) |
 | Spec level | v0.6 (see the decision log, §25) |
 | Status | Architecture and protocol draft. MVP-1 is ready to start. **Gate G2 passed on desktop and iOS**; Tor mode and public channels are now gated only by G3–G4 (need TOR-1 code) (§23.3) |
@@ -1047,7 +1050,7 @@ Members     4 / 8  (links 5 / 6)
 
   | Path | Content |
   |---|---|
-  | `/` | **Landing page** (static HTML, no scripts needed): what the messenger is, how a chat starts (two codes, in person or by link), what is and is not protected (§21), supported browsers, and a prominent **Start** link to `/app/` |
+  | `/` | **Landing page** (static HTML, no scripts needed): **Ephem**: what the messenger is, how a chat starts (two codes, in person or by link), what is and is not protected (§21), supported browsers, and a prominent **Start** link to `/app/` |
   | `/app/` | The PWA (index.html, boot.js, app_bg.wasm, service worker, manifest; §4.1) |
   | `/app/tor.html` | Tor-mode entry (§28.6), once TOR-2 ships |
   | `/checks/web/` | The checkpoint page (§24) |
