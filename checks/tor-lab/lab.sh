@@ -44,6 +44,13 @@ tools() {
     sed -i 's/^OrPort \$orport$/OrPort $orport IPv4Only/' "$CHUTNEY/torrc_templates/relay-non-dir.tmpl"
   fi
   cp "$HERE/bridge-snowflake.tmpl" "$CHUTNEY/torrc_templates/"
+  # Onion-service timing like the real network: one shared-random round (24 votes) equals one
+  # time period (30 min, the minimum). With chutney's 20 s votes the rounds last 8 minutes and
+  # arti finds no SRV for the time period (it then falls back to "disaster" parameters and asks
+  # other HSDirs than the service used; C tor tolerates that mismatch).
+  sed -i -e 's/^V3AuthVotingInterval .*/V3AuthVotingInterval 75/' "$CHUTNEY/torrc_templates/authority.i"
+  grep -q '^ConsensusParams hsdir_interval=30' "$CHUTNEY/torrc_templates/authority.i" ||
+    echo 'ConsensusParams hsdir_interval=30' >> "$CHUTNEY/torrc_templates/authority.i"
 }
 
 bg() { # name, command...
@@ -62,7 +69,12 @@ up() {
   bg stun python3 "$HERE/stun_server.py" "$STUN_PORT"
   log "configuring and starting the Tor network (chutney)"
   ( cd "$CHUTNEY" && ./chutney configure "$NET" >"$LAB/chutney.log" 2>&1 && ./chutney start "$NET" >>"$LAB/chutney.log" 2>&1 )
-  ( cd "$CHUTNEY" && CHUTNEY_START_TIME=300 ./chutney wait_for_bootstrap "$NET" >>"$LAB/chutney.log" 2>&1 ) || { log "bootstrap failed, see $LAB/chutney.log"; exit 1; }
+  # A fresh test network needs a few voting rounds; chutney's own wait gives up early.
+  local ok=0
+  for _ in 1 2 3 4; do
+    if ( cd "$CHUTNEY" && CHUTNEY_START_TIME=300 ./chutney wait_for_bootstrap "$NET" >>"$LAB/chutney.log" 2>&1 ); then ok=1; break; fi
+  done
+  (( ok )) || { log "bootstrap failed, see $LAB/chutney.log"; exit 1; }
 
   local br hs fp num ptport onion
   br="$(node_dir br)"; hs="$(node_dir h)"
@@ -82,6 +94,19 @@ up() {
   # The lab client's configuration (authorities, testing options) minus its own paths and
   # ports: the base of every extra lab client (tor for `verify`; arti gets the authorities).
   grep -vE '^(RunAsDaemon|Sandbox|DataDirectory|SocksPort|ControlPort|ControlSocket|PidFile|Log |Nickname|CookieAuthentication|#|$)' "$(node_dir c)/torrc" > "$LAB/client-base.torrc"
+  # The lab network for arti 0.46 clients (chutney writes an older authorities format).
+  python3 - "$LAB/nodes/arti.toml" > "$LAB/arti-net.toml" <<'PY'
+import re
+import sys
+text = open(sys.argv[1]).read()
+net = text[text.index("[path_rules]"):]
+idents = re.findall(r'v3ident = "([0-9A-F]{40})"', net)
+net = re.sub(r"authorities = \[.*?\](\n|$)", "", net, flags=re.S)
+print(net.rstrip())
+print()
+print("[tor_network.authorities]")
+print("v3idents = [" + ", ".join('"%s"' % i for i in idents) + "]")
+PY
   cat > "$LAB/lab.env" <<EOF
 LAB=$LAB
 BRIDGE_FP=$fp

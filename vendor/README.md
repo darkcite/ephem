@@ -1,0 +1,17 @@
+# Vendored crates (patched)
+
+Two arti 0.46.0 crates, copied from crates.io and patched through `[patch.crates-io]` in the
+workspace `Cargo.toml`. Both patches affect **only** `wasm32-unknown-unknown` (the browser);
+native builds compile the upstream code paths unchanged. arti's core crates (protocol,
+circuits, channels, guards, onion services, crypto) are used unmodified from crates.io.
+
+Drop a patch as soon as upstream arti covers the case (both spots are marked "TODO wasm" or
+use SQLite unconditionally in 0.46).
+
+| Crate | Patch | Why |
+|---|---|---|
+| `arti-client` | `src/client.rs` `statemgr_from_config`: on wasm32, `TestingStateMgr::new()` (in-memory) instead of `unimplemented!()` | A browser tab has no state directory. Guard and circuit-timeout state lives in memory for the session |
+| `tor-dirmgr` | new `src/storage/memory.rs` (`MemoryStore`); `config.rs` `open_store` returns it on wasm32; `err.rs`/`storage.rs` gate the SQLite error variant and module; `Cargo.toml` makes `rusqlite` a non-wasm dependency | Upstream always opens a SQLite cache (C library). The memory store keeps the same data with the same selection and expiry rules; everything in it is public directory data |
+
+To update: copy the new upstream versions over these directories and re-apply the marked
+"Ephem patch" hunks (search for `Ephem patch`).

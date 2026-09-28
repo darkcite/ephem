@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/proto", "crates/crypto", "crates/core", "crates/snowflake", "crates/wasm"]
+members = ["crates/proto", "crates/crypto", "crates/core", "crates/snowflake", "crates/tor", "crates/wasm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -20,3 +20,10 @@ strip = true
 opt-level = 3
 [profile.dev.package.blake2]
 opt-level = 3
+
+# Two small browser patches of arti 0.46 (vendor/README.md): in-memory state manager
+# (arti-client) and directory store (tor-dirmgr) on wasm32, where upstream has
+# `unimplemented!()` and SQLite.
+[patch.crates-io]
+arti-client = { path = "vendor/arti-client" }
+tor-dirmgr = { path = "vendor/tor-dirmgr" }
