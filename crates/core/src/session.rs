@@ -36,6 +36,13 @@ pub const TYPING_EVERY_MS: u64 = 3_000;
 pub const TYPING_CLEAR_MS: u64 = 6_000;
 /// Largest plaintext that fits one frame.
 pub const MAX_PLAIN: usize = MAX_FRAME - HEADER_LEN - TAG_LEN;
+/// Identity transfer (§7.6): chunk size and the largest key file accepted.
+pub const IDENTITY_CHUNK: usize = 12 * 1024;
+pub const MAX_IDENTITY: usize = 72 * 1024;
+/// Reaction emoji: 1..=32 UTF-8 bytes (one grapheme, checked by the UI) (§11.7).
+pub const MAX_REACTION: usize = 32;
+/// Nickname sent in HELLO (§7.3 body, §11.2).
+pub const MAX_NICK: usize = 32;
 
 /// HELLO capability bits (§11.4).
 pub mod caps {
@@ -98,17 +105,51 @@ impl Privacy {
     }
 }
 
-/// Per-chat privacy settings (§11.7). Reciprocal: off = neither sent nor shown.
+/// Per-chat settings. Read receipts and typing are reciprocal (§11.7): off = neither sent nor
+/// shown. `nick` is our nickname (saved identities, §7.3), sent in HELLO.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub read_receipts: bool,
     pub typing: bool,
+    pub nick: [u8; MAX_NICK],
+    pub nick_len: u8,
+}
+
+impl Settings {
+    #[inline]
+    pub fn nick(&self) -> &[u8] {
+        &self.nick[..self.nick_len as usize]
+    }
+
+    /// Sets the nickname; longer than 32 bytes or not UTF-8 is refused.
+    pub fn set_nick(&mut self, nick: &[u8]) -> bool {
+        if nick.len() > MAX_NICK || core::str::from_utf8(nick).is_err() {
+            return false;
+        }
+        self.nick = [0; MAX_NICK];
+        self.nick[..nick.len()].copy_from_slice(nick);
+        self.nick_len = nick.len() as u8;
+        true
+    }
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { read_receipts: true, typing: true }
+        Self { read_receipts: true, typing: true, nick: [0; MAX_NICK], nick_len: 0 }
     }
+}
+
+/// Diagnostics of the current path (§18).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Diag {
+    /// Last PING→PONG round trip, ms (0 = none yet).
+    pub app_rtt_ms: u32,
+    /// Noise rekeys done on this path (the "epoch").
+    pub rekeys: u32,
+    /// Time until the next scheduled rekey, ms.
+    pub rekey_in_ms: u64,
+    /// Our messages not acknowledged yet.
+    pub pending: u64,
 }
 
 /// Output of the core. Slices borrow either the session's TX buffer or the caller's RX frame.
@@ -119,8 +160,9 @@ pub enum Event<'a> {
     /// Noise handshake done. `resumed` = a later path of the same chat (no new SAS check needed:
     /// the static keys are the ones already pinned).
     Connected { sas: Sas, peer: PeerId, resumed: bool },
-    /// Peer HELLO. `sas_optional` = both codes were scanned in person (§10.4).
-    Hello { nick: &'a [u8], sas_optional: bool },
+    /// Peer HELLO. `sas_optional` = both codes were scanned in person (§10.4); never for an
+    /// identity transfer. `sign_pk` is the peer's Ed25519 key (stored with a contact).
+    Hello { nick: &'a [u8], sas_optional: bool, sign_pk: [u8; 32] },
     /// Incoming chat message (UTF-8 validated).
     Chat { seq: u64, text: &'a [u8], ttl_s: u32, reply: Option<MsgRef> },
     /// The peer changed the self-destruct timer (0 = off).
@@ -135,6 +177,17 @@ pub enum Event<'a> {
     Read { seq: u64 },
     /// Self-destruct timer fired: remove the message everywhere.
     Expired(MsgRef),
+    /// The peer reacted to a message (empty = reaction removed) (§11.7).
+    Reaction { msg: MsgRef, emoji: &'a [u8] },
+    /// In-band ICE restart from the peer (§13 T1): render with [`Session::render_signal`].
+    SignalOffer(IceParams),
+    SignalAnswer(IceParams),
+    /// Identity transfer (§7.6): the receiving device confirmed the SAS.
+    PeerReady,
+    /// Identity transfer: the key file was sent completely.
+    IdentitySent,
+    /// Identity transfer: the complete encrypted key file (still passphrase-protected).
+    IdentityReceived(&'a [u8]),
     PeerTyping(bool),
     /// No traffic for `DEGRADED_AFTER_MS` (§12).
     Degraded,
@@ -194,6 +247,21 @@ pub struct Session {
     suspended_at_ms: u64,
     degraded: bool,
     hidden: bool,
+    /// The peer's Ed25519 key from HELLO (stored with a contact, §7.5).
+    peer_sign_pk: [u8; 32],
+    // ---- identity transfer (§7.6) ----
+    transfer: bool,
+    sas_confirmed: bool,
+    peer_ready: bool,
+    /// Sender: the key file to send. Receiver: the chunks received so far.
+    xfer: Vec<u8>,
+    xfer_total: u16,
+    xfer_next: u16,
+    // ---- diagnostics / renegotiation ----
+    app_rtt_ms: u32,
+    rekeys: u32,
+    /// `o=` version of the next remote description rendered on this path (§13 T1).
+    sdp_version: u32,
 }
 
 #[inline]
@@ -255,6 +323,16 @@ impl Session {
             suspended_at_ms: 0,
             degraded: false,
             hidden: false,
+            peer_sign_pk: [0; 32],
+            transfer: false,
+            sas_confirmed: false,
+            peer_ready: false,
+            xfer: Vec::new(),
+            xfer_total: 0,
+            xfer_next: 0,
+            app_rtt_ms: 0,
+            rekeys: 0,
+            sdp_version: 2,
         }
     }
 
@@ -265,6 +343,14 @@ impl Session {
         s.room_id = room_id;
         s.expires_at = expires_at;
         s.code_flags = if privacy == Privacy::LanOnly { flags::LAN_ONLY } else { 0 };
+        s
+    }
+
+    /// New device (§7.6): an invite asking for an identity. This side is the receiver.
+    pub fn transfer_receiver(id: &Identity, invite_id: [u8; 16], room_id: [u8; 16], expires_at: u32, privacy: Privacy, drop_ipv6: bool) -> Self {
+        let mut s = Self::offerer(id, invite_id, room_id, expires_at, privacy, drop_ipv6, Settings::default());
+        s.code_flags |= flags::TRANSFER;
+        s.transfer = true;
         s
     }
 
@@ -281,6 +367,7 @@ impl Session {
         s.remote = PeerId(c.static_pk);
         s.room_id = c.room_id;
         s.scanned = scanned;
+        s.transfer = c.flags & flags::TRANSFER != 0;
         s.take_invite(&c, invite);
         Ok(s)
     }
@@ -344,6 +431,26 @@ impl Session {
         self.room_id
     }
 
+    /// This chat is an identity transfer (§7.6), not a conversation.
+    #[inline(always)]
+    pub fn transfer(&self) -> bool {
+        self.transfer
+    }
+
+    #[inline(always)]
+    pub fn peer_sign_pk(&self) -> [u8; 32] {
+        self.peer_sign_pk
+    }
+
+    #[inline(always)]
+    pub fn sas_confirmed(&self) -> bool {
+        self.sas_confirmed
+    }
+
+    pub fn diag(&self, now_ms: u64) -> Diag {
+        Diag { app_rtt_ms: self.app_rtt_ms, rekeys: self.rekeys, rekey_in_ms: self.rekey_at_ms.saturating_sub(now_ms), pending: self.pending_count() }
+    }
+
     #[inline(always)]
     pub fn ever_connected(&self) -> bool {
         self.ever_connected
@@ -376,8 +483,39 @@ impl Session {
             Role::Answerer => sdp::Role::Offer,
             Role::Offerer => sdp::Role::Answer,
         };
-        let n = sdp::render_remote(&self.remote_ice, role, session_id(&self.invite_id), out).map_err(|_| ErrorCode::InvalidInvite)?;
+        let n = sdp::render_remote(&self.remote_ice, role, session_id(&self.invite_id), 2, out).map_err(|_| ErrorCode::InvalidInvite)?;
         core::str::from_utf8(&out[..n]).map_err(|_| ErrorCode::InvalidInvite)
+    }
+
+    /// Renders the peer's in-band re-offer or re-answer (§13 T1) for the current connection.
+    /// The DTLS roles of the connection are kept: the path's answerer is the DTLS client.
+    pub fn render_signal<'o>(&mut self, ice: &IceParams, offer: bool, out: &'o mut [u8; MAX_SDP_LEN]) -> Result<&'o str, ErrorCode> {
+        let role = match (offer, self.role) {
+            (true, _) => sdp::Role::Offer,
+            (false, Role::Offerer) => sdp::Role::Answer,
+            (false, Role::Answerer) => sdp::Role::AnswerPassive,
+        };
+        self.sdp_version += 1;
+        let n = sdp::render_remote(ice, role, session_id(&self.invite_id), self.sdp_version, out).map_err(|_| ErrorCode::InvalidInvite)?;
+        core::str::from_utf8(&out[..n]).map_err(|_| ErrorCode::InvalidInvite)
+    }
+
+    /// Sends our re-offer or re-answer of an ICE restart over the open channel (§13 T1).
+    pub fn signal(&mut self, now_ms: u64, offer: bool, local_sdp: &str, sink: &mut impl FnMut(Event<'_>)) -> Result<(), ErrorCode> {
+        if !self.connected() {
+            return Err(ErrorCode::PeerOffline);
+        }
+        let (privacy, drop_ipv6) = (self.privacy, self.drop_ipv6);
+        let ice = sdp::parse_local(local_sdp, |c| privacy.keeps(c, drop_ipv6)).ok_or(ErrorCode::IceFailed)?;
+        let rt = if offer { rtype::SIGNAL_OFFER } else { rtype::SIGNAL_ANSWER };
+        self.send_records(now_ms, sink, |b| {
+            let mut body = [0u8; MAX_CODE_LEN];
+            let mut w = Buf::new(&mut body);
+            w.u8(ice.n_cand)?;
+            ice.encode_body(&mut w)?;
+            let n = w.len();
+            frame::write_record(b, rt, 0, &body[..n])
+        })
     }
 
     /// Builds this side's code from the gathered local description.
@@ -502,6 +640,7 @@ impl Session {
         self.hs = None;
         self.tr = None;
         self.degraded = false;
+        self.sdp_version = 2;
     }
 
     /// The adapter lost the path (DataChannel closed or ICE failed). Before the first connection
@@ -645,6 +784,7 @@ impl Session {
         let mut ack_upto = None;
         let mut pong = None;
         let mut rekey = false;
+        let mut send_identity = false;
         for rec in Records::new(plain) {
             let rec = rec?;
             let mut r = Rd::new(rec.body);
@@ -656,11 +796,13 @@ impl Session {
                     }
                     self.peer_caps = r.u32().ok_or(Bad)?;
                     let _max_msg = r.u16().ok_or(Bad)?;
-                    let _sign_pk = r.arr::<32>().ok_or(Bad)?;
+                    let sign_pk = r.arr::<32>().ok_or(Bad)?;
+                    self.peer_sign_pk = sign_pk;
                     let nl = r.u8().ok_or(Bad)? as usize;
-                    let nick = r.take(nl).filter(|n| n.len() <= 32 && core::str::from_utf8(n).is_ok()).ok_or(Bad)?;
-                    let sas_optional = self.scanned && self.peer_caps & caps::SCANNED != 0;
-                    sink(Event::Hello { nick, sas_optional });
+                    let nick = r.take(nl).filter(|n| n.len() <= MAX_NICK && core::str::from_utf8(n).is_ok()).ok_or(Bad)?;
+                    // The SAS is always mandatory for an identity transfer (§10.4).
+                    let sas_optional = !self.transfer && self.scanned && self.peer_caps & caps::SCANNED != 0;
+                    sink(Event::Hello { nick, sas_optional, sign_pk });
                 }
                 rtype::CHAT => {
                     let seq = r.u64().ok_or(Bad)?;
@@ -744,6 +886,53 @@ impl Session {
                         sink(Event::Deleted(MsgRef { mine: false, seq }));
                     }
                 }
+                rtype::REACT => {
+                    let who = r.u8().ok_or(Bad)?;
+                    let seq = r.u64().ok_or(Bad)?;
+                    let n = r.u8().ok_or(Bad)? as usize;
+                    let emoji = r.take(n).filter(|e| e.len() <= MAX_REACTION && core::str::from_utf8(e).is_ok()).ok_or(Bad)?;
+                    let msg = MsgRef { mine: who == me, seq };
+                    let known = if msg.mine { seq <= self.pending.last() } else { who == peer && seq <= self.chat_rx };
+                    if known && seq != 0 {
+                        sink(Event::Reaction { msg, emoji });
+                    }
+                }
+                rtype::SIGNAL_OFFER | rtype::SIGNAL_ANSWER => {
+                    let n = r.u8().ok_or(Bad)?;
+                    let ice = IceParams::decode_body(&mut r, n).ok_or(Bad)?;
+                    sink(if rec.rtype == rtype::SIGNAL_OFFER { Event::SignalOffer(ice) } else { Event::SignalAnswer(ice) });
+                }
+                rtype::IDENTITY_READY => {
+                    // Only the sending (old) device waits for this.
+                    if !self.transfer || self.role_is_receiver() {
+                        return Err(ErrorCode::NotPermitted);
+                    }
+                    self.peer_ready = true;
+                    sink(Event::PeerReady);
+                    send_identity = self.sas_confirmed && !self.xfer.is_empty();
+                }
+                rtype::IDENTITY_CHUNK => {
+                    // Only on a transfer link, to the receiver, after its user confirmed the SAS.
+                    if !self.transfer || !self.role_is_receiver() || !self.sas_confirmed {
+                        return Err(ErrorCode::NotPermitted);
+                    }
+                    let idx = r.u16().ok_or(Bad)?;
+                    let total = r.u16().ok_or(Bad)?;
+                    let data = r.take(r.remaining()).unwrap_or(&[]);
+                    let max_chunks = MAX_IDENTITY.div_ceil(IDENTITY_CHUNK) as u16;
+                    if idx != self.xfer_next || total == 0 || total > max_chunks || (idx > 0 && total != self.xfer_total) || data.len() > IDENTITY_CHUNK {
+                        return Err(Bad);
+                    }
+                    if idx == 0 {
+                        self.xfer = Vec::with_capacity(total as usize * IDENTITY_CHUNK);
+                        self.xfer_total = total;
+                    }
+                    self.xfer.extend_from_slice(data);
+                    self.xfer_next += 1;
+                    if self.xfer_next == total {
+                        sink(Event::IdentityReceived(&self.xfer));
+                    }
+                }
                 rtype::PING => {
                     let t = r.u64().ok_or(Bad)?;
                     let hidden = r.u8().unwrap_or(0) != 0;
@@ -753,7 +942,10 @@ impl Session {
                     }
                     pong = Some(t);
                 }
-                rtype::PONG => {}
+                rtype::PONG => {
+                    let t = r.u64().ok_or(Bad)?;
+                    self.app_rtt_ms = now_ms.saturating_sub(t).min(u32::MAX as u64) as u32;
+                }
                 rtype::GOODBYE => {
                     r.u16().ok_or(Bad)?;
                     self.close_local();
@@ -767,6 +959,10 @@ impl Session {
         }
         if rekey {
             self.tr.as_mut().ok_or(ErrorCode::CryptoFailed)?.rekey_rx();
+            self.rekeys += 1;
+        }
+        if send_identity {
+            self.send_identity_chunks(now_ms, sink)?;
         }
         if ack_upto.is_some() || pong.is_some() {
             self.send_records(now_ms, sink, |b| {
@@ -797,20 +993,24 @@ impl Session {
 
     fn send_hello(&mut self, now_ms: u64, sink: &mut impl FnMut(Event<'_>)) -> Result<(), ErrorCode> {
         let sign_pk = self.sign_pk;
+        let nick = self.settings.nick;
+        let nick_len = self.settings.nick_len as usize;
         let c = caps::RESUME
             | if self.settings.read_receipts { caps::READ } else { 0 }
             | if self.settings.typing { caps::TYPING } else { 0 }
             | if self.scanned { caps::SCANNED } else { 0 };
         self.send_records(now_ms, sink, |b| {
-            let mut body = [0u8; 2 + 4 + 2 + 32 + 1];
+            let mut body = [0u8; 2 + 4 + 2 + 32 + 1 + MAX_NICK];
             let mut w = Buf::new(&mut body);
             w.u8(ephem_proto::VERSION)?;
             w.u8(ephem_proto::VERSION)?;
             w.u32(c)?;
             w.u16(MAX_TEXT as u16)?;
             w.put(&sign_pk)?;
-            w.u8(0)?;
-            frame::write_record(b, rtype::HELLO, 0, &body)
+            w.u8(nick_len as u8)?;
+            w.put(&nick[..nick_len])?;
+            let n = w.len();
+            frame::write_record(b, rtype::HELLO, 0, &body[..n])
         })
     }
 
@@ -836,6 +1036,9 @@ impl Session {
     // ---- user actions ----
 
     fn queue(&mut self, now_ms: u64, rf: u8, ttl_s: u32, reply: MsgRef, text: &[u8], sink: &mut impl FnMut(Event<'_>)) -> Result<u64, ErrorCode> {
+        if self.transfer {
+            return Err(ErrorCode::NotPermitted);
+        }
         if !self.ever_connected || self.state == State::Closed {
             return Err(ErrorCode::PeerOffline);
         }
@@ -948,6 +1151,79 @@ impl Session {
         })
     }
 
+    /// Reacts to a message (ours or the peer's); an empty `emoji` removes our reaction.
+    pub fn react(&mut self, now_ms: u64, msg: MsgRef, emoji: &[u8], sink: &mut impl FnMut(Event<'_>)) -> Result<(), ErrorCode> {
+        if emoji.len() > MAX_REACTION || core::str::from_utf8(emoji).is_err() {
+            return Err(ErrorCode::MessageTooLarge);
+        }
+        let known = if msg.mine { msg.seq <= self.pending.last() } else { msg.seq <= self.chat_rx };
+        if self.transfer || msg.seq == 0 || !known {
+            return Err(ErrorCode::NotPermitted);
+        }
+        if !self.connected() {
+            return Err(ErrorCode::PeerOffline);
+        }
+        let who = if msg.mine { self.me_idx } else { 1 - self.me_idx };
+        self.send_records(now_ms, sink, |b| {
+            b.u8(rtype::REACT)?;
+            b.u8(0)?;
+            b.u16((1 + 8 + 1 + emoji.len()) as u16)?;
+            b.u8(who)?;
+            b.u64(msg.seq)?;
+            b.u8(emoji.len() as u8)?;
+            b.put(emoji)
+        })
+    }
+
+    /// The user confirmed that the SAS matches (§10.4). On an identity transfer (§7.6) the
+    /// receiver tells the sender; the sender passes the encrypted key file to send, which goes
+    /// out once both sides have confirmed.
+    pub fn confirm_sas(&mut self, now_ms: u64, identity: Option<&[u8]>, sink: &mut impl FnMut(Event<'_>)) -> Result<(), ErrorCode> {
+        if !self.connected() {
+            return Err(ErrorCode::PeerOffline);
+        }
+        self.sas_confirmed = true;
+        if !self.transfer {
+            return Ok(());
+        }
+        if self.role_is_receiver() {
+            return self.send_records(now_ms, sink, |b| frame::write_record(b, rtype::IDENTITY_READY, 0, &[]));
+        }
+        let blob = identity.ok_or(ErrorCode::NotPermitted)?;
+        if blob.is_empty() || blob.len() > MAX_IDENTITY {
+            return Err(ErrorCode::KeyfileInvalid);
+        }
+        self.xfer = blob.to_vec();
+        if self.peer_ready {
+            self.send_identity_chunks(now_ms, sink)?;
+        }
+        Ok(())
+    }
+
+    /// The receiver of a transfer is the device that made the TRANSFER invite (§7.6).
+    #[inline]
+    fn role_is_receiver(&self) -> bool {
+        self.code_flags & flags::TRANSFER != 0 && self.me_idx == 0
+    }
+
+    fn send_identity_chunks(&mut self, now_ms: u64, sink: &mut impl FnMut(Event<'_>)) -> Result<(), ErrorCode> {
+        let mut blob = core::mem::take(&mut self.xfer);
+        let total = blob.len().div_ceil(IDENTITY_CHUNK) as u16;
+        for (i, chunk) in blob.chunks(IDENTITY_CHUNK).enumerate() {
+            self.send_records(now_ms, sink, |b| {
+                b.u8(rtype::IDENTITY_CHUNK)?;
+                b.u8(0)?;
+                b.u16((4 + chunk.len()) as u16)?;
+                b.u16(i as u16)?;
+                b.u16(total)?;
+                b.put(chunk)
+            })?;
+        }
+        blob.fill(0);
+        sink(Event::IdentitySent);
+        Ok(())
+    }
+
     /// The user has seen the peer's messages up to `seq` (on screen, page visible).
     /// Starts their self-destruct countdowns and sends a coalesced READ if enabled.
     pub fn mark_read(&mut self, now_ms: u64, seq: u64, sink: &mut impl FnMut(Event<'_>)) {
@@ -1048,6 +1324,7 @@ impl Session {
                 if let Some(tr) = self.tr.as_mut() {
                     tr.rekey_tx();
                 }
+                self.rekeys += 1;
                 self.rekey_at_ms = now_ms + REKEY_MS;
             }
             Ok(()) => {}
@@ -1072,6 +1349,8 @@ impl Session {
     fn close_local(&mut self) {
         self.state = State::Closed;
         self.drop_path();
+        self.xfer.fill(0);
+        self.xfer.clear();
         self.pending.clear();
         self.own_timers = Timers::new();
         self.peer_timers = Timers::new();

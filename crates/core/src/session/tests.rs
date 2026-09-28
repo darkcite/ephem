@@ -50,6 +50,12 @@ struct Seen {
     typing: Option<bool>,
     suspended: u32,
     closed: Option<ErrorCode>,
+    nick: Vec<u8>,
+    reactions: Vec<(MsgRef, Vec<u8>)>,
+    signals: Vec<(bool, IceParams)>,
+    peer_ready: bool,
+    identity_sent: bool,
+    identity: Vec<u8>,
 }
 
 fn sink<'w>(wire: &'w mut Wire, seen: &'w mut Seen) -> impl FnMut(Event<'_>) + 'w {
@@ -60,7 +66,16 @@ fn sink<'w>(wire: &'w mut Wire, seen: &'w mut Seen) -> impl FnMut(Event<'_>) + '
             seen.connects += 1;
             seen.resumed = resumed;
         }
-        Event::Hello { sas_optional, .. } => seen.sas_optional = Some(sas_optional),
+        Event::Hello { sas_optional, nick, .. } => {
+            seen.sas_optional = Some(sas_optional);
+            seen.nick = nick.to_vec();
+        }
+        Event::Reaction { msg, emoji } => seen.reactions.push((msg, emoji.to_vec())),
+        Event::SignalOffer(ice) => seen.signals.push((true, ice)),
+        Event::SignalAnswer(ice) => seen.signals.push((false, ice)),
+        Event::PeerReady => seen.peer_ready = true,
+        Event::IdentitySent => seen.identity_sent = true,
+        Event::IdentityReceived(b) => seen.identity = b.to_vec(),
         Event::Chat { seq, text, ttl_s, reply } => seen.chats.push((seq, text.to_vec(), ttl_s, reply)),
         Event::Setting { ttl_s } => seen.settings.push(ttl_s),
         Event::Edited { seq, text } => seen.edited.push((seq, text.to_vec())),
@@ -259,7 +274,7 @@ fn edit_delete_typing() {
 
 #[test]
 fn receipts_and_typing_are_reciprocal() {
-    let off = Settings { read_receipts: false, typing: false };
+    let off = Settings { read_receipts: false, typing: false, ..Settings::default() };
     let mut p = connect_with(Settings::default(), off, false, false);
     act!(p.a, send_chat(NOW_MS, b"1", None)).unwrap();
     p.settle();
@@ -418,4 +433,100 @@ fn privacy_filter_and_expiry() {
     a.tick(NOW_MS + 301_000, false, &mut sink(&mut w, &mut seen));
     assert_eq!(seen.closed, Some(ErrorCode::ExpiredInvite));
     assert!(w.frames.is_empty(), "nothing sent before a channel exists");
+}
+
+#[test]
+fn nickname_reactions_and_app_rtt() {
+    let mut named = Settings::default();
+    assert!(named.set_nick("Алиса".as_bytes()));
+    assert!(!named.set_nick(&[b'x'; 33]));
+    let mut p = connect_with(named, Settings::default(), false, false);
+    assert_eq!(p.b.seen.nick, "Алиса".as_bytes());
+    assert!(p.a.seen.nick.is_empty());
+
+    act!(p.a, send_chat(NOW_MS, b"hi", None)).unwrap();
+    p.settle();
+    act!(p.b, react(NOW_MS, MsgRef { mine: false, seq: 1 }, "👍".as_bytes())).unwrap();
+    act!(p.a, react(NOW_MS, MsgRef { mine: true, seq: 1 }, "🎉".as_bytes())).unwrap();
+    p.settle();
+    assert_eq!(p.a.seen.reactions, vec![(MsgRef { mine: true, seq: 1 }, "👍".as_bytes().to_vec())]);
+    assert_eq!(p.b.seen.reactions, vec![(MsgRef { mine: false, seq: 1 }, "🎉".as_bytes().to_vec())]);
+    act!(p.b, react(NOW_MS, MsgRef { mine: false, seq: 1 }, b"")).unwrap();
+    p.settle();
+    assert_eq!(p.a.seen.reactions[1].1, b"", "empty removes");
+    assert_eq!(act!(p.b, react(NOW_MS, MsgRef { mine: false, seq: 9 }, b"x")), Err(ErrorCode::NotPermitted), "unknown message");
+    assert_eq!(act!(p.b, react(NOW_MS, MsgRef { mine: false, seq: 1 }, &[b'x'; 33])), Err(ErrorCode::MessageTooLarge));
+
+    act!(p.a, tick(NOW_MS + PING_IDLE_MS, false));
+    p.now = NOW_MS + PING_IDLE_MS + 40;
+    p.settle();
+    let d = p.a.s.diag(NOW_MS + PING_IDLE_MS + 40);
+    assert_eq!(d.app_rtt_ms, 40, "PING→PONG");
+    assert_eq!(d.rekeys, 0);
+}
+
+#[test]
+fn in_band_ice_restart_signals() {
+    let mut p = connect();
+    let sdp = local_sdp("NEWU", 0xAA, "5555b126-3aae-4a3e-b714-5d089ddfbff0", 43000);
+    // Bob (the path's answerer, DTLS client) re-offers; Alice answers.
+    act!(p.b, signal(NOW_MS, true, sdp_str(&sdp))).unwrap();
+    p.settle();
+    let (offer, ice) = p.a.seen.signals[0];
+    assert!(offer && ice.ufrag.as_str() == "NEWU");
+    let mut out = [0u8; MAX_SDP_LEN];
+    let r = p.a.s.render_signal(&ice, true, &mut out).unwrap();
+    assert!(r.contains("a=setup:actpass") && r.contains(" 3 IN IP4"), "re-offer, version 3");
+    act!(p.a, signal(NOW_MS, false, sdp_str(&local_sdp("ANSW", 0xBB, "6666b126-3aae-4a3e-b714-5d089ddfbff0", 44000)))).unwrap();
+    p.settle();
+    let (offer, ice) = p.b.seen.signals[0];
+    assert!(!offer);
+    // Alice was the DTLS server (she offered first), so her re-answer is rendered passive for Bob.
+    let r = p.b.s.render_signal(&ice, false, &mut out).unwrap();
+    assert!(r.contains("a=setup:passive"));
+    // And Alice renders Bob's answers as active.
+    let r = p.a.s.render_signal(&ice, false, &mut out).unwrap();
+    assert!(r.contains("a=setup:active") && r.contains(" 4 IN IP4"));
+}
+
+/// Old device (Bob, signed in) sends its key file to a new device (Alice, TRANSFER invite).
+#[test]
+fn identity_transfer() {
+    let new_dev = Identity::from_seed(&[5; 32]);
+    let old_dev = Identity::from_seed(&[6; 32]);
+    let mut a = Box::new(Session::transfer_receiver(&new_dev, [7; 16], [9; 16], NOW_S + 300, Privacy::Default, false));
+    let invite = a.build_code(&new_dev, sdp_str(&local_sdp("AAAA", 0xAA, "9090b126-3aae-4a3e-b714-5d089ddfbff0", 40000))).unwrap().to_vec();
+    assert_ne!(Code::decode(&invite).unwrap().flags & flags::TRANSFER, 0);
+    let mut b = Box::new(Session::answerer(&old_dev, &invite, NOW_S, Privacy::Default, false, Settings::default(), true).unwrap());
+    assert!(b.transfer());
+    let answer = b.build_code(&old_dev, sdp_str(&local_sdp("BBBB", 0xBB, "1111b126-3aae-4a3e-b714-5d089ddfbff0", 50000))).unwrap().to_vec();
+    a.apply_answer(&new_dev, &answer, NOW_S, true).unwrap();
+    let mut p = Pair {
+        a: Side { id: new_dev, s: a, out: Wire { frames: vec![] }, seen: Seen::default() },
+        b: Side { id: old_dev, s: b, out: Wire { frames: vec![] }, seen: Seen::default() },
+        now: NOW_MS,
+    };
+    act!(p.b, on_open(NOW_MS));
+    act!(p.a, on_open(NOW_MS));
+    p.settle();
+    assert_eq!(p.a.seen.sas_optional, Some(false), "SAS mandatory even when both scanned");
+    assert_eq!(act!(p.b, send_chat(NOW_MS, b"x", None)), Err(ErrorCode::NotPermitted), "not a chat");
+
+    let blob: Vec<u8> = (0..30_000u32).map(|i| (i * 7) as u8).collect();
+    // Old device confirms first: nothing is sent until the new device confirms too.
+    act!(p.b, confirm_sas(NOW_MS, Some(&blob))).unwrap();
+    assert!(p.b.out.frames.is_empty());
+    act!(p.a, confirm_sas(NOW_MS, None)).unwrap();
+    p.settle();
+    assert!(p.b.seen.peer_ready && p.b.seen.identity_sent);
+    assert_eq!(p.a.seen.identity, blob, "3 chunks reassembled");
+    assert!(p.a.seen.closed.is_none() && p.b.seen.closed.is_none());
+}
+
+#[test]
+fn sas_confirm_on_a_normal_chat_sends_nothing() {
+    // Outside a TRANSFER link a confirmed SAS never starts an identity transfer.
+    let mut p = connect();
+    assert_eq!(act!(p.b, confirm_sas(NOW_MS, Some(b"x"))), Ok(()), "plain SAS confirm");
+    assert!(p.b.out.frames.is_empty(), "no transfer on a normal chat");
 }

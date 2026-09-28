@@ -6,6 +6,7 @@
 use crate::{Inner, Shared, emit, emit_err, ev, now_ms, sink};
 use core::cell::{Cell, RefCell};
 use ephem_core::{Privacy, State};
+use ephem_proto::code::IceParams;
 use ephem_proto::ErrorCode;
 use ephem_proto::b64url;
 use ephem_proto::frame::MAX_FRAME;
@@ -16,9 +17,9 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    MessageEvent, RtcBundlePolicy, RtcConfiguration, RtcDataChannel, RtcDataChannelInit, RtcDataChannelType, RtcIceGatheringState,
-    RtcIceServer, RtcIceTransportPolicy, RtcPeerConnection, RtcPeerConnectionIceEvent, RtcPeerConnectionState, RtcSdpType,
-    RtcSessionDescriptionInit,
+    MessageEvent, RtcBundlePolicy, RtcConfiguration, RtcDataChannel, RtcDataChannelInit, RtcDataChannelType, RtcIceConnectionState,
+    RtcIceGatheringState, RtcIceServer, RtcIceTransportPolicy, RtcOfferOptions, RtcPeerConnection, RtcPeerConnectionIceEvent,
+    RtcPeerConnectionState, RtcSdpType, RtcSessionDescriptionInit,
 };
 
 /// Default STUN list (§9.3): two operators. Never TURN (§9.2).
@@ -44,6 +45,13 @@ pub enum Step {
 
 pub(crate) struct Rtc {
     pc: RtcPeerConnection,
+    /// For callbacks and async work spawned from inside a core event (§13 T1).
+    weak: Weak<RefCell<Inner>>,
+    generation: u32,
+    srflx_at: Rc<Cell<f64>>,
+    /// Perfect negotiation (§13): an in-band re-offer of ours is in flight.
+    making_offer: Cell<bool>,
+    restarts: Cell<u32>,
     /// Last selected-pair description, to report only changes (§9.2: check on every change).
     path: RefCell<String>,
     /// Ticks until the next getStats check.
@@ -51,6 +59,7 @@ pub(crate) struct Rtc {
     dc: RtcDataChannel,
     _on_ice: Closure<dyn FnMut(RtcPeerConnectionIceEvent)>,
     _on_state: Closure<dyn FnMut()>,
+    _on_ice_state: Closure<dyn FnMut()>,
     _on_open: Closure<dyn FnMut()>,
     _on_msg: Closure<dyn FnMut(MessageEvent)>,
     _on_close: Closure<dyn FnMut()>,
@@ -64,9 +73,37 @@ impl Rtc {
         let _ = self.dc.send_with_u8_array(frame);
     }
 
+    /// The peer's in-band re-offer / re-answer (§13 T1). Runs after the current core call returns.
+    pub fn on_signal(&self, offer: bool, ice: IceParams) {
+        let (weak, generation) = (self.weak.clone(), self.generation);
+        wasm_bindgen_futures::spawn_local(async move {
+            let Some(inner) = weak.upgrade() else { return };
+            if let Err(e) = handle_signal(&inner, generation, offer, ice).await {
+                let mut g = inner.borrow_mut();
+                if g.generation == generation {
+                    lost(&mut g, e);
+                }
+            }
+        });
+    }
+
+    /// `ICE state · DC state · buffered bytes · restarts` for the diagnostics view (§18).
+    pub fn describe(&self) -> String {
+        format!(
+            "ICE {:?} · DTLS/connection {:?} · channel {:?} · buffered {} B · ICE restarts {}",
+            self.pc.ice_connection_state(),
+            self.pc.connection_state(),
+            self.dc.ready_state(),
+            self.dc.buffered_amount(),
+            self.restarts.get()
+        )
+        .to_lowercase()
+    }
+
     pub fn close(&self) {
         self.pc.set_onicecandidate(None);
         self.pc.set_onconnectionstatechange(None);
+        self.pc.set_oniceconnectionstatechange(None);
         self.dc.set_onopen(None);
         self.dc.set_onmessage(None);
         self.dc.set_onclose(None);
@@ -102,6 +139,7 @@ fn abort(g: &mut Inner, e: ErrorCode) {
 }
 
 fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f64>>) -> Result<Rtc, JsValue> {
+    let srflx = srflx_at.clone();
     let cfg = RtcConfiguration::new();
     let servers = js_sys::Array::new();
     if privacy != Privacy::LanOnly {
@@ -146,6 +184,25 @@ fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f6
     });
     pc.set_onconnectionstatechange(Some(on_state.as_ref().unchecked_ref()));
 
+    // T1 (§13): a path that stays `disconnected` for 2 s gets an in-band ICE restart while the
+    // channel may still carry the signalling.
+    let (w, pc2) = (weak.clone(), pc.clone());
+    let on_ice_state = Closure::<dyn FnMut()>::new(move || {
+        if pc2.ice_connection_state() != RtcIceConnectionState::Disconnected {
+            return;
+        }
+        let (w, pc3) = (w.clone(), pc2.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            sleep(2000).await;
+            if pc3.ice_connection_state() == RtcIceConnectionState::Disconnected
+                && let Some(inner) = w.upgrade()
+            {
+                restart(inner, generation);
+            }
+        });
+    });
+    pc.set_oniceconnectionstatechange(Some(on_ice_state.as_ref().unchecked_ref()));
+
     let w = weak.clone();
     let on_open = Closure::<dyn FnMut()>::new(move || {
         with_link(&w, generation, |g| {
@@ -178,11 +235,27 @@ fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f6
     });
     dc.set_onmessage(Some(on_msg.as_ref().unchecked_ref()));
 
-    let w = weak;
+    let w = weak.clone();
     let on_close = Closure::<dyn FnMut()>::new(move || with_link(&w, generation, |g| lost(g, ErrorCode::IceFailed)));
     dc.set_onclose(Some(on_close.as_ref().unchecked_ref()));
 
-    Ok(Rtc { pc, dc, path: RefCell::new(String::new()), stats_in: Cell::new(0), _on_ice: on_ice, _on_state: on_state, _on_open: on_open, _on_msg: on_msg, _on_close: on_close })
+    Ok(Rtc {
+        pc,
+        weak,
+        generation,
+        srflx_at: srflx,
+        making_offer: Cell::new(false),
+        restarts: Cell::new(0),
+        dc,
+        path: RefCell::new(String::new()),
+        stats_in: Cell::new(0),
+        _on_ice: on_ice,
+        _on_state: on_state,
+        _on_ice_state: on_ice_state,
+        _on_open: on_open,
+        _on_msg: on_msg,
+        _on_close: on_close,
+    })
 }
 
 /// Creates the RTCPeerConnection for the current session and runs offer or answer negotiation.
@@ -288,13 +361,7 @@ async fn negotiate(inner: &Shared, generation: u32, pc: &RtcPeerConnection, srfl
         Step::Answer => pc.create_answer(),
     })
     .await?;
-    let sdp = js_sys::Reflect::get(&local, &JsValue::from_str("sdp"))
-        .ok()
-        .and_then(|v| v.as_string())
-        .ok_or(ErrorCode::IceFailed)?;
-    wait(pc.set_local_description(&description(local_ty, &sdp))).await?;
-    gather(pc, srflx_at).await;
-    let local_sdp = pc.local_description().map(|d| d.sdp()).ok_or(ErrorCode::IceFailed)?;
+    let local_sdp = set_local(pc, local_ty, &local, srflx_at).await?;
 
     let (ptr, n, kind) = {
         let mut g = inner.borrow_mut();
@@ -413,4 +480,102 @@ fn selected_pair(report: &js_sys::Map) -> Option<(String, bool)> {
         ),
         relay,
     ))
+}
+
+/// Sets a created offer/answer as local description, gathers (§9.5) and returns the full SDP.
+async fn set_local(pc: &RtcPeerConnection, ty: RtcSdpType, created: &JsValue, srflx_at: &Cell<f64>) -> Result<String, ErrorCode> {
+    let sdp = js_sys::Reflect::get(created, &JsValue::from_str("sdp")).ok().and_then(|v| v.as_string()).ok_or(ErrorCode::IceFailed)?;
+    srflx_at.set(0.0);
+    wait(pc.set_local_description(&description(ty, &sdp))).await?;
+    gather(pc, srflx_at).await;
+    pc.local_description().map(|d| d.sdp()).ok_or(ErrorCode::IceFailed)
+}
+
+/// Our side of an in-band ICE restart (§13 T1): re-offer with new credentials over the channel.
+/// Triggered by a path stuck in `disconnected`, a network change, or the diagnostics button.
+pub(crate) fn restart(inner: Shared, generation: u32) {
+    let (pc, srflx) = {
+        let g = inner.borrow();
+        let connected = g.sess.as_ref().is_some_and(|s| s.state() == State::Connected);
+        match g.rtc.as_ref() {
+            Some(r) if g.generation == generation && connected && !r.making_offer.get() => {
+                r.making_offer.set(true);
+                r.restarts.set(r.restarts.get() + 1);
+                (r.pc.clone(), r.srflx_at.clone())
+            }
+            _ => return,
+        }
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        let res = async {
+            let opts = RtcOfferOptions::new();
+            opts.set_ice_restart(true);
+            let offer = wait(pc.create_offer_with_rtc_offer_options(&opts)).await?;
+            let sdp = set_local(&pc, RtcSdpType::Offer, &offer, &srflx).await?;
+            let mut g = inner.borrow_mut();
+            if g.generation != generation {
+                return Ok(());
+            }
+            let Inner { sess, rtc, meta, .. } = &mut *g;
+            match (sess.as_mut(), rtc.as_ref()) {
+                (Some(s), Some(r)) => s.signal(now_ms(), true, &sdp, &mut sink(r, meta)),
+                _ => Ok(()),
+            }
+        };
+        let r = res.await;
+        let g = inner.borrow();
+        if let Some(rtc) = g.rtc.as_ref().filter(|_| g.generation == generation)
+            && r.is_err()
+        {
+            rtc.making_offer.set(false);
+        }
+    });
+}
+
+/// Applies the peer's re-offer (answering it) or re-answer (§13 T1), with the perfect-negotiation
+/// rule for glare: the polite peer (greater `PeerId`) rolls back its own offer, the other ignores
+/// the colliding one.
+async fn handle_signal(inner: &Shared, generation: u32, offer: bool, ice: IceParams) -> Result<(), ErrorCode> {
+    let (pc, srflx, desc, polite, colliding) = {
+        let mut g = inner.borrow_mut();
+        if g.generation != generation {
+            return Ok(());
+        }
+        let polite = g.sess.as_ref().is_some_and(|s| g.id.peer_id() > s.remote());
+        let Inner { sess, rtc, .. } = &mut *g;
+        let (Some(s), Some(r)) = (sess.as_mut(), rtc.as_ref()) else { return Ok(()) };
+        let colliding = offer && r.making_offer.get();
+        if colliding && !polite {
+            return Ok(());
+        }
+        let mut sdp = [0u8; MAX_SDP_LEN];
+        let text = s.render_signal(&ice, offer, &mut sdp)?;
+        let ty = if offer { RtcSdpType::Offer } else { RtcSdpType::Answer };
+        (r.pc.clone(), r.srflx_at.clone(), description(ty, text), polite, colliding)
+    };
+    if colliding && polite {
+        wait(pc.set_local_description(&RtcSessionDescriptionInit::new(RtcSdpType::Rollback))).await?;
+    }
+    wait(pc.set_remote_description(&desc)).await?;
+    if !offer {
+        let g = inner.borrow();
+        if let Some(r) = g.rtc.as_ref().filter(|_| g.generation == generation) {
+            r.making_offer.set(false);
+        }
+        return Ok(());
+    }
+    let answer = wait(pc.create_answer()).await?;
+    let sdp = set_local(&pc, RtcSdpType::Answer, &answer, &srflx).await?;
+    let mut g = inner.borrow_mut();
+    if g.generation != generation {
+        return Ok(());
+    }
+    if colliding && let Some(r) = g.rtc.as_ref() {
+        r.making_offer.set(false);
+    }
+    let Inner { sess, rtc, meta, .. } = &mut *g;
+    match (sess.as_mut(), rtc.as_ref()) {
+        (Some(s), Some(r)) => s.signal(now_ms(), false, &sdp, &mut sink(r, meta)),
+        _ => Ok(()),
+    }
 }

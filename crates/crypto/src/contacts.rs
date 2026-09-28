@@ -1,0 +1,264 @@
+//! Contacts (§7.5): a fixed-capacity table that lives in RAM while signed in and on disk only
+//! inside the encrypted key file (TLV 0x01). Saved identities only. Setup/UI path: allocations
+//! here happen on sign-in, on edits and on save, never while chatting.
+
+use crate::identity::PeerId;
+use ephem_proto::buf::Rd;
+
+pub const MAX_CONTACTS: usize = 256;
+pub const MAX_NICK: usize = 32;
+/// Key-file TLV types (§7.3).
+pub const TLV_CONTACTS: u8 = 0x01;
+
+pub mod cflags {
+    /// The SAS was compared with this peer.
+    pub const VERIFIED: u8 = 1 << 0;
+    pub const HAS_ONION: u8 = 1 << 1;
+    pub const HAS_SIGN: u8 = 1 << 2;
+    pub const KNOWN: u8 = VERIFIED | HAS_ONION | HAS_SIGN;
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Contact {
+    pub peer_id: PeerId,
+    pub flags: u8,
+    pub onion_pk: [u8; 32],
+    pub sign_pk: [u8; 32],
+    pub added_at: u32,
+    nick_len: u8,
+    nick: [u8; MAX_NICK],
+}
+
+impl Contact {
+    #[inline]
+    pub fn nick(&self) -> &[u8] {
+        &self.nick[..self.nick_len as usize]
+    }
+
+    #[inline(always)]
+    pub fn verified(&self) -> bool {
+        self.flags & cflags::VERIFIED != 0
+    }
+
+    fn set_nick(&mut self, nick: &[u8]) -> bool {
+        if nick.len() > MAX_NICK || core::str::from_utf8(nick).is_err() {
+            return false;
+        }
+        self.nick = [0; MAX_NICK];
+        self.nick[..nick.len()].copy_from_slice(nick);
+        self.nick_len = nick.len() as u8;
+        true
+    }
+
+    fn encode(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.peer_id.0);
+        out.push(self.flags);
+        if self.flags & cflags::HAS_ONION != 0 {
+            out.extend_from_slice(&self.onion_pk);
+        }
+        if self.flags & cflags::HAS_SIGN != 0 {
+            out.extend_from_slice(&self.sign_pk);
+        }
+        out.extend_from_slice(&self.added_at.to_le_bytes());
+        out.push(self.nick_len);
+        out.extend_from_slice(self.nick());
+    }
+
+    fn decode(r: &mut Rd<'_>) -> Option<Self> {
+        let peer_id = PeerId(r.arr::<32>()?);
+        let flags = r.u8()?;
+        if flags & !cflags::KNOWN != 0 {
+            return None;
+        }
+        let onion_pk = if flags & cflags::HAS_ONION != 0 { r.arr::<32>()? } else { [0; 32] };
+        let sign_pk = if flags & cflags::HAS_SIGN != 0 { r.arr::<32>()? } else { [0; 32] };
+        let added_at = r.u32()?;
+        let n = r.u8()? as usize;
+        let mut c = Contact { peer_id, flags, onion_pk, sign_pk, added_at, nick_len: 0, nick: [0; MAX_NICK] };
+        c.set_nick(r.take(n)?).then_some(c)
+    }
+}
+
+/// Why a contact operation was refused.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ContactError {
+    Full,
+    BadNick,
+    NotFound,
+}
+
+#[derive(Default)]
+pub struct Contacts {
+    list: Vec<Contact>,
+}
+
+impl Contacts {
+    pub fn new() -> Self {
+        Self { list: Vec::with_capacity(MAX_CONTACTS) }
+    }
+
+    #[inline]
+    pub fn list(&self) -> &[Contact] {
+        &self.list
+    }
+
+    pub fn get(&self, peer: &PeerId) -> Option<&Contact> {
+        self.list.iter().find(|c| c.peer_id == *peer)
+    }
+
+    /// A verified contact whose nickname equals `nick` (ASCII case-insensitive) but whose key is
+    /// not `peer`: someone calling themselves by that name (impersonation warning, §7.5).
+    pub fn impersonated(&self, nick: &[u8], peer: &PeerId) -> Option<&Contact> {
+        if nick.is_empty() {
+            return None;
+        }
+        self.list.iter().find(|c| c.verified() && c.peer_id != *peer && c.nick().eq_ignore_ascii_case(nick))
+    }
+
+    /// Adds a contact, or updates its nickname and keys. `verified` only ever turns on here.
+    pub fn save(&mut self, peer: PeerId, sign_pk: Option<[u8; 32]>, verified: bool, nick: &[u8], now_s: u32) -> Result<(), ContactError> {
+        if let Some(c) = self.list.iter_mut().find(|c| c.peer_id == peer) {
+            if !c.set_nick(nick) {
+                return Err(ContactError::BadNick);
+            }
+            if let Some(k) = sign_pk {
+                c.sign_pk = k;
+                c.flags |= cflags::HAS_SIGN;
+            }
+            if verified {
+                c.flags |= cflags::VERIFIED;
+            }
+            return Ok(());
+        }
+        if self.list.len() >= MAX_CONTACTS {
+            return Err(ContactError::Full);
+        }
+        let mut c = Contact {
+            peer_id: peer,
+            flags: if verified { cflags::VERIFIED } else { 0 },
+            onion_pk: [0; 32],
+            sign_pk: [0; 32],
+            added_at: now_s,
+            nick_len: 0,
+            nick: [0; MAX_NICK],
+        };
+        if !c.set_nick(nick) {
+            return Err(ContactError::BadNick);
+        }
+        if let Some(k) = sign_pk {
+            c.sign_pk = k;
+            c.flags |= cflags::HAS_SIGN;
+        }
+        self.list.push(c);
+        Ok(())
+    }
+
+    pub fn set_verified(&mut self, peer: &PeerId) -> Result<(), ContactError> {
+        let c = self.list.iter_mut().find(|c| c.peer_id == *peer).ok_or(ContactError::NotFound)?;
+        c.flags |= cflags::VERIFIED;
+        Ok(())
+    }
+
+    pub fn remove(&mut self, peer: &PeerId) -> Result<(), ContactError> {
+        let i = self.list.iter().position(|c| c.peer_id == *peer).ok_or(ContactError::NotFound)?;
+        self.list.remove(i);
+        Ok(())
+    }
+
+    /// The key-file TLV area: CONTACTS (if any) followed by `others` (unknown sections, kept).
+    pub fn to_tlv(&self, others: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        if !self.list.is_empty() {
+            let mut v = Vec::with_capacity(2 + self.list.len() * 134);
+            v.extend_from_slice(&(self.list.len() as u16).to_le_bytes());
+            for c in &self.list {
+                c.encode(&mut v);
+            }
+            out.push(TLV_CONTACTS);
+            out.extend_from_slice(&(v.len() as u16).to_le_bytes());
+            out.extend_from_slice(&v);
+        }
+        out.extend_from_slice(others);
+        out
+    }
+
+    /// Splits a key-file TLV area into the contacts and the other sections (kept verbatim).
+    /// A malformed area is `None` (`E_KEYFILE_INVALID`).
+    pub fn from_tlv(tlv: &[u8]) -> Option<(Self, Vec<u8>)> {
+        let mut contacts = Self::new();
+        let mut others = Vec::new();
+        let mut r = Rd::new(tlv);
+        while r.remaining() > 0 {
+            let t = r.u8()?;
+            let len = r.u16()? as usize;
+            let value = r.take(len)?;
+            if t != TLV_CONTACTS {
+                others.push(t);
+                others.extend_from_slice(&(len as u16).to_le_bytes());
+                others.extend_from_slice(value);
+                continue;
+            }
+            let mut v = Rd::new(value);
+            let n = v.u16()? as usize;
+            if n > MAX_CONTACTS || !contacts.list.is_empty() {
+                return None;
+            }
+            for _ in 0..n {
+                let c = Contact::decode(&mut v)?;
+                if contacts.get(&c.peer_id).is_some() {
+                    return None;
+                }
+                contacts.list.push(c);
+            }
+            if v.remaining() != 0 {
+                return None;
+            }
+        }
+        Some((contacts, others))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_verify_impersonation_roundtrip() {
+        let mut c = Contacts::new();
+        let (alice, bob, eve) = (PeerId([1; 32]), PeerId([2; 32]), PeerId([3; 32]));
+        c.save(alice, Some([9; 32]), false, "Alice".as_bytes(), 100).unwrap();
+        c.save(bob, None, true, b"Bob", 101).unwrap();
+        assert!(!c.get(&alice).unwrap().verified());
+        c.set_verified(&alice).unwrap();
+        c.save(alice, None, false, b"Alice W", 200).unwrap();
+        let a = c.get(&alice).unwrap();
+        assert!(a.verified(), "verified never turns off by a save");
+        assert_eq!((a.nick(), a.sign_pk, a.added_at), (&b"Alice W"[..], [9; 32], 100));
+        assert!(c.impersonated(b"bob", &eve).is_some(), "Eve calling herself Bob");
+        assert!(c.impersonated(b"Bob", &bob).is_none(), "the real Bob");
+        assert_eq!(c.save(eve, None, false, &[0xff], 1), Err(ContactError::BadNick));
+
+        let others = [0x04u8, 2, 0, 7, 7];
+        let tlv = c.to_tlv(&others);
+        let (back, kept) = Contacts::from_tlv(&tlv).unwrap();
+        assert_eq!(back.list(), c.list());
+        assert_eq!(kept, others, "unknown sections kept verbatim");
+        assert!(Contacts::from_tlv(&tlv[..tlv.len() - 1]).is_none(), "truncated");
+        c.remove(&bob).unwrap();
+        assert_eq!(c.remove(&bob), Err(ContactError::NotFound));
+    }
+
+    #[test]
+    fn capacity() {
+        let mut c = Contacts::new();
+        for i in 0..MAX_CONTACTS {
+            let mut id = [0u8; 32];
+            id[..2].copy_from_slice(&(i as u16).to_le_bytes());
+            c.save(PeerId(id), Some([1; 32]), true, &[b'x'; 32], 0).unwrap();
+        }
+        assert_eq!(c.save(PeerId([0xff; 32]), None, false, b"", 0), Err(ContactError::Full));
+        let tlv = c.to_tlv(&[]);
+        assert!(tlv.len() <= u16::MAX as usize + 3, "fits one TLV");
+        assert_eq!(Contacts::from_tlv(&tlv).unwrap().0.list().len(), MAX_CONTACTS);
+    }
+}

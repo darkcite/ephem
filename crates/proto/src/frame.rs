@@ -70,6 +70,13 @@ pub mod rtype {
     pub const EDIT: u8 = 0x0A;
     pub const DELETE: u8 = 0x0B;
     pub const REACT: u8 = 0x0C;
+    /// In-band ICE restart (§13 T1): `n_cand u8` + IceParams body.
+    pub const SIGNAL_OFFER: u8 = 0x10;
+    pub const SIGNAL_ANSWER: u8 = 0x11;
+    /// Identity transfer (§7.6): `idx u16, total u16, ≤ 12 KiB` of the encrypted key file.
+    pub const IDENTITY_CHUNK: u8 = 0x40;
+    /// Identity transfer: the receiving device's user confirmed the SAS. Empty body.
+    pub const IDENTITY_READY: u8 = 0x41;
 }
 
 /// Record flags.

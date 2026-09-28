@@ -12,20 +12,25 @@ pub const MAX_SDP_LEN: usize = 2048;
 pub enum Role {
     /// Rendering the peer's offer (`a=setup:actpass`).
     Offer,
-    /// Rendering the peer's answer (`a=setup:active`).
+    /// Rendering the peer's answer; the peer is the DTLS client (`a=setup:active`).
     Answer,
+    /// Rendering the peer's answer to our in-band re-offer (§13 T1) when the peer is the DTLS
+    /// server of this path: the DTLS roles of an existing connection never change.
+    AnswerPassive,
 }
 
-/// Renders a remote description from the minimal fields. `session_id` comes from the invite id.
-pub fn render_remote(ice: &IceParams, role: Role, session_id: u64, out: &mut [u8]) -> Result<usize, ()> {
+/// Renders a remote description from the minimal fields. `session_id` comes from the invite id;
+/// `version` starts at 2 and grows with every renegotiation of the same connection.
+pub fn render_remote(ice: &IceParams, role: Role, session_id: u64, version: u32, out: &mut [u8]) -> Result<usize, ()> {
     let mut b = Buf::new(out);
     let setup = match role {
         Role::Offer => "actpass",
         Role::Answer => "active",
+        Role::AnswerPassive => "passive",
     };
     write!(
         b,
-        "v=0\r\no=- {session_id} 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\n\
+        "v=0\r\no=- {session_id} {version} IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\n\
          a=extmap-allow-mixed\r\na=msid-semantic: WMS\r\n\
          m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\n\
          a=ice-ufrag:{}\r\na=ice-pwd:{}\r\na=ice-options:trickle\r\na=fingerprint:sha-256 ",
@@ -131,12 +136,15 @@ mod tests {
     fn render_then_reparse() {
         let ice = parse_local(CHROME_OFFER, |_| true).unwrap();
         let mut out = [0u8; MAX_SDP_LEN];
-        let n = render_remote(&ice, Role::Offer, 42, &mut out).unwrap();
+        let n = render_remote(&ice, Role::Offer, 42, 2, &mut out).unwrap();
         let sdp = core::str::from_utf8(&out[..n]).unwrap();
         assert!(sdp.contains("a=setup:actpass\r\n"));
         assert!(sdp.contains("a=fingerprint:sha-256 61:30:1F:"));
         assert!(sdp.contains("9090b126-3aae-4a3e-b714-5d089ddfbff0.local 50000 typ host"));
         let back = parse_local(sdp, |_| true).unwrap();
         assert_eq!(back, ice);
+        let n = render_remote(&ice, Role::AnswerPassive, 42, 3, &mut out).unwrap();
+        let sdp = core::str::from_utf8(&out[..n]).unwrap();
+        assert!(sdp.contains("o=- 42 3 IN") && sdp.contains("a=setup:passive\r\n"));
     }
 }

@@ -8,4 +8,4 @@ pub mod messages;
 pub mod session;
 
 pub use messages::{MsgRef, TTL_CHOICES};
-pub use session::{Event, Privacy, Role, Session, Settings, State};
+pub use session::{Diag, Event, Privacy, Role, Session, Settings, State};

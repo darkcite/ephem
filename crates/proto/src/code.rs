@@ -107,6 +107,42 @@ impl IceParams {
         self.n_cand += 1;
         true
     }
+
+    /// `ufrag_len ufrag pwd_len pwd dtls_fp candidates…` (the count travels separately).
+    pub fn encode_body(&self, b: &mut Buf<'_>) -> Result<(), ()> {
+        b.u8(self.ufrag.len)?;
+        b.put(self.ufrag.as_bytes())?;
+        b.u8(self.pwd.len)?;
+        b.put(self.pwd.as_bytes())?;
+        b.put(&self.fingerprint)?;
+        for c in self.candidates() {
+            c.encode(b)?;
+        }
+        Ok(())
+    }
+
+    /// Strict inverse of [`Self::encode_body`] for `n_cand` candidates.
+    pub fn decode_body(r: &mut Rd<'_>, n_cand: u8) -> Option<Self> {
+        if n_cand as usize > MAX_CANDIDATES {
+            return None;
+        }
+        let ul = r.u8()? as usize;
+        if !(4..=32).contains(&ul) {
+            return None;
+        }
+        let ufrag = Cred::new(r.take(ul)?)?;
+        let pl = r.u8()? as usize;
+        if !(22..=32).contains(&pl) {
+            return None;
+        }
+        let pwd = Cred::new(r.take(pl)?)?;
+        let fingerprint = r.arr::<32>()?;
+        let mut ice = IceParams { ufrag, pwd, fingerprint, ..IceParams::EMPTY };
+        for _ in 0..n_cand {
+            ice.push(CandidateBin::decode(r)?);
+        }
+        (ice.n_cand == n_cand).then_some(ice)
+    }
 }
 
 /// A decoded code. `room_id` and `expires_at` are zero for answers.
@@ -136,14 +172,7 @@ impl Code {
         if self.kind.is_invite() {
             b.u32(self.expires_at)?;
         }
-        b.u8(self.ice.ufrag.len)?;
-        b.put(self.ice.ufrag.as_bytes())?;
-        b.u8(self.ice.pwd.len)?;
-        b.put(self.ice.pwd.as_bytes())?;
-        b.put(&self.ice.fingerprint)?;
-        for c in self.ice.candidates() {
-            c.encode(&mut b)?;
-        }
+        self.ice.encode_body(&mut b)?;
         Ok(b.len())
     }
 
@@ -165,30 +194,12 @@ impl Code {
             return Err(InvalidInvite);
         }
         let n_cand = r.u8().ok_or(InvalidInvite)?;
-        if n_cand as usize > MAX_CANDIDATES {
-            return Err(InvalidInvite);
-        }
         let invite_id = r.arr::<16>().ok_or(InvalidInvite)?;
         let room_id = if kind.is_invite() { r.arr::<16>().ok_or(InvalidInvite)? } else { [0; 16] };
         let static_pk = r.arr::<32>().ok_or(InvalidInvite)?;
         let expires_at = if kind.is_invite() { r.u32().ok_or(InvalidInvite)? } else { 0 };
-        let ul = r.u8().ok_or(InvalidInvite)? as usize;
-        if !(4..=32).contains(&ul) {
-            return Err(InvalidInvite);
-        }
-        let ufrag = Cred::new(r.take(ul).ok_or(InvalidInvite)?).ok_or(InvalidInvite)?;
-        let pl = r.u8().ok_or(InvalidInvite)? as usize;
-        if !(22..=32).contains(&pl) {
-            return Err(InvalidInvite);
-        }
-        let pwd = Cred::new(r.take(pl).ok_or(InvalidInvite)?).ok_or(InvalidInvite)?;
-        let fingerprint = r.arr::<32>().ok_or(InvalidInvite)?;
-        let mut ice = IceParams { ufrag, pwd, fingerprint, ..IceParams::EMPTY };
-        for _ in 0..n_cand {
-            let c = CandidateBin::decode(&mut r).ok_or(InvalidInvite)?;
-            ice.push(c);
-        }
-        if r.remaining() != 0 || ice.n_cand != n_cand {
+        let ice = IceParams::decode_body(&mut r, n_cand).ok_or(InvalidInvite)?;
+        if r.remaining() != 0 {
             return Err(InvalidInvite);
         }
         Ok(Self { kind, flags, invite_id, room_id, static_pk, expires_at, ice })

@@ -6,6 +6,7 @@
 //! - [`sas`]: short authentication string from the handshake hash.
 //! - [`keyfile`]: encrypted identity key file (Argon2id + XChaCha20-Poly1305).
 
+pub mod contacts;
 pub mod identity;
 pub mod keyfile;
 pub mod noise;

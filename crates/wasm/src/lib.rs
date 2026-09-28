@@ -13,11 +13,12 @@ mod rtc;
 
 use core::cell::RefCell;
 use ephem_core::{Event, MsgRef, Privacy, Session, Settings, State};
-use ephem_crypto::{Identity, keyfile};
+use ephem_crypto::contacts::{ContactError, Contacts};
+use ephem_crypto::{Identity, PeerId, keyfile};
 use ephem_proto::ErrorCode;
 use ephem_proto::b64url;
 use ephem_proto::buf::Buf;
-use ephem_proto::code::{Code, Kind, MAX_CODE_LEN};
+use ephem_proto::code::{Code, Kind, MAX_CODE_LEN, flags};
 use ephem_proto::frame::{MAX_FRAME, MAX_TEXT};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
@@ -69,6 +70,14 @@ pub mod ev {
     pub const TYPING: u32 = 18;
     /// Path lost; the chat waits for a reconnect code.
     pub const SUSPENDED: u32 = 19;
+    /// Reaction from the peer. num = +seq (my message) / -seq (theirs); text = emoji (empty = removed).
+    pub const REACTION: u32 = 20;
+    /// Identity transfer (§7.6): the new device confirmed the SAS.
+    pub const PEER_READY: u32 = 21;
+    /// Identity transfer: our key file was sent.
+    pub const IDENTITY_SENT: u32 = 22;
+    /// Identity transfer: bytes = the received (still encrypted) key file.
+    pub const IDENTITY_RECEIVED: u32 = 23;
 }
 
 /// Byte offsets inside the meta block.
@@ -109,13 +118,50 @@ struct Prefs {
     settings: Settings,
 }
 
-/// A saved identity's file key, kept so it can be re-saved without asking again (§7.3).
+/// A saved identity's file key (kept so it can be re-saved without asking again, §7.3), its
+/// contacts (§7.5) and the key-file sections this version does not know (kept verbatim).
 struct Saved {
     key: Zeroizing<[u8; 32]>,
     salt: [u8; 16],
     label: Vec<u8>,
-    nick: Vec<u8>,
-    tlv: Zeroizing<Vec<u8>>,
+    contacts: Contacts,
+    others: Zeroizing<Vec<u8>>,
+}
+
+fn hex(b: &[u8]) -> String {
+    const H: &[u8; 16] = b"0123456789abcdef";
+    b.iter().flat_map(|x| [H[(x >> 4) as usize] as char, H[(x & 15) as usize] as char]).collect()
+}
+
+fn peer_from_hex(s: &str) -> Option<PeerId> {
+    let b = s.as_bytes();
+    if b.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(PeerId(out))
+}
+
+#[inline]
+fn contact_err(e: ContactError) -> ErrorCode {
+    match e {
+        ContactError::Full | ContactError::BadNick => ErrorCode::NotPermitted,
+        ContactError::NotFound => ErrorCode::NotAContact,
+    }
+}
+
+#[inline]
+fn status(r: Result<(), ErrorCode>) -> u32 {
+    match r {
+        Ok(()) => 0,
+        Err(e) => {
+            emit_err(ev::ERROR, e);
+            e.code() as u32
+        }
+    }
 }
 
 /// Everything the tab owns. Buffers are allocated once at start and reused for every chat.
@@ -177,7 +223,16 @@ fn on_event(rtc: Option<&rtc::Rtc>, meta: &mut [u8; meta::LEN], e: Event<'_>) {
             meta[meta::RESUMED] = resumed as u8;
             emit(ev::CONNECTED, sas.digits as f64, &b);
         }
-        Event::Hello { nick, sas_optional } => emit(ev::HELLO, sas_optional as u8 as f64, nick),
+        Event::Hello { nick, sas_optional, .. } => emit(ev::HELLO, sas_optional as u8 as f64, nick),
+        Event::Reaction { msg, emoji } => emit(ev::REACTION, signed(msg), emoji),
+        Event::SignalOffer(ice) | Event::SignalAnswer(ice) => {
+            if let Some(r) = rtc {
+                r.on_signal(matches!(e, Event::SignalOffer(_)), ice);
+            }
+        }
+        Event::PeerReady => emit(ev::PEER_READY, 0.0, &[]),
+        Event::IdentitySent => emit(ev::IDENTITY_SENT, 0.0, &[]),
+        Event::IdentityReceived(blob) => emit(ev::IDENTITY_RECEIVED, 0.0, blob),
         Event::Chat { seq, text, ttl_s, reply } => {
             meta[meta::TTL..meta::TTL + 4].copy_from_slice(&ttl_s.to_le_bytes());
             meta[meta::HAS_REPLY] = reply.is_some() as u8;
@@ -280,8 +335,9 @@ impl App {
         let res = (|| {
             let (key, salt) = keyfile::new_key(pass)?;
             let mut g = self.inner.borrow_mut();
-            let blob = keyfile::seal(&key, &salt, label.as_bytes(), g.id.seed(), &[], &[])?;
-            g.saved = Some(Saved { key, salt, label: label.as_bytes().to_vec(), nick: Vec::new(), tlv: Zeroizing::new(Vec::new()) });
+            let nick = g.prefs.settings.nick();
+            let blob = keyfile::seal(&key, &salt, label.as_bytes(), g.id.seed(), nick, &[])?;
+            g.saved = Some(Saved { key, salt, label: label.as_bytes().to_vec(), contacts: Contacts::new(), others: Zeroizing::new(Vec::new()) });
             Ok(blob)
         })();
         pass.fill(0);
@@ -295,7 +351,8 @@ impl App {
     pub fn resave_identity(&self) -> Vec<u8> {
         let g = self.inner.borrow();
         let Some(s) = g.saved.as_ref() else { return Vec::new() };
-        keyfile::seal(&s.key, &s.salt, &s.label, g.id.seed(), &s.nick, &s.tlv).unwrap_or_default()
+        let tlv = Zeroizing::new(s.contacts.to_tlv(&s.others));
+        keyfile::seal(&s.key, &s.salt, &s.label, g.id.seed(), g.prefs.settings.nick(), &tlv).unwrap_or_default()
     }
 
     /// Signs in with a key file. Only while no chat is open. Returns 0 or an error code.
@@ -305,9 +362,11 @@ impl App {
                 return Err(ErrorCode::NotPermitted);
             }
             let o = keyfile::open(blob, pass)?;
+            let (contacts, others) = Contacts::from_tlv(&o.tlv).ok_or(ErrorCode::KeyfileInvalid)?;
             let mut g = self.inner.borrow_mut();
             g.id = Identity::from_seed(&o.seed);
-            g.saved = Some(Saved { key: o.key, salt: o.salt, label: o.label, nick: o.nick, tlv: o.tlv });
+            g.prefs.settings.set_nick(&o.nick);
+            g.saved = Some(Saved { key: o.key, salt: o.salt, label: o.label, contacts, others: Zeroizing::new(others) });
             Ok(())
         })();
         pass.fill(0);
@@ -328,14 +387,116 @@ impl App {
         }
         g.id = Identity::generate();
         g.saved = None;
+        g.prefs.settings.set_nick(&[]);
         0
+    }
+
+    /// Our nickname, sent to peers in HELLO and kept in the key file (§7.3).
+    pub fn nick(&self) -> String {
+        String::from_utf8_lossy(self.inner.borrow().prefs.settings.nick()).into_owned()
+    }
+
+    /// Sets our nickname (≤ 32 bytes); applies from the next chat. Re-save a saved identity after.
+    pub fn set_nick(&self, nick: &str) -> u32 {
+        let ok = self.inner.borrow_mut().prefs.settings.set_nick(nick.trim().as_bytes());
+        status(if ok { Ok(()) } else { Err(ErrorCode::NotPermitted) })
+    }
+
+    // ---- contacts (§7.5, saved identities only) ----
+
+    /// One line per contact: `peer_id_hex \t flags \t nickname \t handle`.
+    pub fn contacts(&self) -> String {
+        let g = self.inner.borrow();
+        let Some(s) = g.saved.as_ref() else { return String::new() };
+        let mut out = String::new();
+        for c in s.contacts.list() {
+            out.push_str(&format!("{}\t{}\t{}\t{}\n", hex(&c.peer_id.0), c.flags, String::from_utf8_lossy(c.nick()), String::from_utf8_lossy(&c.peer_id.handle())));
+        }
+        out
+    }
+
+    /// Saves the peer of the current chat as a contact (verified if the SAS was confirmed).
+    pub fn save_contact(&self, nick: &str) -> u32 {
+        let mut g = self.inner.borrow_mut();
+        let Inner { sess, saved, .. } = &mut *g;
+        let r = match (sess.as_ref(), saved.as_mut()) {
+            (Some(s), Some(sv)) if s.ever_connected() && !s.transfer() => sv
+                .contacts
+                .save(s.remote(), Some(s.peer_sign_pk()), s.sas_confirmed(), nick.trim().as_bytes(), (now_ms() / 1000) as u32)
+                .map_err(contact_err),
+            _ => Err(ErrorCode::NotPermitted),
+        };
+        drop(g);
+        status(r)
+    }
+
+    pub fn rename_contact(&self, peer_hex: &str, nick: &str) -> u32 {
+        let mut g = self.inner.borrow_mut();
+        let r = match (peer_from_hex(peer_hex), g.saved.as_mut()) {
+            (Some(p), Some(sv)) => match sv.contacts.get(&p).copied() {
+                Some(c) => sv.contacts.save(p, None, false, nick.trim().as_bytes(), c.added_at).map_err(contact_err),
+                None => Err(ErrorCode::NotAContact),
+            },
+            _ => Err(ErrorCode::NotAContact),
+        };
+        drop(g);
+        status(r)
+    }
+
+    pub fn remove_contact(&self, peer_hex: &str) -> u32 {
+        let mut g = self.inner.borrow_mut();
+        let r = match (peer_from_hex(peer_hex), g.saved.as_mut()) {
+            (Some(p), Some(sv)) => sv.contacts.remove(&p).map_err(contact_err),
+            _ => Err(ErrorCode::NotAContact),
+        };
+        drop(g);
+        status(r)
+    }
+
+    /// The current peer as a contact: `flags \t nickname`, or empty if not a contact.
+    pub fn peer_contact(&self) -> String {
+        let g = self.inner.borrow();
+        match (g.sess.as_ref(), g.saved.as_ref()) {
+            (Some(s), Some(sv)) => sv.contacts.get(&s.remote()).map(|c| format!("{}\t{}", c.flags, String::from_utf8_lossy(c.nick()))).unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+
+    /// If the peer calls itself by a verified contact's nickname with a different key, that
+    /// contact's nickname ("This is not the Alice you verified", §7.5); otherwise empty.
+    pub fn impersonates(&self, nick: &str) -> String {
+        let g = self.inner.borrow();
+        match (g.sess.as_ref(), g.saved.as_ref()) {
+            (Some(s), Some(sv)) => sv.contacts.impersonated(nick.trim().as_bytes(), &s.remote()).map(|c| String::from_utf8_lossy(c.nick()).into_owned()).unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+
+    /// The user confirmed the SAS (§10.4): marks a contact verified; on an identity transfer
+    /// (§7.6) it releases the key file (sender) or tells the sender (receiver).
+    pub fn confirm_sas(&self) -> u32 {
+        let blob = {
+            let g = self.inner.borrow();
+            let sending = g.sess.as_ref().is_some_and(|s| s.transfer()) && g.saved.is_some();
+            if sending { Some(Zeroizing::new(self.resave_identity())) } else { None }
+        };
+        let mut g = self.inner.borrow_mut();
+        let remote = g.sess.as_ref().map(|s| s.remote());
+        if let (Some(p), Some(sv)) = (remote, g.saved.as_mut()) {
+            let _ = sv.contacts.set_verified(&p);
+        }
+        let r = with_session!(g, |s, k, _t| s.confirm_sas(now_ms(), blob.as_deref().map(|b| b.as_slice()), &mut k)).unwrap_or(Err(ErrorCode::PeerOffline));
+        drop(g);
+        status(r)
     }
 
     // ---- preferences ----
 
     /// `privacy`: 0 LAN-only, 1 default, 2 max connectivity. Applies to the next code.
     pub fn set_prefs(&self, privacy: u8, drop_ipv6: bool, read_receipts: bool, typing: bool) {
-        self.inner.borrow_mut().prefs = Prefs { privacy: Privacy::from_u8(privacy), drop_ipv6, settings: Settings { read_receipts, typing } };
+        let mut g = self.inner.borrow_mut();
+        let settings = Settings { read_receipts, typing, ..g.prefs.settings };
+        g.prefs = Prefs { privacy: Privacy::from_u8(privacy), drop_ipv6, settings };
     }
 
     // ---- buffers shared with JS ----
@@ -386,6 +547,32 @@ impl App {
             (g.generation, p.privacy)
         };
         rtc::start(self.inner.clone(), generation, privacy, rtc::Step::Offer);
+    }
+
+    /// New device (§7.6): an invite asking another device for its identity. Emits CODE(1).
+    pub fn create_transfer_invite(&self, ttl_s: u32) {
+        let now_s = (now_ms() / 1000) as u32;
+        let (inv, room) = ids();
+        let (generation, privacy) = {
+            let mut g = self.inner.borrow_mut();
+            g.reset();
+            let p = g.prefs;
+            let s = Session::transfer_receiver(&g.id, inv, room, now_s + ttl_s.clamp(60, 1800), p.privacy, p.drop_ipv6);
+            g.sess = Some(Box::new(s));
+            (g.generation, p.privacy)
+        };
+        rtc::start(self.inner.clone(), generation, privacy, rtc::Step::Offer);
+    }
+
+    /// `kind | flags << 8` of a code without applying it (0 if it is not a valid code), so the UI
+    /// can ask before answering an identity-transfer invite.
+    pub fn code_info(&self, text: &str) -> u32 {
+        decode_text(text).and_then(|(bin, n)| Code::decode(&bin[..n]).ok()).map_or(0, |c| c.kind as u32 | (c.flags as u32) << 8)
+    }
+
+    /// Whether the current chat is an identity transfer (§7.6).
+    pub fn is_transfer(&self) -> bool {
+        self.inner.borrow().sess.as_ref().is_some_and(|s| s.transfer())
     }
 
     /// T3: a reconnect code for the current chat (§13). Emits CODE(3).
@@ -443,11 +630,15 @@ impl App {
         let (bin, n) = decode_text(text).ok_or(ErrorCode::InvalidInvite)?;
         let code = &bin[..n];
         let now_s = (now_ms() / 1000) as u32;
-        let kind = Code::decode(code)?.kind;
-        match kind {
+        let c = Code::decode(code)?;
+        match c.kind {
             Kind::Invite => {
                 let (generation, privacy) = {
                     let mut g = self.inner.borrow_mut();
+                    // Only a saved identity can be moved to another device (§7.6).
+                    if c.flags & flags::TRANSFER != 0 && g.saved.is_none() {
+                        return Err(ErrorCode::NotPermitted);
+                    }
                     let p = g.prefs;
                     let s = Session::answerer(&g.id, code, now_s, p.privacy, p.drop_ipv6, p.settings, scanned)?;
                     g.reset();
@@ -532,6 +723,43 @@ impl App {
         let mut g = self.inner.borrow_mut();
         let r = with_session!(g, |s, k, _t| s.set_ttl(now_ms(), ttl_s, &mut k).map(|q| q as f64));
         result_f64(r)
+    }
+
+    /// Reacts to a message with the emoji written at `text_ptr()` (`len` = 0 removes our reaction).
+    /// Returns 0 or -error code.
+    pub fn react(&self, mine: bool, seq: f64, len: u32) -> f64 {
+        let mut g = self.inner.borrow_mut();
+        let len = (len as usize).min(MAX_TEXT);
+        let r = with_session!(g, |s, k, text| s.react(now_ms(), MsgRef { mine, seq: seq as u64 }, &text[..len], &mut k).map(|()| 0.0));
+        result_f64(r)
+    }
+
+    /// In-band ICE restart (§13 T1): diagnostics button, or the network changed (`online`,
+    /// `navigator.connection` change). The channel carries the new credentials.
+    pub fn restart_ice(&self) {
+        let generation = self.inner.borrow().generation;
+        rtc::restart(self.inner.clone(), generation);
+    }
+
+    /// Diagnostics (§18): core counters and connection states, one `·`-separated line each.
+    pub fn diag(&self) -> String {
+        let g = self.inner.borrow();
+        let Some(s) = g.sess.as_ref() else { return String::new() };
+        let d = s.diag(now_ms());
+        let secs = d.rekey_in_ms / 1000;
+        let mut out = format!(
+            "app RTT {} · Noise KK, epoch {} · rekey in {}:{:02} · pending {}",
+            if d.app_rtt_ms > 0 { format!("{} ms", d.app_rtt_ms) } else { "n/a".into() },
+            d.rekeys,
+            secs / 60,
+            secs % 60,
+            d.pending
+        );
+        if let Some(r) = g.rtc.as_ref() {
+            out.push('\n');
+            out.push_str(&r.describe());
+        }
+        out
     }
 
     /// The user has seen the peer's messages up to `seq`.
