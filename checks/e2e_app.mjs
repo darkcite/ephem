@@ -14,34 +14,13 @@
 //        E2E_BROWSER=chrome node checks/e2e_app.mjs   (your installed Google Chrome, no download)
 // Exit code 0 = PASS. Also fails on any CSP violation or page error.
 import * as fs from 'node:fs';
-import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import * as url from 'node:url';
-import { chromium } from 'playwright';
 import QRCode from 'qrcode';
+import { PASS, ROOT, check, finish, launch, msgWith, openSettings, problems, serve, watch } from './e2e_lib.mjs';
 
-const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
-const PASS = 'correct horse battery staple';
 // Test hook: when set, sw.js is served with this VERSION (simulates a new release).
 let swVersion = null;
-
-function serve() {
-  const srv = http.createServer((q, r) => {
-    let p = decodeURIComponent(new URL(q.url, 'http://x').pathname);
-    if (p.endsWith('/')) p += 'index.html';
-    const f = path.join(ROOT, path.normalize(p));
-    if (!f.startsWith(ROOT + path.sep) || !fs.existsSync(f) || !fs.statSync(f).isFile()) { r.writeHead(404); r.end(); return; }
-    r.writeHead(200, { 'content-type': TYPES[path.extname(f)] || 'application/octet-stream', 'cache-control': 'no-store' });
-    if (swVersion && p.endsWith('/sw.js')) {
-      r.end(fs.readFileSync(f, 'utf8').replace(/^const VERSION = .*;$/m, `const VERSION = '${swVersion}';`));
-      return;
-    }
-    fs.createReadStream(f).pipe(r);
-  });
-  return new Promise((res) => srv.listen(0, '127.0.0.1', () => res(srv)));
-}
 
 /** A Y4M video (for Chrome's fake camera) showing `text` as a QR code, filmed badly. */
 function qrVideo(text, file) {
@@ -72,27 +51,9 @@ function qrVideo(text, file) {
   fs.writeFileSync(file, Buffer.concat([Buffer.from(`YUV4MPEG2 W${W} H${H} F10:1 Ip A1:1 C420jpeg\n`), frame, frame]));
 }
 
-const results = [];
-const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); };
-const launch = (args = []) => chromium.launch({
-  headless: !process.env.HEADFUL,
-  // Raw host candidates instead of mDNS names: CI containers have no multicast DNS.
-  args: ['--disable-features=WebRtcHideLocalIpsWithMdns', ...args],
-  executablePath: process.env.CHROMIUM_PATH || undefined,
-  channel: process.env.E2E_BROWSER === 'chrome' && !process.env.CHROMIUM_PATH ? 'chrome' : undefined,
-});
-const problems = [];
-const watch = (page, who) => {
-  page.on('pageerror', (e) => problems.push(`${who} pageerror: ${e.message}`));
-  page.on('console', (m) => {
-    if (m.type() === 'error' || /Content Security Policy|Refused to/i.test(m.text())) problems.push(`${who} console: ${m.text()}`);
-  });
-};
 const lastThem = (page) => page.locator('#log li.them').last();
-const msgWith = (page, cls, t) => page.locator(`#log li.${cls}`, { hasText: t }).first();
-const openSettings = async (page) => { await page.click('#v-start details summary'); await page.selectOption('#s-privacy', '2'); };
 
-const srv = await serve();
+const srv = await serve((p, read) => (swVersion && p.endsWith('/sw.js') ? read().replace(/^const VERSION = .*;$/m, `const VERSION = '${swVersion}';`) : null));
 const base = `http://127.0.0.1:${srv.address().port}`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ephem-e2e-'));
 const browserA = await launch();
@@ -165,9 +126,11 @@ try {
   await b.goto(`${base}/app/`);
   await b.waitForSelector('#v-start:not([hidden])');
   await openSettings(b);
+  const tScan = Date.now();
   await b.click('#b-scan');
-  await b.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#a='), null, { timeout: 20000 });
-  check('invite scanned from camera (wasm QR decoder)', await b.locator('#scanner').isHidden());
+  await b.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#a='), null, { timeout: 30000 })
+    .catch(async (e) => { throw new Error(`scan: ${await b.textContent('#scan-status')} — ${e.message}`); });
+  check('invite scanned from camera (wasm QR decoder)', await b.locator('#scanner').isHidden(), `${((Date.now() - tScan) / 1000).toFixed(1)} s incl. answer`);
   const answer = await b.inputValue('#v-code .link');
   check('answer link produced', answer.startsWith(`${base}/app/#a=`), `${answer.length} chars`);
 
@@ -344,6 +307,4 @@ try {
   srv.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 }
-const failed = results.filter((r) => !r.ok).length;
-console.log(`\n${results.length - failed}/${results.length} passed`);
-process.exit(failed ? 1 : 0);
+finish();

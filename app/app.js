@@ -2,15 +2,19 @@
 // renders the DOM and forwards input. Event contract: crates/wasm/src/lib.rs `ev` / `meta`.
 // Re-entrancy rule: an ephemEvent handler never calls into `app` synchronously (use `later`).
 import init, { App, qr_svg_path } from './pkg/ephem.js';
+import * as slots from './slots.js';
 
 const EV = { CODE: 1, CONNECTED: 2, HELLO: 3, CHAT: 4, DELIVERED: 5, DEGRADED: 6, ALIVE: 7, PEER_HIDDEN: 8, CLOSED: 9, ERROR: 10,
-  PROGRESS: 11, PATH: 12, SETTING: 13, EDITED: 14, DELETED: 15, EXPIRED: 16, READ: 17, TYPING: 18, SUSPENDED: 19 };
+  PROGRESS: 11, PATH: 12, SETTING: 13, EDITED: 14, DELETED: 15, EXPIRED: 16, READ: 17, TYPING: 18, SUSPENDED: 19,
+  REACTION: 20, PEER_READY: 21, IDENTITY_SENT: 22, IDENTITY_RECEIVED: 23 };
+const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+const FLAG_TRANSFER = 4;
 const ST = { NONE: 0, GATHERING: 1, AWAITING: 2, CONNECTING: 3, CONNECTED: 4, CLOSED: 5, SUSPENDED: 6 };
 const FRAG = { 1: 'i', 2: 'a', 3: 'r', 4: 'q' };
 const TTL_LABEL = { 5: '5 seconds', 30: '30 seconds', 60: '1 minute', 300: '5 minutes', 3600: '1 hour', 86400: '1 day' };
 const TTL_SHORT = { 5: '5s', 30: '30s', 60: '1m', 300: '5m', 3600: '1h', 86400: '1d' };
 // ErrorCode values (§19) for negative return values.
-const ERR = { 0x23: 'E_DUPLICATE_SESSION', 0x01: 'E_INVALID_INVITE', 0x02: 'E_EXPIRED_INVITE', 0x03: 'E_INVITE_CONSUMED', 0x04: 'E_ANSWER_MISMATCH', 0x10: 'E_INVALID_ROOM',
+const ERR = { 0x23: 'E_DUPLICATE_SESSION', 0x24: 'E_NOT_A_CONTACT', 0x01: 'E_INVALID_INVITE', 0x02: 'E_EXPIRED_INVITE', 0x03: 'E_INVITE_CONSUMED', 0x04: 'E_ANSWER_MISMATCH', 0x10: 'E_INVALID_ROOM',
   0x20: 'E_AUTH_FAILED', 0x21: 'E_CRYPTO_FAILED', 0x22: 'E_SAS_REJECTED', 0x30: 'E_ICE_FAILED', 0x31: 'E_NO_DIRECT_PATH', 0x32: 'E_RELAY_REJECTED',
   0x35: 'E_PEER_OFFLINE', 0x40: 'E_PROTOCOL_MISMATCH', 0x41: 'E_MESSAGE_TOO_LARGE', 0x42: 'E_BACKPRESSURE', 0x43: 'E_NOT_PERMITTED', 0x60: 'E_KEYFILE_INVALID' };
 const MESSAGES = {
@@ -33,6 +37,7 @@ const MESSAGES = {
   E_KEYFILE_INVALID: 'Wrong passphrase, or the key file is damaged.',
   E_BROWSER_UNSUPPORTED: 'This browser does not support WebRTC data channels.',
   E_DUPLICATE_SESSION: 'This identity is already open in another tab. Close it there first.',
+  E_NOT_A_CONTACT: 'That contact does not exist any more.',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -49,6 +54,10 @@ let scanStop = null;
 let pathText = '';
 let lockRelease = null;        // releases the Web Lock of the saved identity in use (§7.2)
 let updateWorker = null;
+let transferring = null;       // identity transfer (§7.6): 'receiver' (new device) | 'sender' (old device)
+let xferDone = false;
+let receivedBlob = null;       // the received key file, still passphrase-encrypted
+let peerNick = '';             // what the peer calls itself (HELLO); never authentication
 const msgs = new Map();        // 'm:<seq>' (mine) / 't:<seq>' (theirs) → { li, body, tick, text, meta }
 const visibleTheirs = new Set();
 
@@ -145,7 +154,10 @@ function addMessage(mine, seq, body, ttl, reply) {
     tick.title = 'Pending';
     li.append(tick);
   }
-  const m = { li, body: b, tick, meta, text: body, mine, seq, deleted: false, level: 0 };
+  const reacts = document.createElement('span');
+  reacts.className = 'reacts';
+  li.append(reacts);
+  const m = { li, body: b, tick, meta, reacts, text: body, mine, seq, deleted: false, level: 0, reaction: { me: '', peer: '' } };
   msgs.set(li.dataset.key, m);
   const follow = mine || atBottom();
   $('log').append(li);
@@ -205,11 +217,48 @@ function toggleActions(m) {
     acts.append(b);
   };
   add('Reply', () => startComposing('reply', m));
+  add('React', () => showPicker(m));
   if (m.mine) add('Edit', () => startComposing('edit', m));
   add(m.mine ? 'Delete for everyone' : 'Delete for me', () => deleteMessage(m));
   add('Copy', () => navigator.clipboard?.writeText(m.text).catch(() => {}));
   m.li.append(acts);
 }
+
+// One reaction per person per message; the latest wins, empty removes (§11.7).
+function renderReactions(m) {
+  m.reacts.replaceChildren();
+  for (const [who, e] of [['you', m.reaction.me], ['peer', m.reaction.peer]]) {
+    if (!e) continue;
+    const t = document.createElement('span');
+    t.textContent = `${e} ${who}`;
+    m.reacts.append(t);
+  }
+}
+
+function showPicker(m) {
+  const picker = document.createElement('div');
+  picker.className = 'picker';
+  for (const e of [...REACTIONS, '✕']) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = e;
+    b.title = e === '✕' ? 'Remove my reaction' : 'React';
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      picker.remove();
+      const emoji = e === '✕' ? '' : e;
+      const r = app.react(m.mine, m.seq, writeText(emoji));
+      if (r < 0) return error(errName(r));
+      m.reaction.me = emoji;
+      renderReactions(m);
+    };
+    picker.append(b);
+  }
+  m.li.append(picker);
+}
+
+// "Anything that renders as more than one grapheme is rejected" (§11.7).
+const oneGrapheme = (s) => !s || !globalThis.Intl?.Segmenter || [...new Intl.Segmenter().segment(s)].length === 1;
 
 function startComposing(mode, m) {
   composing = { mode, mine: m.mine, seq: m.seq };
@@ -266,9 +315,19 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
         break;
       }
       const d = String(num).padStart(6, '0');
-      $('sas-digits').textContent = d.slice(0, 3) + ' ' + d.slice(3);
-      $('sas-emoji').textContent = Array.from(b.subarray(0, 4), (x) => String.fromCodePoint(0x1f400 + x) + '️').join(' ');
-      $('peer').textContent = dec.decode(b.subarray(4));
+      const digits = d.slice(0, 3) + ' ' + d.slice(3);
+      const emoji = Array.from(b.subarray(0, 4), (x) => String.fromCodePoint(0x1f400 + x) + '️').join(' ');
+      const handle = dec.decode(b.subarray(4));
+      peerNick = '';
+      if (transferring) {
+        later(() => showTransfer(digits, emoji));
+        break;
+      }
+      $('sas-digits').textContent = digits;
+      $('sas-emoji').textContent = emoji;
+      $('peer').textContent = handle;
+      $('peer').dataset.handle = handle;
+      $('imp-warn').hidden = true;
       $('sas').hidden = false;
       $('sas').classList.remove('optional');
       $('verified').textContent = 'unverified';
@@ -284,15 +343,44 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       chatOpen = true;
       sysLine('Connected directly. Messages are end-to-end encrypted and exist only in these two tabs.');
       show('v-chat');
-      later(() => $('t-msg').focus());
+      later(() => { renderPeer(); $('t-msg').focus(); });
       break;
     }
-    case EV.HELLO:
+    case EV.HELLO: {
+      if (transferring) break;
+      peerNick = text(ptr, len);
       // Both codes scanned in person: the SAS is shown but not prompted (§10.4).
-      if (num === 1 && $('verified').textContent !== 'verified') {
+      if (num === 1 && $('verified').textContent === 'unverified') {
         $('sas').classList.add('optional');
         $('verified').textContent = 'met in person';
       }
+      later(renderPeer);
+      break;
+    }
+    case EV.REACTION: {
+      const m = msgs.get(keyOf(num > 0, Math.abs(num)));
+      const e = text(ptr, len);
+      if (m && !m.deleted && oneGrapheme(e)) {
+        m.reaction.peer = e;
+        renderReactions(m);
+      }
+      break;
+    }
+    case EV.PEER_READY:
+      $('xfer-state').textContent = 'The new device confirmed the code.';
+      break;
+    case EV.IDENTITY_SENT:
+      xferDone = true;
+      $('xfer-state').textContent = '';
+      $('xfer-sent').hidden = false;
+      later(() => app.close());
+      break;
+    case EV.IDENTITY_RECEIVED:
+      xferDone = true;
+      receivedBlob = mem(ptr, len).slice(); // documented copy: the key file leaves wasm to be kept by JS until unlocked
+      $('xfer-state').textContent = '';
+      $('xfer-unlock').hidden = false;
+      later(() => { app.close(); $('i-xfer-pass').focus(); });
       break;
     case EV.CHAT: {
       const meta = new DataView(wasm.memory.buffer, metaPtr, 16);
@@ -358,7 +446,7 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
     case EV.CLOSED: {
       const name = text(ptr, len);
       status('closed', 'bad');
-      later(() => ended(name));
+      if (!xferDone) later(() => ended(name));
       break;
     }
     case EV.ERROR:
@@ -369,10 +457,14 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
 
 // ---- views ---------------------------------------------------------------------------------
 function showCode(kind, code) {
-  $('code-title').textContent = kind === 1 ? 'Your invite' : 'Your answer';
-  $('code-help').textContent = kind === 1
-    ? 'Let your peer scan this QR code, or send them the link. It works once.'
-    : 'Send this answer back to the person who invited you (QR or link). The chat opens as soon as they apply it.';
+  $('code-title').textContent = transferring === 'receiver' ? 'Receive an identity' : kind === 1 ? 'Your invite' : 'Your answer';
+  $('code-help').textContent = transferring === 'receiver'
+    ? 'On the old device, sign in with the identity you want to move, then scan this code (or open the link) and send back the answer.'
+    : transferring === 'sender'
+      ? 'Show this answer to the new device (QR or link). Both devices then show a safety code to compare.'
+      : kind === 1
+        ? 'Let your peer scan this QR code, or send them the link. It works once.'
+        : 'Send this answer back to the person who invited you (QR or link). The chat opens as soon as they apply it.';
   renderCodeBox(document.querySelector('#v-code .codebox'), kind, code);
   $('answer-box').hidden = kind !== 1;
   status(kind === 1 ? 'waiting for answer' : 'waiting for peer');
@@ -389,7 +481,51 @@ function showResumeCode(kind, code) {
   status(kind === 3 ? 'waiting for answer' : 'waiting for peer');
 }
 
+// Contact name, verification and the impersonation warning in the chat header (§7.5).
+function renderPeer() {
+  const [flags, nick] = (app.peer_contact() || '').split('\t');
+  const handle = $('peer').dataset.handle || '';
+  const contact = flags !== undefined && flags !== '';
+  const verified = contact && (Number(flags) & 1) === 1;
+  $('peer').textContent = contact ? `${nick || handle}${verified ? ' ✔' : ''}` : peerNick ? `${handle} “${peerNick}”` : handle;
+  $('peer').title = contact ? `Contact ${handle}` : peerNick ? 'The name in quotes is chosen by the peer, not verified' : '';
+  $('b-save-contact').hidden = !app.identity_label() || contact;
+  if (verified) {
+    // The key is already pinned by a verified contact: no SAS prompt (§10.4).
+    $('sas').hidden = true;
+    $('verified').textContent = 'verified contact';
+    $('verified').className = 'pill ok';
+  }
+  const imp = peerNick ? app.impersonates(peerNick) : '';
+  $('imp-warn').hidden = !imp;
+  $('imp-warn').textContent = imp ? `This is not the “${imp}” you verified: the name matches but the key is different. Compare the safety code.` : '';
+}
+
+function showTransfer(digits, emoji) {
+  $('xfer-digits').textContent = digits;
+  $('xfer-emoji').textContent = emoji;
+  $('xfer-title').textContent = transferring === 'receiver' ? 'Receive an identity' : `Send identity “${app.identity_label()}”`;
+  $('xfer-help').textContent = transferring === 'receiver'
+    ? 'Compare the safety code with the old device. After both confirm, the old device sends its encrypted key file.'
+    : 'Compare the safety code with the new device. Only confirm if both show the same code and the other device is yours.';
+  $('xfer-sas-actions').hidden = false;
+  $('xfer-state').textContent = '';
+  $('xfer-unlock').hidden = true;
+  $('xfer-sent').hidden = true;
+  status('connected', 'ok');
+  show('v-transfer');
+}
+
+function endTransfer() {
+  transferring = null;
+  xferDone = false;
+  receivedBlob = null;
+  $('i-xfer-pass').value = '';
+  reset();
+}
+
 function ended(name) {
+  if (transferring) transferring = null;
   const wasChat = chatOpen;
   chatOpen = false;
   msgs.clear();
@@ -408,6 +544,11 @@ function reset() {
   $('t-code').value = '';
   $('t-answer').value = '';
   $('exposure').hidden = true;
+  // Old codes are useless (single use) and must never be picked up again.
+  for (const box of document.querySelectorAll('.codebox')) {
+    box.querySelector('.link').value = '';
+    box.querySelector('.qr').replaceChildren();
+  }
   status('ready');
   renderIdentity();
   show('v-start');
@@ -444,6 +585,119 @@ function renderIdentity() {
     ? `Saved identity “${label}” (${h}). Peers see the same identity every time you use it.`
     : `Temporary identity ${h}. It disappears when you close this tab.`;
   $('b-id-temp').hidden = !label;
+  if (document.activeElement !== $('i-nick')) $('i-nick').value = app.nick();
+  renderContacts();
+  renderSlots();
+}
+
+// ---- remembered identities (§7.2) and contacts (§7.5) ---------------------------------------
+async function renderSlots() {
+  const list = await slots.list();
+  const current = app.identity_label() ? app.lock_name() : '';
+  const ul = $('slots');
+  ul.replaceChildren();
+  ul.hidden = !list.length;
+  for (const slot of list) {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'grow';
+    name.innerHTML = '<b></b> <span class="dim"></span>';
+    name.querySelector('b').textContent = slot.label || '(no label)';
+    name.querySelector('.dim').textContent = slot.handle + (slot.id === current ? ' · in use' : '');
+    li.append(name);
+    if (slot.id !== current) {
+      const pass = document.createElement('input');
+      pass.type = 'password';
+      pass.placeholder = 'passphrase';
+      pass.autocomplete = 'current-password';
+      pass.hidden = true;
+      const go = document.createElement('button');
+      go.textContent = 'Sign in';
+      go.onclick = async () => {
+        if (pass.hidden) { pass.hidden = false; pass.focus(); return; }
+        const pw = enc.encode(pass.value);
+        pass.value = '';
+        await signIn(slot.blob, pw, false);
+      };
+      pass.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
+      li.append(pass, go);
+    }
+    const forget = document.createElement('button');
+    forget.textContent = 'Forget';
+    forget.title = 'Remove from this device (your key files are not affected)';
+    forget.onclick = async () => {
+      if (!confirm(`Forget “${slot.label}” on this device? Without a downloaded key file it is gone for good.`)) return;
+      await slots.remove(slot.id);
+      renderSlots();
+    };
+    li.append(forget);
+    ul.append(li);
+  }
+  const mine = list.find((x) => x.id === current);
+  $('backup-stale').hidden = !mine?.stale;
+}
+
+function renderContacts() {
+  const saved = !!app.identity_label();
+  $('contacts-card').hidden = !saved;
+  if (!saved) return;
+  const rows = app.contacts().split('\n').filter(Boolean).map((l) => l.split('\t'));
+  $('contacts-count').textContent = `${rows.length} / 256`;
+  const ul = $('contacts');
+  ul.replaceChildren();
+  for (const [hex, flags, nick, handle] of rows) {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'grow';
+    name.innerHTML = '<b></b> <span class="ok"></span> <span class="dim"></span>';
+    name.querySelector('b').textContent = nick || handle;
+    name.querySelector('.ok').textContent = Number(flags) & 1 ? '✔' : '';
+    name.querySelector('.dim').textContent = handle;
+    const rename = document.createElement('button');
+    rename.textContent = 'Rename';
+    rename.onclick = () => {
+      const n = prompt('Name for this contact (only you see it)', nick);
+      if (n !== null && app.rename_contact(hex, n) === 0) persist();
+    };
+    const del = document.createElement('button');
+    del.textContent = 'Remove';
+    del.onclick = () => {
+      if (confirm(`Remove ${nick || handle} from your contacts?`) && app.remove_contact(hex) === 0) persist();
+    };
+    li.append(name, rename, del);
+    ul.append(li);
+  }
+  if (!rows.length) ul.innerHTML = '<li class="dim">No contacts yet. After a chat, use “＋ contact”.</li>';
+}
+
+// After a change of contacts or nickname: re-encrypt (the file key stays in wasm memory, §7.3),
+// update the remembered slot, and flag the downloaded backup as out of date.
+async function persist() {
+  renderIdentity();
+  const blob = app.resave_identity();
+  if (!blob.length) return;
+  const slot = await slots.get(app.lock_name());
+  if (slot) await slots.put({ ...slot, blob, stale: true });
+  $('backup-stale').hidden = false;
+}
+
+async function remember(blob) {
+  const ok = await slots.put({ id: app.lock_name(), label: app.identity_label(), handle: app.handle(), blob, stale: false });
+  if (!ok) error(`All ${slots.MAX_SLOTS} identity slots on this device are used. Forget one first; the key file still works.`);
+}
+
+// Signs in with an encrypted key file; one identity per tab (Web Lock, §7.2).
+async function signIn(blob, pw, rememberIt) {
+  if (app.load_identity(blob, pw) !== 0) return false;
+  if (!(await lockIdentity())) {
+    app.new_temporary_identity();
+    renderIdentity();
+    error('E_DUPLICATE_SESSION');
+    return false;
+  }
+  if (rememberIt) await remember(blob);
+  renderIdentity();
+  return true;
 }
 
 // ---- actions -------------------------------------------------------------------------------
@@ -454,8 +708,15 @@ function applyPrefs() {
 function applyCode(raw, scanned) {
   const v = raw.trim();
   if (!v) return;
+  const info = app.code_info(v);
+  if ((info & 0xff) === 1 && (info >> 8) & FLAG_TRANSFER) {
+    // Someone asks for this identity (§7.6).
+    if (!app.identity_label()) return error('Sign in with the identity you want to move first, then open this code again.');
+    if (!confirm(`This code asks for your identity “${app.identity_label()}”. Only continue if the other device is yours. Continue?`)) return;
+    transferring = 'sender';
+  }
   applyPrefs();
-  app.apply_code(v, scanned);
+  if (app.apply_code(v, scanned) !== 0 && transferring === 'sender') transferring = null;
 }
 
 async function copyLink(box) {
@@ -544,11 +805,23 @@ function saveIdentity() {
   $('i-pass').value = $('i-pass2').value = '';
   const blob = app.save_identity(label, pw); // pw is wiped by Rust
   if (!blob.length) return;
-  download(blob, `ephem-${label.replace(/[^\w-]+/g, '_') || 'identity'}.p2pkey`);
+  download(blob, keyFileName());
   $('t-keytext').value = b64u(blob);
   $('id-saved').hidden = false;
-  renderIdentity();
   lockIdentity();
+  if ($('c-remember').checked) remember(blob).then(renderIdentity);
+  renderIdentity();
+}
+
+const keyFileName = () => `ephem-${app.identity_label().replace(/[^\w-]+/g, '_') || 'identity'}.p2pkey`;
+
+async function downloadBackup() {
+  const blob = app.resave_identity();
+  if (!blob.length) return;
+  download(blob, keyFileName());
+  const slot = await slots.get(app.lock_name());
+  if (slot) await slots.put({ ...slot, blob, stale: false });
+  $('backup-stale').hidden = true;
 }
 
 async function loadIdentity() {
@@ -561,17 +834,19 @@ async function loadIdentity() {
   }
   const pw = enc.encode($('i-pass-in').value);
   $('i-pass-in').value = '';
-  if (app.load_identity(bytes, pw) === 0) {
-    if (!(await lockIdentity())) {
-      app.new_temporary_identity();
-      renderIdentity();
-      return error('E_DUPLICATE_SESSION');
-    }
+  if (await signIn(bytes, pw, $('c-remember-in').checked)) {
     $('id-load').hidden = true;
     $('i-file').value = '';
     $('t-keyin').value = '';
-    renderIdentity();
   }
+}
+
+async function unlockTransferred() {
+  const pw = enc.encode($('i-xfer-pass').value);
+  $('i-xfer-pass').value = '';
+  if (!receivedBlob || !(await signIn(receivedBlob, pw, $('c-xfer-remember').checked))) return;
+  if (confirm('Signed in. Download a backup of the key file now?')) download(receivedBlob, keyFileName());
+  endTransfer();
 }
 
 // ---- QR scanner (§8.2): BarcodeDetector where it really supports QR, else rqrr in wasm (iOS) --
@@ -764,7 +1039,7 @@ async function main() {
   $('b-scan').onclick = () => scan((t) => applyCode(t, true));
   $('b-answer').onclick = () => applyCode($('t-answer').value, false);
   $('b-scan-answer').onclick = () => scan((t) => applyCode(t, true));
-  $('b-cancel').onclick = reset;
+  $('b-cancel').onclick = () => { transferring = null; reset(); };
   $('b-again').onclick = reset;
   $('b-scan-cancel').onclick = () => scanStop?.();
   $('b-leave').onclick = () => {
@@ -776,7 +1051,46 @@ async function main() {
     $('sas').hidden = true;
     $('verified').textContent = 'verified';
     $('verified').className = 'pill ok';
+    app.confirm_sas();
+    if (app.peer_contact()) persist().then(renderPeer);
   };
+  $('b-save-contact').onclick = () => {
+    const n = prompt('Save as contact. Name (only you see it):', peerNick || $('peer').dataset.handle || '');
+    if (n !== null && app.save_contact(n) === 0) persist().then(renderPeer);
+  };
+  $('b-xfer-ok').onclick = () => {
+    if (app.confirm_sas() !== 0) return;
+    $('xfer-sas-actions').hidden = true;
+    $('xfer-state').textContent = transferring === 'receiver' ? 'Waiting for the identity…' : 'Waiting for the new device to confirm…';
+  };
+  $('b-xfer-bad').onclick = () => {
+    later(() => app.close());
+    ended('E_SAS_REJECTED');
+  };
+  $('b-xfer-unlock').onclick = unlockTransferred;
+  $('b-xfer-keep').onclick = endTransfer;
+  $('b-xfer-remove').onclick = async () => {
+    if (!confirm('Remove this identity from this device? Make sure the other device unlocked it.')) return;
+    await slots.remove(app.lock_name());
+    app.new_temporary_identity();
+    lockIdentity();
+    endTransfer();
+  };
+  $('b-id-receive').onclick = () => {
+    if (!confirm('Receive an identity from your other device? This tab switches to it once received.')) return;
+    transferring = 'receiver';
+    applyPrefs();
+    app.create_transfer_invite(Number($('s-ttl').value));
+  };
+  $('b-backup').onclick = downloadBackup;
+  $('i-nick').onchange = () => {
+    if (app.set_nick($('i-nick').value) === 0 && app.identity_label()) persist();
+  };
+  $('b-restart').onclick = () => app.restart_ice();
+  // Network change (§13): try an in-band ICE restart while the channel may still be up.
+  const netChanged = () => { if (chatOpen) app.restart_ice(); };
+  addEventListener('online', netChanged);
+  navigator.connection?.addEventListener?.('change', netChanged);
   $('b-sas-bad').onclick = () => {
     later(() => app.close());
     ended('E_SAS_REJECTED');
@@ -819,6 +1133,7 @@ async function main() {
 
   setInterval(() => {
     app.tick(document.hidden);
+    if (!$('diag').hidden) $('diag-core').textContent = app.diag();
     const s = codeExpires ? Math.max(0, Math.round((codeExpires - Date.now()) / 1000)) : -1;
     $('expiry').textContent = s >= 0 && !$('v-code').hidden ? `Code expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : '';
   }, 1000);

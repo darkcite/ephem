@@ -6,7 +6,7 @@
 |---|---|
 | Product | **Ephem** |
 | Document | The **single** project document. It replaces the earlier SPEC, REVIEW, plans and spike notes (all merged here on 2026-09-28) |
-| Spec level | v0.7 (see the decision log, §25) |
+| Spec level | v0.8 (see the decision log, §25) |
 | Status | Architecture and protocol draft. MVP-1 is ready to start. **Gate G2 passed on desktop and iOS**; Tor mode and public channels are now gated only by G3–G4 (need TOR-1 code) (§23.3) |
 | Deployment | GitHub Pages, project site `https://<owner>.github.io/ephem/` |
 | Runtime | Browser PWA. **Only our WASM app is built: no native programs (P10)** |
@@ -38,7 +38,8 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 | Design | Complete up to MVP-3, plus Tor mode and public channels |
 | Proven | SDP rebuild from ~150–165-byte codes connects in **every tested pair: Chrome, Safari, Firefox and iPhone, both directions across engines**; camera permission exposes the real IP in Chrome and iPhone Safari but **not Firefox**; a pending offer survives **182 s** in the iOS background; the protocol crates fit in 291 KB gzip **with no C code**; Argon2id 34 ms (t = 4, Apple Silicon); **arti (Tor) builds for WASM on Linux and macOS (G1)**; **live Snowflake rendezvous + DataChannel from Chrome, Safari, Firefox and iPhone (G2)**; browsers publish an IPNS record and read it back via `trustless-gateway.link` |
 | Built | **MVP-1 feature-complete, 41/41 end-to-end checks in Chromium** (APP-E2E, §24.2): landing page; `/app/` PWA; temporary or saved identity (encrypted key file, one identity per tab); invite → answer by QR (camera scanner in wasm), link or paste, hand-off between tabs; Noise KK; SAS policy; 1:1 chat with pending queue and ticks 🕓 ✓ ✓✓, typing, reply, edit, delete, self-destruct timers; T3 reconnect codes; diagnostics with relay rejection; "what your peer sees" panel and IPv6 warning; version-pinned service worker, SRI, offline start. 188 KB gzip wasm. 33 native unit tests |
-| Next | 1. Owner: run `ONLY=app ./checks/run_all.sh` on the laptop, try two real devices (S3, S10 two-device, iPhone), then make the repo public and switch on Pages (§23.1a). 2. MVP-2. 3. In parallel, TOR-1 steps E3–E5 (gates G3, G4) |
+| Built (MVP-2) | **MVP-2 feature-complete, 18/18 end-to-end checks** (APP-E2E-MVP2, §24.2): up to 8 remembered identities (IndexedDB) with sign-in from the list; nicknames; contacts in the key file (verified by SAS, SAS skipped next time, impersonation warning, backup-out-of-date notice); reactions; identity transfer to another device over P2P; in-band ICE restart T1 (perfect negotiation, triggered by a stuck path, a network change or by hand); full diagnostics. 40 native unit tests |
+| Next | 1. MVP-3 (rooms). 2. Merge to `main`, make the repo public and switch on Pages after MVP-3 (§23.1a, owner decision 2026-09-28). 3. In parallel, TOR-1 steps E3–E5 (gates G3, G4). Camera/QR work waits until Tor is in (owner decision) |
 | Blocked on devices | S3, S6, S7, S9 (phones, real networks) |
 
 ---
@@ -175,7 +176,7 @@ ephem/
 │       ├── lib.rs                  # #[wasm_bindgen] App facade, events to JS, identity save/load
 │       ├── rtc.rs                  # web-sys RTCPeerConnection / RTCDataChannel adapter, getStats path check
 │       ├── qr.rs                   # qrcode (encode) + rqrr (decode; BarcodeDetector is used from JS when present)
-│       ├── keystore.rs             # (MVP-2) IndexedDB slots (≤ 8); MVP-1 keeps key files and Web Locks in lib.rs / app.js
+│       ├── (key files, contacts, transfer in lib.rs; IndexedDB slots ≤ 8 in app/slots.js: it stores only the encrypted key file)
 │       └── tor/                    # embedded Tor (§28): arti runtime shim, Snowflake transport, IndexedDB dir cache
 │                                   # built as a separate lazily-loaded WASM module (tor_bg.wasm), used only by tor.html
 ├── app/                            # static web app (§4.1): index.html, app.js, app.css, sw.js, manifest, icons, pkg/
@@ -349,6 +350,7 @@ This is Telegram's "log in with a QR code", done without a server:
 2. The old device, signed in with that identity, scans or pastes it. The two connect with the normal flow (direct mode, or Tor mode in §28).
 3. **The SAS is mandatory**, even when both codes were scanned in person, because the whole identity is at stake.
 4. After the SAS is confirmed on both sides, the old device sends its **encrypted key-file blob** (§7.3) in IDENTITY_CHUNK records (§11.2). The blob is still encrypted with the passphrase.
+   - Protocol: the receiver (the device that made the TRANSFER invite) sends IDENTITY_READY (0x41) when its user confirms the SAS; the sender sends the IDENTITY_CHUNKs only after its own confirmation **and** IDENTITY_READY. Chunks on any other link, or before that, are `E_NOT_PERMITTED`. A transfer link carries no chat.
 5. The new device asks for the passphrase. It decrypts the blob and offers to remember it in a slot, and to download a backup.
 6. The old device then offers "Keep this identity here" (**the default**) or "Remove it from this device".
 
@@ -611,7 +613,8 @@ MLS (RFC 9420) via `openmls`, compiled for `wasm32`. See §14.4 for ordering.
 | 0x0B | DELETE | `target_sender u8`, `target_seq u64`. Own messages; the room owner may delete any (§11.7) | MVP-1 |
 | 0x0C | REACT | `target_sender u8`, `target_seq u64`, `len u8` + emoji (0–32 B UTF-8; 0 = remove) | MVP-2 |
 | 0x40 | IDENTITY_CHUNK | `idx u16`, `total u16`, up to 12 KiB of the encrypted key-file blob. Only valid on a `TRANSFER` link after the SAS is confirmed (§7.6) | MVP-2 |
-| 0x10 | SIGNAL_OFFER / 0x11 SIGNAL_ANSWER | target conn / peer, AnswerBin-shaped body | MVP-2 (T1), MVP-3 (§14.4) |
+| 0x41 | IDENTITY_READY | empty: the receiving device's user confirmed the SAS (§7.6) | MVP-2 |
+| 0x10 | SIGNAL_OFFER / 0x11 SIGNAL_ANSWER | `n_cand u8` + ICE body (ufrag, pwd, DTLS fingerprint, candidates; the §8.3 layout without ids). MVP-3 adds a target for relayed signalling (§14.4) | MVP-2 (T1), MVP-3 (§14.4) |
 | 0x30… | ROOM_* / MLS_* | defined in MVP-3 | MVP-3 |
 
 Unknown `rtype` values are ignored if `rflags.bit0` (IGNORABLE) is set. Otherwise they cause `E_PROTOCOL_MISMATCH`.
@@ -748,7 +751,7 @@ Honest baseline: when a device's **only** network changes, all of its links drop
 | Tier | Mechanism | Signalling | Preconditions | Phase |
 |---|---|---|---|---|
 | **T0** | The ICE agent switches to an already-validated backup pair, or continual gathering finds a peer-reflexive path | None | A second interface was gathered at connect time, or the stationary peer is directly reachable *(spike S3)* | Free (browser behaviour) |
-| **T1** | ICE restart. SIGNAL_OFFER/ANSWER travel over the **still-open** DataChannel, encrypted by Noise | In-band | The path is `disconnected` but not yet `failed`, or `NetChanged` fired before the path died | MVP-2 |
+| **T1** | ICE restart. SIGNAL_OFFER/ANSWER travel over the **still-open** DataChannel, encrypted by Noise. The re-offer is rendered with the Appendix A template, the `o=` version increased and the DTLS roles of the connection kept (the path's answerer stays `active`, so an answer from the other side is rendered `passive`) | In-band | The path is `disconnected` for 2 s, the browser reports a network change (`online`, `navigator.connection`), or the user taps "Restart ICE" in the diagnostics | MVP-2 |
 | **T2** | ICE restart relayed **through the room owner**, end-to-end encrypted (§14.4) | Peer-relayed | Group, with a partial break; the owner is still linked to both sides | MVP-3 |
 | **T3** | **Resume code**: RESUME_INVITE / RESUME_ANSWER exchanged out of band. Noise KK with the **same static keys** rebinds the session automatically (no room join, `chat_seq` continues, unacknowledged messages are resent) | Out of band | Always | MVP-1 |
 
@@ -1116,6 +1119,7 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 | S1 | Does the Appendix A template SDP connect, in every offerer × answerer browser pair? | ✅ **All tested pairs, both directions:** Chrome 153 ↔ Chrome, Chrome ↔ Firefox 142, Firefox ↔ Firefox, Safari 26.5 ↔ Chrome; Safari and iPhone Safari (iOS 18.7) in one tab. Raw-IP and mDNS candidates. The template's fixed `max-message-size:262144` is accepted by Firefox, which itself advertises 1 073 741 823 | 🤖 | §8 |
 | S2 | Real code sizes per browser | ✅ Chrome, Safari and iPhone: ufrag 4, pwd 24 → invite **153 B** (mDNS). **Firefox 142: ufrag 8, pwd 32 → invite 165 B** (§8.5 budget assumed this worst case). All: `actpass`/`active`, mid 0, sctp-port 5000. Raw SDP 584–738 B | 🤖 | §8.5 |
 | APP-E2E | Does the MVP-1 app work end to end in a real browser? | ✅ **Laptop (macOS arm64, installed Chrome, WARP on), 41/41, 2026-09-28:** real STUN; invite **212 B** (mDNS + srflx-v4 + srflx-v6); the "what your peer sees" panel lists **only WARP egress addresses** (104.28.163.34, 2a09:bac5:…), which is TS3 confirmed inside the app; the selected path was `prflx ↔ host`, RTT 2 ms. ✅ **Chromium (container), 41/41** (`checks/e2e_app.mjs`, two browsers): landing → app; **identity** saved as key file, wrong passphrase refused, signed back in, same identity in a second tab refused (Web Lock); invite 141 B (2 raw host candidates; no STUN reachable), "what your peer sees" panel; Bob **scans the invite with a camera** (fake camera playing the real QR; rqrr in wasm, the iOS path); answer link opened in a **new tab** is handed to the inviting tab (S7 on one device); Noise KK, **identical SAS**; chat both ways (Unicode, 4 096 B), ✓ then ✓✓, typing, reply with quote, edit, delete for everyone, **self-destruct 5 s** removes the message on both sides; path diagnostics via getStats (no relay, addresses hidden by default); **simulated network loss → message queued 🕓 → reconnect codes (T3) → delivered and ✓**; leave; invalid code; **offline start from the service worker; a new build waits and activates only on consent; tampered wasm and tampered `app.js` refused (SRI)**; no CSP violations or page errors. Native: 33 unit tests (proto, crypto incl. key file, core incl. two sessions over paths, tamper, replay, resume binding; QR render → decode) | 🤖 (`ONLY=app`) | §7, §8, §10–§13, §17, §29 |
+| APP-E2E-MVP2 | Do the MVP-2 features work end to end? | ✅ **Chromium (container), 18/18** (`checks/e2e_mvp2.mjs`): identity saved and remembered in a slot, page reloaded, signed in from the list (nickname kept in the key file); peer nickname shown as self-chosen; contact saved after the SAS → "Bobby ✔", backup flagged out of date; reaction round trip; diagnostics (Noise epoch, rekey timer, ICE/DTLS/channel state); **in-band ICE restart with the chat continuing**; next chat with the verified contact skips the SAS prompt; **identity transfer to a new browser profile**: transfer invite → answer → equal SAS → both confirm → encrypted key file sent → unlocked on the new device with the same handle, label, nickname and contacts; the old device keeps it by default; no CSP violations | 🤖 (`ONLY=app`) | §7, §10.4, §11.7, §13, §18 |
 | QR-CAM | Does the in-app scanner read a QR filmed from a screen? | ❌ → ✅ **iPhone PWA (2026-09-28): camera worked but nothing decoded.** Cause reproduced natively: rqrr (a quirc port) keeps at most 251 flood-filled regions, and blur + noise + uneven light along module edges produce enough speckle to evict the finder patterns (it decoded only 15 of 45 synthetic camera frames, failing even on some crisp ones). Fix: 3×3 denoise → local adaptive threshold → 3×3 majority filter before rqrr, plus a native-resolution centre crop on alternate frames and `BarcodeDetector` only when it lists `qr_code`: 34 of 45 decode, all at ≥ 5 px per module but one very low-contrast case. The e2e fake camera now plays a blurred, noisy, low-contrast QR. ✅ **Re-tested on the iPhone PWA (2026-09-28): scans the laptop's QR** | 🤖 + ✋ iPhone | §8.2, §17.5 |
 | S3 | Path switch without signalling (T0) | ⏳ | ✋ two devices | §13 |
 | S4 | Does camera permission disable mDNS obfuscation? | ✅ **Chrome 153 and iPhone Safari: yes** (raw IP after permission; stays after the camera stops). **Firefox 142: no** (mDNS even with the camera live). Safari without permission: mDNS. So the invite builder's own filtering (§9.4) is mandatory: two of three engines leak the LAN IP after the QR scanner is used | 🤖 / iPhone page | §9.4 |
@@ -1178,6 +1182,7 @@ The v0.1 points that were **confirmed** are kept throughout: principles P1–P9,
 | v0.7 | HELLO caps bit8 SCANNED drives the SAS policy (the core cannot otherwise know how the peer got our code); codes shorter than any valid code are `E_INVALID_INVITE`, not a version mismatch | §10.4, §11.4, §8.3 |
 | v0.7 | Integrity via stamped `index.html` (import-map integrity + CSP hash + wasm fetch integrity) instead of a separate `boot.js`; key files are named `ephem-<label>.p2pkey` | §17.2, §7.3 |
 | v0.7 | Visual style shared with the owner's other projects (darkcite/trading-engine-multivenue dashboard): dark panels, one monospace face, uppercase accent section titles, status chips; dark-only | §23.1a |
+| v0.8 | MVP-2: IDENTITY_READY (0x41) orders the transfer; SIGNAL body = §8.3 ICE layout; T1 by perfect negotiation with DTLS roles kept; remembered identities in IndexedDB hold only the encrypted key file | §7.6, §11.2, §13 |
 | v0.7 | "Simulate network loss" in the diagnostics drops the path without GOODBYE, so users (and the e2e test) can exercise T3 | §13, §18 |
 
 ### 25.3 Open questions

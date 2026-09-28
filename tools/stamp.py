@@ -17,8 +17,8 @@ import os
 import re
 
 APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app")
-MODULES = ["app.js", "pkg/ephem.js"]
-HASHED = ["app.css", "app.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest"]
+MODULES = ["app.js", "slots.js", "pkg/ephem.js"]
+HASHED = ["app.css", "app.js", "slots.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest"]
 PRECACHE = ["./", "index.html"] + HASHED + [
     "icons/icon.svg",
     "icons/icon-192.png",

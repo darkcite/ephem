@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-YCoWeJNy9fF0LPr4suUQCpXdlbmFgjUmNWH30J9Osqc='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="f406ac0477bf">
-<meta name="ephem-wasm" content="sha384-By0CQrFz5tdx6g6DmszfDizwPxRz2aAahZPtzwIow4jER8IX/DyYe9tnbRFuu65Y">
-<link rel="stylesheet" href="app.css" integrity="sha384-ic4f3+Bi9HvyS+HIk4PLZh7LSQu92m1VvsR0fLhKRfd7pSf9wgUZvBj8L5eHp+Wn">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-XPGQQposwOaxZ3EcPlWbPsPtBk6CDBNS0EAueBhKDhO3KyXjSVwP8rUv5ZDSNVHe","./pkg/ephem.js":"sha384-ggZQZVr0YiYNTSpBMyRJfOoq9Aq7ptnC0b7C+XWSrB4EKEuJZVVNO3b6LANxZAs5"}}</script>
-<script type="module" src="app.js" integrity="sha384-XPGQQposwOaxZ3EcPlWbPsPtBk6CDBNS0EAueBhKDhO3KyXjSVwP8rUv5ZDSNVHe"></script>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-e2r1XPvoMIjq207+/zwhO9wqVCpmAQXun2SvP+yknXY='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="4a6e5d527ff9">
+<meta name="ephem-wasm" content="sha384-8RH61clWoNCeN/0f0ZeqlBuLzYoXoB1gJvOYIN37NVwg9TBDx0mAxKsbNeyqRxYD">
+<link rel="stylesheet" href="app.css" integrity="sha384-uHTRa6dhozGg1mvMb4Wu8sB9KbmSmoIFTmiDxmWRz9nHMpATY2+jr7CVhZIeZcei">
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-R1uUB9ayut0ZGegOtrAXR7HYIqJBnXtNe4TXPhdpY67lAu0wZm3mQHGz5SEDEWFz","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem.js":"sha384-8gfbVacTSO8bbQ1aSxWbwHuVwvWu7aIa6b0ZF0bJ+zCSsm7BjjGjqdOWHLtRW5zQ"}}</script>
+<script type="module" src="app.js" integrity="sha384-R1uUB9ayut0ZGegOtrAXR7HYIqJBnXtNe4TXPhdpY67lAu0wZm3mQHGz5SEDEWFz"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -61,9 +61,13 @@
     <div class="card identity">
       <h2>Your identity</h2>
       <p id="id-desc"></p>
+      <ul id="slots" class="slots" hidden></ul>
+      <p id="backup-stale" class="warn" hidden>Backup out of date: your contacts or nickname changed since you downloaded the key file. <button id="b-backup">Download again</button></p>
+      <label>Nickname (shown to peers, optional) <input id="i-nick" maxlength="32" autocomplete="off" placeholder="e.g. Alice"></label>
       <div class="actions">
         <button id="b-id-save">Save this identity…</button>
         <button id="b-id-load">Use a saved identity…</button>
+        <button id="b-id-receive">Receive identity from another device</button>
         <button id="b-id-temp" hidden>Switch to a temporary identity</button>
       </div>
       <div id="id-save" class="sub" hidden>
@@ -71,6 +75,7 @@
         <label>Label <input id="i-label" maxlength="32" placeholder="e.g. Work" autocomplete="off"></label>
         <label>Passphrase (12+ characters) <input id="i-pass" type="password" autocomplete="new-password"></label>
         <label>Repeat passphrase <input id="i-pass2" type="password" autocomplete="new-password"></label>
+        <label class="row"><input id="c-remember" type="checkbox" checked> Remember on this device (still needs the passphrase)</label>
         <button id="b-id-do-save" class="primary">Encrypt and download</button>
         <div id="id-saved" hidden>
           <p class="note">Saved. Keep the file (or this text) safe: a lost file or passphrase cannot be recovered.</p>
@@ -81,8 +86,15 @@
         <label>Key file <input id="i-file" type="file" accept=".p2pkey,application/octet-stream"></label>
         <label>…or key text <textarea id="t-keyin" rows="2" spellcheck="false" autocomplete="off"></textarea></label>
         <label>Passphrase <input id="i-pass-in" type="password" autocomplete="current-password"></label>
+        <label class="row"><input id="c-remember-in" type="checkbox" checked> Remember on this device</label>
         <button id="b-id-do-load" class="primary">Sign in</button>
       </div>
+    </div>
+
+    <div id="contacts-card" class="card" hidden>
+      <h2>Contacts <small id="contacts-count"></small></h2>
+      <p class="note">Only in your encrypted key file. ✔ = safety code compared. No history, no last-seen times.</p>
+      <ul id="contacts" class="contacts"></ul>
     </div>
 
     <details class="card">
@@ -153,9 +165,11 @@
         <button id="b-sas-bad" class="danger">They differ</button>
       </div>
     </div>
+    <p id="imp-warn" class="warn" hidden></p>
     <div class="peer">
       <span id="peer">peer</span>
       <span id="verified" class="pill">unverified</span>
+      <button id="b-save-contact" class="ghost" hidden title="Add to your contacts">＋ contact</button>
       <span id="peer-state" class="note"></span>
       <label class="ttl" title="Self-destruct timer for new messages (both of you)">⏱
         <select id="s-chat-ttl">
@@ -173,10 +187,14 @@
     </div>
     <div id="diag" class="card diag" hidden>
       <p><strong>Path:</strong> <span id="diag-path">measuring…</span></p>
+      <p id="diag-core"></p>
       <label class="row"><input id="c-addr" type="checkbox"> Show addresses</label>
       <p><strong>What your peer sees:</strong> <span id="diag-exposure"></span></p>
       <p class="note">Direct connection only, never a relay. Messages exist only in these two tabs and are delivered only while you are both connected; pending messages exist only in this tab.</p>
-      <button id="b-drop" class="ghost">Simulate network loss</button>
+      <div class="actions">
+        <button id="b-restart" class="ghost">Restart ICE (in-band)</button>
+        <button id="b-drop" class="ghost">Simulate network loss</button>
+      </div>
     </div>
     <div id="resume" class="card resume" hidden>
       <h2>Direct path lost</h2>
@@ -206,6 +224,36 @@
       <textarea id="t-msg" rows="1" maxlength="4096" placeholder="Message" autocomplete="off"></textarea>
       <button id="b-send" class="primary" type="submit">Send</button>
     </form>
+  </section>
+
+  <!-- Identity transfer (§7.6) -->
+  <section id="v-transfer" class="view" hidden>
+    <h1 id="xfer-title">Identity transfer</h1>
+    <p id="xfer-help" class="lead"></p>
+    <div class="sas">
+      <div><strong>Safety code</strong> <span id="xfer-digits" class="sas-digits"></span> <span id="xfer-emoji" class="sas-emoji"></span></div>
+      <p>Both devices must show the same code. The whole identity is at stake: never skip this.</p>
+      <div class="actions" id="xfer-sas-actions">
+        <button id="b-xfer-ok" class="primary">Codes match</button>
+        <button id="b-xfer-bad" class="danger">They differ</button>
+      </div>
+    </div>
+    <p id="xfer-state" class="note"></p>
+    <div id="xfer-unlock" class="card" hidden>
+      <h2>Unlock the received identity</h2>
+      <p id="xfer-label"></p>
+      <label>Passphrase of that identity <input id="i-xfer-pass" type="password" autocomplete="current-password"></label>
+      <label class="row"><input id="c-xfer-remember" type="checkbox" checked> Remember on this device</label>
+      <button id="b-xfer-unlock" class="primary">Unlock and sign in</button>
+    </div>
+    <div id="xfer-sent" class="card" hidden>
+      <h2>Identity sent</h2>
+      <p>The other device now has an encrypted copy. Keep this identity here too?</p>
+      <div class="actions">
+        <button id="b-xfer-keep" class="primary">Keep it on this device</button>
+        <button id="b-xfer-remove" class="danger">Remove it from this device</button>
+      </div>
+    </div>
   </section>
 
   <!-- Ended / notices -->
