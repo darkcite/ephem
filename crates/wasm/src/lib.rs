@@ -456,14 +456,15 @@ pub struct App {
 #[wasm_bindgen]
 impl App {
     /// Starts arti over Snowflake, then hosts our onion service (key from the identity seed).
-    /// Progress arrives as TOR events. `ice`: comma-separated `stun:` URLs; `nat`: the broker's
+    /// Progress arrives as TOR events. `broker`: comma-separated broker URLs, tried in order;
+    /// `ice`: comma-separated `stun:` URLs; `nat`: the broker's
     /// NAT hint (empty = "unknown"); `network_toml`: empty for the real Tor network; `cache`:
     /// the directory snapshot of `tor_cache` from an earlier session (warm start), or empty.
     pub fn tor_start(&self, broker: &str, fingerprint: &str, ice: &str, nat: &str, network_toml: &str, cache: &str) -> u32 {
         let sf = ephem_tor::web::Snowflake {
-            broker: broker.to_owned(),
+            brokers: ephem_tor::web::list(broker),
             fingerprint: fingerprint.to_owned(),
-            ice: ice.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect(),
+            ice: ephem_tor::web::list(ice),
             nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
         };
         status(tor::start(&self.inner, sf, network_toml, cache))

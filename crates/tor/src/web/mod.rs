@@ -32,6 +32,11 @@ pub use carrier::SnowflakeParams as Snowflake;
 pub use rt::sleep_ms;
 pub use tor_proto::client::stream::{DataReader, DataWriter};
 
+/// A comma-separated list (broker URLs, STUN URLs), empty entries dropped.
+pub fn list(s: &str) -> Vec<String> {
+    s.split(',').map(str::trim).filter(|x| !x.is_empty()).map(str::to_owned).collect()
+}
+
 /// `"<56 base32 chars>.onion"` of an onion service key.
 pub fn onion_address(pk: &[u8; 32]) -> String {
     safelog::DisplayRedacted::display_unredacted(&HsId::from(*pk)).to_string()
@@ -180,14 +185,15 @@ mod js {
 
     #[wasm_bindgen]
     impl TorNet {
-        /// `ice`: comma-separated `stun:` URLs for the proxy connections. `nat`: the broker
+        /// `broker`: comma-separated broker URLs (tried in order). `ice`: comma-separated
+        /// `stun:` URLs for the proxy connections. `nat`: the broker
         /// hint (empty = "unknown"). `network_toml`: empty for the real Tor network.
         #[wasm_bindgen(constructor)]
         pub fn new(broker: &str, bridge_fp: &str, ice: &str, nat: &str, network_toml: &str) -> Result<TorNet, JsValue> {
             let sf = SnowflakeParams {
-                broker: broker.to_owned(),
+                brokers: list(broker),
                 fingerprint: bridge_fp.to_owned(),
-                ice: ice.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect(),
+                ice: list(ice),
                 nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
             };
             Ok(TorNet { tor: Rc::new(Tor::new(sf, network_toml, "").map_err(err)?) })

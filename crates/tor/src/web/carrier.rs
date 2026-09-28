@@ -42,7 +42,9 @@ const NO_PROXY_MS: f64 = 60_000.0;
 /// Where to find a proxy for which bridge.
 #[derive(Clone, Debug)]
 pub struct SnowflakeParams {
-    pub broker: String,
+    /// Broker URLs, tried in order when one cannot be reached (the direct broker, then its
+    /// CDN URL, which works from browsers without domain fronting: §24.2 E2).
+    pub brokers: Vec<String>,
     pub fingerprint: String,
     /// `stun:` URLs for the proxy connections only.
     pub ice: Vec<String>,
@@ -245,13 +247,8 @@ async fn negotiate(p: &SnowflakeParams, w: &Warm) -> Result<(), String> {
         .map_err(js_err)?
         .as_string()
         .unwrap_or_default();
-    let req = RequestInit::new();
-    req.set_method("POST");
-    req.set_body(&JsValue::from_str(&format!("1.0\n{body}")));
-    let url = format!("{}/client", p.broker.trim_end_matches('/'));
-    let window = web_sys::window().ok_or("no window")?;
-    let resp: Response = JsFuture::from(window.fetch_with_str_and_init(&url, &req)).await.map_err(js_err)?.unchecked_into();
-    let text = JsFuture::from(resp.text().map_err(js_err)?).await.map_err(js_err)?.as_string().unwrap_or_default();
+    let body = format!("1.0\n{body}");
+    let text = post_offer(&p.brokers, &body).await?;
     let j = js_sys::JSON::parse(&text).map_err(|_| format!("broker said {}", text.chars().take(80).collect::<String>()))?;
     let answer = js_sys::Reflect::get(&j, &"answer".into()).ok().and_then(|v| v.as_string()).filter(|s| !s.is_empty());
     let Some(answer) = answer else {
@@ -272,6 +269,29 @@ async fn negotiate(p: &SnowflakeParams, w: &Warm) -> Result<(), String> {
     }
     tracing::info!("snowflake: proxy ready after {:.0} ms", now() - start);
     Ok(())
+}
+
+/// POSTs the offer to the first broker that answers; returns its reply.
+async fn post_offer(brokers: &[String], body: &str) -> Result<String, String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let mut last = String::from("no broker configured");
+    for b in brokers {
+        let req = RequestInit::new();
+        req.set_method("POST");
+        req.set_body(&JsValue::from_str(body));
+        let url = format!("{}/client", b.trim_end_matches('/'));
+        match JsFuture::from(window.fetch_with_str_and_init(&url, &req)).await {
+            Ok(r) => {
+                let resp: Response = r.unchecked_into();
+                return Ok(JsFuture::from(resp.text().map_err(js_err)?).await.map_err(js_err)?.as_string().unwrap_or_default());
+            }
+            Err(e) => {
+                last = js_err(e);
+                tracing::info!("snowflake: broker {b} unreachable: {last}");
+            }
+        }
+    }
+    Err(last)
 }
 
 /// Carries the session over one proxy until it is lost or arti closes the stream.

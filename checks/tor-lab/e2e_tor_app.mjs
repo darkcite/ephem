@@ -7,7 +7,7 @@
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 runs it on the real Tor network
 // instead (tor_env.mjs).
 import { PASS, check, finish, launch, msgWith, problems, watch } from '../e2e_lib.mjs';
-import { T, serveTor, torContext } from './tor_env.mjs';
+import { T, serveTor, torContext, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
 const base = `http://127.0.0.1:${srv.address().port}/app`;
@@ -147,7 +147,7 @@ try {
   check('reload: warm start from the snapshot', true, `${Date.now() - t4} ms`);
 
   check('no reconnect-code UI in Tor mode', await a.isHidden('#resume') && await b.isHidden('#resume'));
-  check('no page errors or CSP violations', problems.length === 0, problems.join(' | '));
+  check('no page errors or CSP violations', unexpected(problems).length === 0, unexpected(problems).join(' | '));
 } catch (e) {
   check('tor app flow', false, e.message.split('\n')[0]);
   for (const b of browsers) for (const c of b.contexts()) for (const p of c.pages()) {

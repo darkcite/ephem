@@ -6,7 +6,7 @@
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network (tor_env.mjs).
 import { check, finish, launch, msgWith, problems, watch } from '../e2e_lib.mjs';
-import { T, serveTor, torContext } from './tor_env.mjs';
+import { T, serveTor, torContext, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
 const base = `http://127.0.0.1:${srv.address().port}/app`;
@@ -77,7 +77,7 @@ try {
   await msgWith(c, 'them', 'back again').waitFor({ timeout: T });
   await Promise.all([mesh(b, 3), mesh(c, 3)]);
   check('member link lost and redialled; queued message delivered', true, `${Date.now() - t3} ms`);
-  check('no page errors or CSP violations', problems.length === 0, problems.join(' | '));
+  check('no page errors or CSP violations', unexpected(problems).length === 0, unexpected(problems).join(' | '));
 } catch (e) {
   check('tor room flow', false, e.message.split('\n')[0]);
 } finally {

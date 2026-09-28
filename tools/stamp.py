@@ -35,7 +35,7 @@ CSP = ("default-src 'none'; script-src 'self' 'wasm-unsafe-eval' '{importmap}'; 
        "img-src 'self' data: blob:; connect-src 'self'{connect}; worker-src 'self'; manifest-src 'self'; "
        "media-src 'self' blob:; base-uri 'none'; form-action 'none'")
 # Tor mode reaches only the Snowflake broker with fetch (§28.6); everything else goes through Tor.
-TOR_CONNECT = " https://snowflake-broker.torproject.net"
+TOR_CONNECT = " https://snowflake-broker.torproject.net https://1098762253.rsc.cdn77.org"
 
 
 def read(rel):
