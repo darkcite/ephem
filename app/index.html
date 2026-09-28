@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>Ephem</title>
+<link rel="stylesheet" href="app.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="../">Ephem</a>
+  <span id="me" class="pill" title="Your display handle for this session (not a proof of identity)">…</span>
+  <span id="status" class="pill status">starting</span>
+</header>
+
+<main>
+  <noscript><p class="warn">Ephem needs JavaScript and WebAssembly.</p></noscript>
+
+  <!-- Start -->
+  <section id="v-start" class="view" hidden>
+    <h1>Start a private chat</h1>
+    <p class="lead">Two codes, one each way. Nothing is stored: when either of you leaves, the chat is gone.</p>
+    <div class="card">
+      <h2>1 · Invite someone</h2>
+      <p>Creates an invite code. Show it as a QR code, or send the link.</p>
+      <button id="b-invite" class="primary">Create invite</button>
+    </div>
+    <div class="card">
+      <h2>Got a code?</h2>
+      <p>Paste an invite link to answer it, or paste the answer to your own invite.</p>
+      <textarea id="t-code" rows="3" placeholder="https://…/app/#i=…" spellcheck="false" autocomplete="off"></textarea>
+      <button id="b-apply">Open code</button>
+    </div>
+    <details class="card">
+      <summary>Connection settings</summary>
+      <label>Candidates in my codes
+        <select id="s-privacy">
+          <option value="1" selected>Default: local name + public address (STUN)</option>
+          <option value="0">LAN only: same network, no STUN</option>
+          <option value="2">Max connectivity: also raw local IPs</option>
+        </select>
+      </label>
+      <label class="row"><input id="c-v6" type="checkbox"> Drop IPv6 addresses</label>
+      <label>Invite lifetime
+        <select id="s-ttl">
+          <option value="300" selected>5 minutes</option>
+          <option value="900">15 minutes</option>
+          <option value="1800">30 minutes</option>
+        </select>
+      </label>
+      <p class="note">STUN servers: Google and Cloudflare. They learn your public IP address, as does your peer. No relay is ever used.</p>
+    </details>
+  </section>
+
+  <!-- Code -->
+  <section id="v-code" class="view" hidden>
+    <h1 id="code-title">Your invite</h1>
+    <p id="code-help" class="lead"></p>
+    <div id="qr" class="qr" aria-label="QR code"></div>
+    <textarea id="t-link" rows="3" readonly spellcheck="false"></textarea>
+    <div class="actions">
+      <button id="b-copy" class="primary">Copy link</button>
+      <button id="b-share">Share…</button>
+    </div>
+    <div id="answer-box" class="card" hidden>
+      <h2>2 · Paste their answer</h2>
+      <p>When your peer opens the invite, the app shows them an answer. Paste it here, or open their answer link on this device.</p>
+      <textarea id="t-answer" rows="3" placeholder="https://…/app/#a=…" spellcheck="false" autocomplete="off"></textarea>
+      <button id="b-answer">Connect</button>
+    </div>
+    <p id="expiry" class="note"></p>
+    <button id="b-cancel" class="ghost">Cancel</button>
+  </section>
+
+  <!-- Chat -->
+  <section id="v-chat" class="view chat" hidden>
+    <div id="sas" class="sas">
+      <div>
+        <strong>Safety code</strong>
+        <span id="sas-digits" class="sas-digits"></span>
+        <span id="sas-emoji" class="sas-emoji"></span>
+      </div>
+      <p>Compare it with your peer on another channel, for example a call. If it differs, someone may be in the middle.</p>
+      <div class="actions">
+        <button id="b-sas-ok" class="primary">Codes match</button>
+        <button id="b-sas-bad" class="danger">They differ</button>
+      </div>
+    </div>
+    <div class="peer">
+      <span id="peer">peer</span>
+      <span id="verified" class="pill">unverified</span>
+      <span id="peer-state" class="note"></span>
+      <button id="b-leave" class="ghost">Leave</button>
+    </div>
+    <ol id="log" class="log" aria-live="polite"></ol>
+    <form id="f-send" class="composer">
+      <textarea id="t-msg" rows="1" maxlength="4096" placeholder="Message" autocomplete="off"></textarea>
+      <button id="b-send" class="primary" type="submit">Send</button>
+    </form>
+  </section>
+
+  <!-- Ended / notices -->
+  <section id="v-note" class="view" hidden>
+    <h1 id="note-title"></h1>
+    <p id="note-text" class="lead"></p>
+    <button id="b-again" class="primary">Start over</button>
+  </section>
+
+  <p id="error" class="warn" hidden></p>
+</main>
+
+<footer class="foot">
+  <p>Security depends on the codes reaching the right person and on the code this site serves. In direct mode your peer can see your IP address.</p>
+</footer>
+</body>
+</html>

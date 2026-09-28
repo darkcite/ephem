@@ -10,7 +10,8 @@
 #                chrome   = your installed Google Chrome (no download)
 #                chromium, firefox, webkit = Playwright builds (downloaded once; webkit = Safari's engine)
 #   FORCE_BROWSER_INSTALL=1   re-download Playwright engines even if cached
-#   ONLY=a,b       run only these sections: stun, gateways, browser, safari, iphone, e8real, sizes, argon2, arti
+#   ONLY=a,b       run only these sections: app, stun, gateways, browser, safari, iphone, e8real, sizes, argon2, arti
+#                  (app = MVP-1 native tests + end-to-end chat test of /app/ in Chrome)
 #   E8REAL=1       E8 in your real Chrome/Safari/Firefox (macOS): e.g. E8REAL=1 ONLY=e8real ./checks/run_all.sh e8
 #   IPHONE=1       serve the checks page to your iPhone through a free Cloudflare quick tunnel
 #                  (needs `brew install cloudflared`; works while the repo is private). S6_SECONDS=120
@@ -154,6 +155,18 @@ if [ "${NET:-1}" != 0 ] && want gateways; then
 fi
 
 # ---------------------------------------------------------------- browser checks
+if want app; then
+say "MVP-1 app: native tests + end-to-end chat in Chrome"
+REPO="$(cd "$ROOT/.." && pwd)"
+if command -v cargo >/dev/null 2>&1; then
+  NT=$( (cd "$REPO" && env -u CARGO_TARGET_DIR cargo test --workspace --quiet 2>&1) | tee "$OUT/app-native.log" | grep -E "^test result" | awk '{p+=$4; f+=$6} END {printf "%d passed, %d failed", p, f}')
+else
+  NT="SKIPPED (no cargo)"
+fi
+E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_app.mjs" 2>&1 | tee "$OUT/app-e2e.log"
+{ echo "## MVP-1 app"; echo; echo "Native tests: $NT"; echo; echo '```'; cat "$OUT/app-e2e.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
+fi
+
 if want browser; then
 say "Browser checks: S1 S2 S4 S8 TS4 E2 C-P1 C-P4 ${E8:+E8}"
 ( cd "$ROOT" && NET="${NET:-1}" E8="${E8:-0}" BROWSERS="$BROWSERS" node browser_checks.mjs "$OUT" ) 2>&1 | tee "$OUT/browser.log"

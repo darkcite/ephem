@@ -6,7 +6,7 @@
 |---|---|
 | Product | **Ephem** |
 | Document | The **single** project document. It replaces the earlier SPEC, REVIEW, plans and spike notes (all merged here on 2026-09-28) |
-| Spec level | v0.6 (see the decision log, §25) |
+| Spec level | v0.7 (see the decision log, §25) |
 | Status | Architecture and protocol draft. MVP-1 is ready to start. **Gate G2 passed on desktop and iOS**; Tor mode and public channels are now gated only by G3–G4 (need TOR-1 code) (§23.3) |
 | Deployment | GitHub Pages, project site `https://<owner>.github.io/ephem/` |
 | Runtime | Browser PWA. **Only our WASM app is built: no native programs (P10)** |
@@ -37,7 +37,8 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 |---|---|
 | Design | Complete up to MVP-3, plus Tor mode and public channels |
 | Proven | SDP rebuild from ~150–165-byte codes connects in **every tested pair: Chrome, Safari, Firefox and iPhone, both directions across engines**; camera permission exposes the real IP in Chrome and iPhone Safari but **not Firefox**; a pending offer survives **182 s** in the iOS background; the protocol crates fit in 291 KB gzip **with no C code**; Argon2id 34 ms (t = 4, Apple Silicon); **arti (Tor) builds for WASM on Linux and macOS (G1)**; **live Snowflake rendezvous + DataChannel from Chrome, Safari, Firefox and iPhone (G2)**; browsers publish an IPNS record and read it back via `trustless-gateway.link` |
-| Next | 1. Start MVP-1 (with the landing page). 2. In parallel, TOR-1 steps E3–E5 (gates G3, G4). 3. Remaining measurements: TS3 with WARP actually connected, E8 in real browsers (checks page button); S3, S7, S9 need MVP-1 |
+| Built | **MVP-1 step M1 works end to end** (APP-E2E, §24.2): landing page, `/app/` with invite → answer by QR, link or paste, answer-link hand-off between tabs, Noise KK, SAS, 1:1 chat with delivery ticks, leave. Crates `proto`, `crypto`, `core`, `wasm` (189 KB wasm before gzip) |
+| Next | 1. MVP-1 steps M2 (saved identity/key file, pending queue, read/typing, reply/edit/delete, self-destruct, QR scanner) and M3 (T3 resume code, diagnostics and §29.2 disclosure panel, IPv6 warning, service worker, SRI). 2. In parallel, TOR-1 steps E3–E5 (gates G3, G4). 3. S3, S7, S9 and two-device S10 with the app |
 | Blocked on devices | S3, S6, S7, S9 (phones, real networks) |
 
 ---
@@ -149,7 +150,7 @@ ephem/
 ├── Cargo.toml                      # workspace; release: lto="fat", codegen-units=1, panic="abort", opt-level="s"|3
 ├── crates/
 │   ├── proto/                      # #![no_std] — zero-copy codecs, no alloc
-│   │   ├── invite.rs               # InviteBin / AnswerBin (§8.3) encode/decode over &[u8]
+│   │   ├── code.rs                 # invite / answer codes (§8.3) encode/decode over &[u8]
 │   │   ├── candidate.rs            # CandidateBin (§8.4) + SDP a=candidate line render/parse
 │   │   ├── sdp.rs                  # template-based SDP reconstruction (Appendix A)
 │   │   ├── frame.rs                # outer frame header + inner records (§11)
@@ -159,7 +160,7 @@ ephem/
 │   │   ├── identity.rs             # 32-byte seed → X25519 static + Ed25519 signing keys, PeerId, display handle
 │   │   ├── keyfile.rs              # encrypted identity file v2: seed + contacts + TLV sections (§7.3)
 │   │   ├── contacts.rs             # fixed-capacity contact table (256), verified keys (§7.5)
-│   │   ├── noise.rs                # Noise_KK session wrapper (snow), in-place encrypt/decrypt
+│   │   ├── noise.rs                # Noise_KK handshake (snow); transport over the raw split keys: in-place ChaCha20-Poly1305, header as AAD
 │   │   ├── sas.rs                  # short authentication string from handshake hash
 │   │   └── mls.rs                  # (MVP-3) openmls group wrapper
 │   ├── core/                       # pure deterministic state machines, no wasm-bindgen
@@ -535,7 +536,7 @@ The builder filters by mode **regardless of what the browser exposes**.
   - `← e, ee, se`
 - **Prologue** = `"p2pchat/1" ‖ invite_bytes ‖ answer_bytes`. These are exactly the bytes that were exchanged, which binds the session to the same out-of-band data that pins both DTLS fingerprints.
 - **Initiator** = the offerer (Alice). On resume (§13 T3), the initiator is whoever made the resume invite.
-- **Transport:** Noise CipherState. The nonce is an implicit 64-bit counter. The DataChannel is ordered and reliable, so the receiver expects exactly `n+1`. Anything else causes `E_CRYPTO_FAILED` and closes the connection.
+- **Transport:** Noise CipherState semantics. snow runs only the handshake; its raw split keys (`risky-raw-split`) then drive `chacha20poly1305` directly, because snow's transport API cannot take associated data and §11.1 authenticates the frame header. Nonce encoding (4 zero bytes ‖ LE counter) and `REKEY` are exactly Noise's, so the wire is still standard Noise ChaChaPoly. Encryption and decryption are in place in the frame buffer. The nonce is an implicit 64-bit counter. The DataChannel is ordered and reliable, so the receiver expects exactly `n+1`. Anything else causes `E_CRYPTO_FAILED` and closes the connection.
 - **Rekey:** `REKEY` (Noise `rekey()`) every 2^20 messages or 10 minutes, whichever comes first.
 
 ### 10.2 Why two layers
@@ -552,7 +553,7 @@ MLS (RFC 9420) via `openmls`, compiled for `wasm32`. See §14.4 for ordering.
 
 - `s = BLAKE2s("p2pchat-sas" ‖ handshake_hash)`. It is shown two ways:
   - **6 decimal digits** = `u32::from_le_bytes([s[0], s[1], s[2], 0]) % 10^6` (24 bits, negligible bias);
-  - **4 emoji**, one per byte of `s[3..7]`, from a fixed 256-entry table.
+  - **4 emoji**, one per byte of `s[3..7]`, from a fixed 256-entry table: the contiguous Unicode block U+1F400..U+1F4FF (animals and objects), entry `b` = `U+1F400 + b` followed by U+FE0F (emoji presentation).
 - It is shown on both devices after the handshake.
 - Both exchange scenarios are supported. The core decides the SAS policy from where the code came from (`CodeSource` in §6.2):
 
@@ -601,7 +602,7 @@ MLS (RFC 9420) via `openmls`, compiled for `wasm32`. See §14.4 for ordering.
 | 0x01 | HELLO | ver_min u8, ver_max u8, caps u32 bitset, max_msg u16, sign_pk [u8; 32] (Ed25519, §7.1), nick_len u8, nick | MVP-1 |
 | 0x02 | CHAT | `chat_seq u64`; then `ttl_s u32` if `rflags.bit1`; then `reply_sender u8`, `reply_seq u64` if `rflags.bit2`; then UTF-8 text (≤ 4 096 B) | MVP-1 |
 | 0x03 | ACK | `chat_seq u64`, cumulative: **delivered** | MVP-1 |
-| 0x04 | PING / 0x05 PONG | t_ms u64 | MVP-1 |
+| 0x04 | PING / 0x05 PONG | t_ms u64; PING adds `hidden u8` (1 = the sender's page is hidden, §12) | MVP-1 |
 | 0x06 | GOODBYE | ErrorCode u16 | MVP-1 |
 | 0x07 | REKEY | – | MVP-1 |
 | 0x08 | TYPING | `u8` state (0 = stopped, 1 = typing) | MVP-1 |
@@ -1051,7 +1052,7 @@ Members     4 / 8  (links 5 / 6)
   | Path | Content |
   |---|---|
   | `/` | **Landing page** (static HTML, no scripts needed): **Ephem**: what the messenger is, how a chat starts (two codes, in person or by link), what is and is not protected (§21), supported browsers, and a prominent **Start** link to `/app/` |
-  | `/app/` | The PWA (index.html, boot.js, app_bg.wasm, service worker, manifest; §4.1) |
+  | `/app/` | The PWA: `index.html`, `app.js` (DOM glue only), `app.css`, `pkg/ephem.js` + `pkg/ephem_bg.wasm` (built by `./build.sh` and committed); service worker and manifest come with M3 (§4.1) |
   | `/app/tor.html` | Tor-mode entry (§28.6), once TOR-2 ships |
   | `/checks/web/` | The checkpoint page (§24) |
   | `/docs/P2P-CHAT.md` | This document |
@@ -1098,7 +1099,8 @@ NET=0 SKIP_ARTI=1 ./checks/run_all.sh quick   # offline, fast
 
 - **Needs:** Node ≥ 20, Python ≥ 3.9, Rust (rustup). For E1 only: an LLVM clang with the WebAssembly backend (Linux `clang`; macOS `brew install llvm`, because Apple's clang has none). Runs on macOS or Linux; on Windows, use WSL2.
 - **`SAFARI=1`** also runs the page in your real Safari, **including cross-engine S1** (Chrome ↔ Safari in both directions, exchanging only the minimal fields through a local mailbox).
-- **`ONLY=`** limits a run to some sections: `stun, gateways, browser, safari, iphone, sizes, argon2, arti`.
+- **`ONLY=`** limits a run to some sections: `app, stun, gateways, browser, safari, iphone, sizes, argon2, arti`. `ONLY=app` runs the MVP-1 native tests and the end-to-end chat test (`checks/e2e_app.mjs`) in your installed Chrome.
+- **Building the app:** `./build.sh` (needs the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` 0.2.129; uses `wasm-opt` if present) writes `app/pkg/`. Native tests: `cargo test --workspace`.
 - **iPhone while the repo is private:** `IPHONE=1` serves `checks/web/` from the laptop through a free Cloudflare quick tunnel (`brew install cloudflared`, no account), prints a QR code, and collects the results automatically. `S6_SECONDS` sets the S6 target (default 120 s).
 - **iPhone once the repo is public (G2, S6, S4):** open **https://darkcite.github.io/ephem/checks/web/** in Safari. Tap **1** (automatic checks), **2** (S6: leave the app for about 60 s, then come back), **3** (S4: allow the camera), then **Share** or **Copy** the results. The page is `checks/web/` served by GitHub Pages from this branch (repo root, with `.nojekyll`). Refresh the test IPNS record in `checks/web/config.json` with `node checks/make_web_config.mjs`.
 - **Output:** `checks/out/<timestamp>-<label>/REPORT.md`, plus raw JSON and logs.
@@ -1111,12 +1113,13 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 |---|---|---|---|---|
 | S1 | Does the Appendix A template SDP connect, in every offerer × answerer browser pair? | ✅ **All tested pairs, both directions:** Chrome 153 ↔ Chrome, Chrome ↔ Firefox 142, Firefox ↔ Firefox, Safari 26.5 ↔ Chrome; Safari and iPhone Safari (iOS 18.7) in one tab. Raw-IP and mDNS candidates. The template's fixed `max-message-size:262144` is accepted by Firefox, which itself advertises 1 073 741 823 | 🤖 | §8 |
 | S2 | Real code sizes per browser | ✅ Chrome, Safari and iPhone: ufrag 4, pwd 24 → invite **153 B** (mDNS). **Firefox 142: ufrag 8, pwd 32 → invite 165 B** (§8.5 budget assumed this worst case). All: `actpass`/`active`, mid 0, sctp-port 5000. Raw SDP 584–738 B | 🤖 | §8.5 |
+| APP-E2E | Does the MVP-1 app work end to end in a real browser? | ✅ **Chromium (container), 18/18:** landing → app; invite 141 B (2 raw host candidates; no STUN reachable) → link pasted by Bob → answer → answer link opened in a **new tab** is handed to the inviting tab via `BroadcastChannel` (this is S7 on one device) → Noise KK → **identical SAS on both sides** → chat both ways incl. Unicode and a 4 096-byte message → ✓ delivered → leave ends the chat on the other side; invalid code rejected; **no CSP violations**. Native: 22 unit tests (proto, crypto, core incl. tamper/replay) | 🤖 (`ONLY=app`) | §8, §10, §11 |
 | S3 | Path switch without signalling (T0) | ⏳ | ✋ two devices | §13 |
 | S4 | Does camera permission disable mDNS obfuscation? | ✅ **Chrome 153 and iPhone Safari: yes** (raw IP after permission; stays after the camera stops). **Firefox 142: no** (mDNS even with the camera live). Safari without permission: mDNS. So the invite builder's own filtering (§9.4) is mandatory: two of three engines leak the LAN IP after the QR scanner is used | 🤖 / iPhone page | §9.4 |
 | S5 | WASM sizes of the protocol crates | ✅ gzip (Linux and macOS agree within 1 %): Noise 38 KB; key-file crypto 131 KB; QR 33 KB; all three 176 KB; with openmls 291 KB. **The whole protocol stack builds with no C compiler** (verified with `CC=/bin/false`, and on macOS with Apple clang) once `snow` is used **without** its `std` feature, because `snow`'s `std` silently enables `ring` (C). Also: `hkdf::SimpleHkdf` for BLAKE2s | 🤖 | §22 |
 | S5b | Argon2id cost in WASM | ✅ x86 server: m 19 MiB t 4 = 61 ms. **Apple Silicon (V8): t 2 = 21 ms, t 4 = 32 ms; m 64 MiB t 3 = 98 ms.** Memory 21 MiB (85 MiB at 64 MiB), never shrinks. The spec uses m 19 MiB, t 4 | 🤖 | §7.3 |
 | S6 | iOS: does a pending connection survive the background? | ✅ **iPhone (iOS 18.7): pending offers survived 53 s and 182 s in the background** (have-local-offer, gathering complete), then connected and delivered a message. **The §17.5 fallback (iOS users always answer) is not needed**; invite TTL guidance: ≥ 3 min in the background is fine | iPhone page | §17.5 |
-| S7 | Answer-link hand-off between tabs | ⏳ | ✋ | §8.7 |
+| S7 | Answer-link hand-off between tabs | ✅ same browser profile (APP-E2E). ⏳ iOS: Safari tab → installed PWA cannot use `BroadcastChannel` (§8.7 copy fallback) | 🤖 / ✋ iPhone | §8.7 |
 | S8 | Default STUN servers dual-stack; srflx gathering | ✅ DNS: Google and Cloudflare have A + AAAA; Twilio A only. ✅ Live (macOS, home Wi-Fi): all three answer over IPv4 and both browsers get the same srflx-v4. That network has **no IPv6**, so srflx-v6 is untested | 🤖 | §9.3 |
 | S9 | 15 connections on iOS | ⏳ | ✋ iPhone | §14.1 |
 | TS3 | WebRTC through WARP or a VPN shows the VPN exit | ✅ **WARP connected (macOS): peers see only Cloudflare WARP egress addresses**: UDP `104.28.163.34` (and IPv6 `2a09:bac1:…`, which WARP adds), HTTPS `104.28.214.151`; the ISP address `171.97.169.36` never appears. WARP uses different egress addresses per protocol, so the check tests the address *range* (104.28.0.0/16, 2a09:bac0::/29). **Over WARP, Snowflake (E2), the IPFS gateway (C-P1) and browser IPNS publishing (C-P4) all pass.** ⚠️ Under WARP, the host-only S1 fails (two mDNS host candidates, Wi-Fi and the WARP interface; neither connects), so **LAN-only mode does not work with WARP**; the same-machine `S1 via srflx only` also fails, which is inconclusive (it needs WARP to hairpin). **Design consequence confirmed:** users cannot tell whether their VPN covers WebRTC, so the "what your peer sees" panel (§29.2) is essential | 🤖 | §29.1 |
@@ -1167,6 +1170,8 @@ The v0.1 points that were **confirmed** are kept throughout: principles P1–P9,
 | v0.5 | Public channels: desktop-only publishing, owner always hidden via Tor, no link to the chat identity, 4 KiB posts | §27 |
 | v0.6 | **No native programs** (P10): Tor is built into WASM; channel owners host from a browser tab | §2, §27, §28 |
 | v0.6 | Argon2id t = 4 | §7.3 |
+| v0.7 | Transport cipher: snow for the handshake only; raw split keys + in-place ChaCha20-Poly1305 with the header as AAD (same wire as Noise) | §10.1 |
+| v0.7 | SAS emoji table = U+1F400..U+1F4FF; PING carries `hidden` | §10.4, §11.2 |
 
 ### 25.3 Open questions
 

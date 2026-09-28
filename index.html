@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Ephem: a private, serverless chat that runs in your browser. Messages go directly between you and your peer and disappear when you leave.">
+<title>Ephem — ephemeral peer-to-peer chat</title>
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<header class="hero">
+  <p class="mark">Ephem</p>
+  <h1>A chat that exists only while you are both here.</h1>
+  <p class="sub">Direct, end-to-end encrypted conversations between two browsers. No account, no server, no history.</p>
+  <a class="start" href="app/">Start a chat</a>
+  <p class="small">Free and open source. Runs entirely in your browser (WebAssembly).</p>
+</header>
+
+<main>
+  <section>
+    <h2>How a chat starts</h2>
+    <ol class="steps">
+      <li><strong>You create an invite.</strong> Show it as a QR code, or send the link through any messenger.</li>
+      <li><strong>Your peer opens it and gets an answer code.</strong> They show or send it back to you.</li>
+      <li><strong>You apply the answer.</strong> The two browsers connect directly and agree on keys. Both screens show the same safety code.</li>
+    </ol>
+    <p>Two codes are always needed, one each way: that is how browsers find a direct path to each other without a server in the middle. In person, this is two QR scans.</p>
+  </section>
+
+  <section class="grid">
+    <div>
+      <h2>What Ephem does</h2>
+      <ul>
+        <li>Messages are encrypted in transit (DTLS) and end-to-end at the application layer (Noise).</li>
+        <li>Chat traffic travels directly between peers; the app uses no relay and rejects relay paths.</li>
+        <li>There is no server-side or app-side chat history. Close the tab and the chat is gone.</li>
+        <li>Your identity is a key, independent of your network connection.</li>
+        <li>Authenticity depends on how you exchanged codes. Compare the safety code when you did not meet in person.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>What it does not do</h2>
+      <ul>
+        <li>In direct mode your peer can see your IP address, and so can the STUN servers used to find a path (Google, Cloudflare). A VPN can hide it; a built-in Tor mode is planned.</li>
+        <li>It cannot connect every pair of networks. If there is no direct path, it says so instead of silently using a relay.</li>
+        <li>It cannot deliver to someone who is offline, and it cannot stop a peer from copying what you send.</li>
+        <li>It cannot protect you from a compromised device, browser or extension.</li>
+        <li>You trust the code this site serves. Security is never stronger than that and than the channel you used for the codes.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Browsers</h2>
+    <p>Current desktop Chrome, Edge, Firefox and Safari, and Safari on iPhone and iPad (also as an app added to the Home Screen). Android Chrome should work but is not a primary target yet.</p>
+  </section>
+
+  <section>
+    <h2>Under the hood</h2>
+    <p>Rust compiled to WebAssembly owns all protocol state. WebRTC DataChannel for transport, public STUN only for address discovery, Noise KK (X25519, ChaCha20-Poly1305, BLAKE2s) pinned to the exchanged codes, a 6-digit + emoji safety code. The full design, including its limits, is in the <a href="https://github.com/darkcite/ephem/blob/main/docs/P2P-CHAT.md">specification</a>.</p>
+  </section>
+
+  <p class="cta"><a class="start" href="app/">Start a chat</a></p>
+</main>
+
+<footer>
+  <p><a href="https://github.com/darkcite/ephem">Source on GitHub</a> · No cookies, no analytics, no third-party requests from this page.</p>
+</footer>
+</body>
+</html>
