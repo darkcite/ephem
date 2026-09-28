@@ -673,6 +673,14 @@ manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'
 
 ### 17.5 iOS Safari (a required target)
 
+**Distribution: PWA only.** There is no App Store (or TestFlight) app, and none is planned. On iOS the app is either used in a Safari tab or installed with Share → Add to Home Screen, from Safari or, from iOS 16.4, from other browsers. Consequences:
+
+- No App Store review, and no Apple developer account is needed.
+- No native background modes (VoIP push, background networking), so connections pause when the app goes to the background (see *Backgrounding* below).
+- No push notifications. Web Push on iOS needs a server to send the pushes, which P1 forbids.
+- Every iOS browser uses WebKit (outside the EU), so "iOS Safari" covers every browser on iOS.
+
+
 | Topic | Rule |
 |---|---|
 | QR scanning | `rqrr` in WASM from `getUserMedia` frames (there is no `BarcodeDetector`) |
