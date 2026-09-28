@@ -1292,11 +1292,13 @@ function connectContact(hex, name) {
   show('v-note');
 }
 
-// Test hook: the offline lab (checks/tor-lab) sets `ephemTorLab` before the page loads (its own
-// broker, bridge and Tor network). A page script cannot set it: the CSP allows only our files.
+// Test hooks, set before the page loads (a page script cannot set them: the CSP allows only our
+// files): `ephemTorLab`, the offline lab's broker, bridge and Tor network (checks/tor-lab);
+// `ephemTorLog`, an arti log level for the console (diagnostics of live runs).
 async function startTor() {
   const c = globalThis.ephemTorLab || SNOWFLAKE;
-  if (globalThis.ephemTorLab?.log) app.tor_log(globalThis.ephemTorLab.log);
+  const log = globalThis.ephemTorLab?.log || globalThis.ephemTorLog;
+  if (log) app.tor_log(log);
   torCacheKey = `dir:${c.fingerprint}`;
   app.tor_start(c.broker, c.fingerprint, c.ice, c.nat, c.network, await torCache());
   setInterval(saveTorCache, 30 * 60 * 1000);

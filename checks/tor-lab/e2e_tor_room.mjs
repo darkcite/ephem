@@ -6,7 +6,7 @@
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network (tor_env.mjs).
 import { check, finish, launch, msgWith, problems, watch } from '../e2e_lib.mjs';
-import { T, serveTor, torContext, unexpected } from './tor_env.mjs';
+import { T, noise, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
 const base = `http://127.0.0.1:${srv.address().port}/app`;
@@ -20,11 +20,11 @@ async function open(who, nick) {
   const p = await ctx.newPage();
   watch(p, who);
   p.on('dialog', (d) => d.accept());
-  p.on('console', (m) => { if (process.env.VERBOSE) console.log(`  ${who} |`, m.text()); });
+  p.on('console', (m) => { if (process.env.VERBOSE && !noise(m.text())) console.log(`  ${who} |`, m.text()); });
   await p.goto(`${base}/tor.html`);
   await p.fill('#i-nick', nick);
   await p.dispatchEvent('#i-nick', 'change');
-  await p.waitForFunction(() => /Reachable through Tor/.test(document.querySelector('#tor-state').textContent), null, { timeout: T });
+  await torReady(p, who);
   return p;
 }
 

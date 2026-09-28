@@ -40,8 +40,30 @@ export function serveTor() {
 /** Prepares a browser context for tor.html (the lab settings, unless LIVE). */
 export async function torContext(ctx) {
   if (lab) await ctx.addInitScript((c) => { globalThis.ephemTorLab = c; }, lab);
+  else if (process.env.TOR_LOG) await ctx.addInitScript((l) => { globalThis.ephemTorLog = l; }, process.env.TOR_LOG);
   return ctx;
 }
+
+/** Waits until `page`'s onion service is up, printing the Tor status every 10 s meanwhile. */
+export async function torReady(page, who) {
+  const t0 = Date.now();
+  let last = '';
+  const tick = setInterval(async () => {
+    const s = await page.textContent('#tor-state').catch(() => '');
+    if (s && s !== last) console.log(`  ${who} after ${Math.round((Date.now() - t0) / 1000)} s: ${s}`);
+    last = s;
+  }, 10_000);
+  try {
+    await page.waitForFunction(() => /Reachable through Tor|Tor failed/.test(document.querySelector('#tor-state').textContent), null, { timeout: T });
+    const s = await page.textContent('#tor-state');
+    if (/Tor failed/.test(s)) throw new Error(`${who}: ${s}`);
+  } finally {
+    clearInterval(tick);
+  }
+}
+
+/** Browser noise that says nothing about the app. */
+export const noise = (text) => /Password field is not contained in a form/.test(text);
 
 /** Page problems, without the browser's own report of the dead broker (lab only, expected). */
 export const unexpected = (problems) => problems.filter((p) => LIVE || !/net::ERR_CONNECTION_REFUSED/.test(p));

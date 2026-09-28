@@ -7,7 +7,7 @@
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 runs it on the real Tor network
 // instead (tor_env.mjs).
 import { PASS, check, finish, launch, msgWith, problems, watch } from '../e2e_lib.mjs';
-import { T, serveTor, torContext, unexpected } from './tor_env.mjs';
+import { T, noise, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
 const base = `http://127.0.0.1:${srv.address().port}/app`;
@@ -34,7 +34,7 @@ async function open(who) {
   p.on('dialog', (d) => d.accept(who === 'alice' ? 'Bob' : 'Alice'));
   p.on('console', (m) => {
     logs.push(`  ${who} | ${m.text()}`);
-    if (process.env.VERBOSE) console.log(`  ${who} |`, m.text());
+    if (process.env.VERBOSE && !noise(m.text())) console.log(`  ${who} |`, m.text());
   });
   await p.goto(`${base}/tor.html`);
   return p;
@@ -60,7 +60,7 @@ try {
   const t0 = Date.now();
   const [a, b] = await Promise.all([open('alice'), open('bob')]);
   check('tor.html runs the Tor build', await a.evaluate(() => document.documentElement.dataset.mode === 'tor' && !document.querySelector('#b-id-receive').offsetParent));
-  await a.waitForFunction(() => /Reachable through Tor/.test(document.querySelector('#tor-state').textContent), null, { timeout: T });
+  await Promise.all([torReady(a, 'alice'), torReady(b, 'bob')]);
   check('Alice: Tor up and her onion service hosted', true, `${Date.now() - t0} ms`);
 
   // Both sign in with saved identities (for TOR-3 below). Alice also signs out and back in:
@@ -143,7 +143,7 @@ try {
   check('Tor directory snapshot kept in IndexedDB', snap.length === 1 && snap[0] > 1000, `${Math.round((snap[0] || 0) / 1024)} KB`);
   const t4 = Date.now();
   await a.reload();
-  await a.waitForFunction(() => /Reachable through Tor/.test(document.querySelector('#tor-state').textContent), null, { timeout: T });
+  await torReady(a, 'alice');
   check('reload: warm start from the snapshot', true, `${Date.now() - t4} ms`);
 
   check('no reconnect-code UI in Tor mode', await a.isHidden('#resume') && await b.isHidden('#resume'));
