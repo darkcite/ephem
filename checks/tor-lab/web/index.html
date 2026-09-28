@@ -48,4 +48,52 @@ window.run = async ({ broker, fp, stun, nat, net, onion, port, level }) => {
   log(JSON.stringify(out));
   return out;
 };
+
+// E5: tab hosts an onion service (tab A) / dials another tab's onion (tab B).
+const enc = new TextEncoder(), dec = new TextDecoder();
+async function start({ broker, fp, stun, nat, net, level }) {
+  await init();
+  tor_log(level || 'info');
+  const tor = new TorNet(broker, fp, stun, nat, net);
+  await Promise.race([tor.bootstrap(), new Promise((_, no) => setTimeout(() => no(new Error('bootstrap timeout: ' + tor.status())), 180000))]);
+  return tor;
+}
+async function readN(s, n) {
+  let got = new Uint8Array();
+  while (got.length < n) {
+    const b = await s.read(1024);
+    if (!b.length) break;
+    got = new Uint8Array([...got, ...b]);
+  }
+  return dec.decode(got);
+}
+window.hostTab = async (a) => {
+  const t0 = performance.now();
+  const tor = await start(a);
+  const key = crypto.getRandomValues(new Uint8Array(32));
+  const onion = tor.host('ephemlab', key);
+  window.served = (async () => {
+    const s = await tor.accept();
+    const req = await readN(s, 4);
+    await s.write(enc.encode(req === 'ping' ? 'pong' : 'what'));
+    return req;
+  })();
+  return { onion, ms: Math.round(performance.now() - t0) };
+};
+window.dialTab = async (a, onion) => {
+  const t0 = performance.now();
+  const tor = await start(a);
+  const steps = [];
+  let s = null;
+  while (!s) {
+    try { s = await tor.connect(onion, 1); } catch (e) {
+      if (performance.now() - t0 > 240000) return { error: String(e), steps };
+      steps.push(String(e).slice(0, 120));
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  await s.write(enc.encode('ping'));
+  const reply = await readN(s, 4);
+  return { reply, ms: Math.round(performance.now() - t0), steps };
+};
 </script>
