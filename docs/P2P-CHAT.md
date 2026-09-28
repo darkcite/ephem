@@ -1065,7 +1065,9 @@ MVP-1 does not depend on Tor. The Tor track runs in parallel and is dropped clea
 ### 24.1 How to run
 
 ```sh
-./checks/run_all.sh home-wifi                 # everything automatable (~10–20 min; arti build is the slow part)
+SAFARI=1 ./checks/run_all.sh home-wifi        # installed Chrome + Playwright WebKit + your real Safari (recommended on macOS)
+./checks/run_all.sh home-wifi                 # installed Chrome + Playwright WebKit (arti build is the slow part)
+BROWSERS=chrome,firefox,webkit ./checks/run_all.sh all-engines   # adds Firefox (downloaded once)
 ./checks/run_all.sh warp-on                   # again with Cloudflare WARP / your VPN on (TS3)
 E8=1 ./checks/run_all.sh hidden-tab           # adds the 7-minute hidden-tab test (visible Chromium window)
 NET=0 SKIP_ARTI=1 ./checks/run_all.sh quick   # offline, fast

@@ -5,9 +5,12 @@
 # Usage:   ./checks/run_all.sh [label]
 #   label       free text stored with the results, e.g. "home-wifi" or "warp-on"
 # Env:
-#   BROWSERS=chromium,firefox,webkit   browsers to test (default: all three)
+#   BROWSERS=chrome,webkit   engines to test (default). Options:
+#                chrome   = your installed Google Chrome (no download)
+#                chromium, firefox, webkit = Playwright builds (downloaded once; webkit = Safari's engine)
+#   SAFARI=1       also run the checks in your real Safari (macOS; opens a Safari tab, results collected automatically)
 #   NET=0          skip live-network checks (Snowflake, STUN, IPFS)
-#   E8=1           also run the 7-minute hidden-tab test (opens a visible Chromium window)
+#   E8=1           also run the 7-minute hidden-tab test (opens a visible Chrome window)
 #   SKIP_ARTI=1    skip the arti wasm32 build (it takes 5–15 minutes the first time)
 #
 # Output: checks/out/<timestamp>-<label>/REPORT.md (plus raw JSON and logs)
@@ -53,10 +56,18 @@ rustup target add wasm32-unknown-unknown >/dev/null
 } > "$OUT/REPORT.md"
 
 # ---------------------------------------------------------------- browsers
-say "Installing JS dependencies and Playwright browsers"
-( cd "$ROOT" && npm install --no-audit --no-fund >"$OUT/npm.log" 2>&1 ) || { echo "npm install failed, see $OUT/npm.log"; exit 3; }
-IFS=',' read -r -a BLIST <<< "${BROWSERS:-chromium,firefox,webkit}"
-( cd "$ROOT" && npx playwright install "${BLIST[@]}" >"$OUT/playwright-install.log" 2>&1 ) || echo "warning: playwright browser install reported errors (see log)"
+BROWSERS="${BROWSERS:-chrome,webkit}"
+say "Installing JS dependencies (npm)"
+( cd "$ROOT" && npm install --no-audit --no-fund 2>&1 ) | tee "$OUT/npm.log" | tail -3
+DL=""
+for b in $(echo "$BROWSERS" | tr ',' ' '); do
+  case "$b" in chromium|firefox|webkit) DL="$DL $b" ;; esac
+done
+if [ -n "$DL" ]; then
+  say "Downloading Playwright engines:$DL (one-time; progress below)"
+  # shellcheck disable=SC2086
+  ( cd "$ROOT" && npx --no-install playwright install $DL 2>&1 ) | tee "$OUT/playwright-install.log"
+fi
 
 # ---------------------------------------------------------------- S8 / TS3 raw STUN
 if [ "${NET:-1}" != 0 ]; then
@@ -66,8 +77,15 @@ fi
 
 # ---------------------------------------------------------------- browser checks
 say "Browser checks: S1 S2 S4 S8 TS4 E2 C-P1 C-P4 ${E8:+E8}"
-( cd "$ROOT" && NET="${NET:-1}" E8="${E8:-0}" BROWSERS="${BROWSERS:-chromium,firefox,webkit}" node browser_checks.mjs "$OUT" ) 2>&1 | tee "$OUT/browser.log"
+( cd "$ROOT" && NET="${NET:-1}" E8="${E8:-0}" BROWSERS="$BROWSERS" node browser_checks.mjs "$OUT" ) 2>&1 | tee "$OUT/browser.log"
 { echo "## Browser checks"; echo; cat "$OUT/browser.md" 2>/dev/null || echo "browser checks did not produce a report (see browser.log)"; echo; } >> "$OUT/REPORT.md"
+
+# ---------------------------------------------------------------- real Safari (macOS)
+if [ "${SAFARI:-0}" = 1 ]; then
+  say "Real Safari: S2 S4 S8 E2 C-P1 (a Safari tab opens; it closes itself when done)"
+  ( cd "$ROOT" && NET="${NET:-1}" node safari_checks.mjs "$OUT" ) 2>&1 | tee "$OUT/safari.log"
+  { echo "## Real Safari"; echo; cat "$OUT/safari.md" 2>/dev/null || echo "Safari checks did not produce a report (see safari.log)"; echo; } >> "$OUT/REPORT.md"
+fi
 
 # ---------------------------------------------------------------- S5: wasm sizes
 say "S5: WASM sizes of protocol crates"
@@ -121,7 +139,7 @@ cat >> "$OUT/REPORT.md" <<'EOF'
 | S7 | Desktop: open an answer link in a new tab while the inviting tab is open | The answer is handed to the inviting tab and the new tab closes |
 | S9 | iPhone: a room with 15 peers for 10 minutes | No reload or memory kill; battery use recorded |
 | E3–E7 | Snowflake Turbotunnel, arti bootstrap, onion hosting in WASM | Needs the TOR-1 implementation; not runnable yet |
-| E8 | `E8=1 ./checks/run_all.sh` (Chromium, visible window, 7 minutes) | Automated when E8=1; repeat by hand in Firefox and Safari |
+| E8 | `E8=1 ./checks/run_all.sh` (Chrome, visible window, 7 minutes) | Automated when E8=1; repeat by hand in Firefox and Safari |
 EOF
 
 say "Done"

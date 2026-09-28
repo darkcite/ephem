@@ -93,6 +93,32 @@ window.C = (() => {
     });
   }
 
+  // S1 inside one tab (used for real Safari, which cannot run two automated instances):
+  // two peer connections that exchange only the minimal fields through the template.
+  async function selfPair() {
+    const mk = () => {
+      const pc = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
+      const dc = pc.createDataChannel('c', { negotiated: true, id: 0, ordered: true });
+      return { pc, dc };
+    };
+    const a = mk(), b = mk();
+    let got = null;
+    b.dc.onmessage = (e) => { got = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data); };
+    await a.pc.setLocalDescription(await a.pc.createOffer());
+    await gather(a.pc, 5000);
+    const off = extract(a.pc.localDescription.sdp);
+    await b.pc.setRemoteDescription({ type: 'offer', sdp: rebuild(off, 'actpass', '1234567890') });
+    await b.pc.setLocalDescription(await b.pc.createAnswer());
+    await gather(b.pc, 5000);
+    const ans = extract(b.pc.localDescription.sdp);
+    await a.pc.setRemoteDescription({ type: 'answer', sdp: rebuild(ans, 'active', '987654321') });
+    const [oa, ob] = await Promise.all([waitOpen(a.dc, a.pc, 20000), waitOpen(b.dc, b.pc, 20000)]);
+    if (oa === 'open') a.dc.send('p2p ✓');
+    await new Promise((r) => setTimeout(r, 1000));
+    a.pc.close(); b.pc.close();
+    return { alice: oa, bob: ob, received: got, offerCands: off.cands.map((c) => c.typ), ok: got === 'p2p ✓' };
+  }
+
   // ---------- S8 / TS3 / TS4: what the peer would see ----------
   async function srflx(iceServers) {
     const pc = new RTCPeerConnection({ iceServers });
@@ -197,6 +223,6 @@ window.C = (() => {
     ua: () => navigator.userAgent, camera, offer, answer, applyAnswer,
     waitOpen: (ms) => waitOpen(st.dc, st.pc, ms),
     send: (m) => st.dc.send(new TextEncoder().encode(m)), got: () => st.got.slice(),
-    srflx, snowflake, gwCar, ipnsPut, ipnsGet, e8Start, e8Result,
+    srflx, snowflake, gwCar, ipnsPut, ipnsGet, e8Start, e8Result, selfPair, extract,
   };
 })();

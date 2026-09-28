@@ -1,6 +1,7 @@
 // Browser checkpoints: S1, S2, S4, S8/TS3/TS4, E2 (G2), C-P1, C-P4, E8.
 // Usage: node browser_checks.mjs <out-dir>
-// Env:   BROWSERS=chromium,firefox,webkit   NET=1 (live network checks)   E8=1 (7-minute hidden-tab test, headed)
+// Env:   BROWSERS=chrome,webkit (chrome = installed Google Chrome; chromium/firefox/webkit = Playwright builds)
+//        NET=1 (live network checks)   E8=1 (7-minute hidden-tab test, headed)
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as http from 'node:http';
@@ -13,7 +14,8 @@ import * as b36 from 'multiformats/bases/base36';
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 const OUT = process.argv[2] || path.join(HERE, 'out', 'manual');
-const BROWSERS = (process.env.BROWSERS || 'chromium,firefox,webkit').split(',').filter(Boolean);
+const BROWSERS = (process.env.BROWSERS || 'chrome,webkit').split(',').filter(Boolean);
+const ENGINE = (k) => (k === 'chrome' ? 'chromium' : k);
 const NET = process.env.NET !== '0';
 const E8 = process.env.E8 === '1';
 fs.mkdirSync(OUT, { recursive: true });
@@ -43,12 +45,13 @@ function launchOpts(kind, { camera } = {}) {
   const exe = process.env[`${kind.toUpperCase()}_PATH`];
   const o = { headless: true };
   if (exe) o.executablePath = exe;
+  if (kind === 'chrome') { o.args = ['--use-fake-device-for-media-stream']; if (!exe) o.channel = 'chrome'; }
   if (kind === 'chromium') { o.args = ['--use-fake-device-for-media-stream']; if (!exe) o.channel = 'chromium'; }
   if (kind === 'firefox') o.firefoxUserPrefs = { 'media.navigator.streams.fake': true, 'media.navigator.permission.disabled': !!camera };
   return o;
 }
 async function openPage(kind, opts = {}) {
-  const browser = await pw[kind].launch(launchOpts(kind, opts));
+  const browser = await pw[ENGINE(kind)].launch(launchOpts(kind, opts));
   const ctx = await browser.newContext();
   if (opts.grant && kind !== 'firefox') await ctx.grantPermissions(['camera'], { origin: ORIGIN });
   const page = await ctx.newPage();
@@ -178,8 +181,9 @@ if (NET) {
 }
 
 // ---------- E8: hidden tab with an open DataChannel (Chromium, headed, ~7 min) ----------
-if (E8 && avail.includes('chromium')) {
-  const browser = await pw.chromium.launch({ ...launchOpts('chromium'), headless: false });
+const e8kind = avail.find((k) => ENGINE(k) === 'chromium');
+if (E8 && e8kind) {
+  const browser = await pw.chromium.launch({ ...launchOpts(e8kind), headless: false });
   try {
     const ctx = await browser.newContext();
     const a = await ctx.newPage(); await a.goto(ORIGIN + '/');
