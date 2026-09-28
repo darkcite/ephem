@@ -24,7 +24,9 @@ const SNOWFLAKE_FP = '2B280B23E1107BB62ABFC40DDCC8824814F80A72';
 const SNOWFLAKE_BROKERS = ['https://1098762253.rsc.cdn77.org/', 'https://snowflake-broker.torproject.net/'];
 const SNOWFLAKE_STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.antisip.com:3478', 'stun:stun.nextcloud.com:3478'] }];
 const DEFAULT_STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
-const GATEWAYS = ['https://trustless-gateway.link', 'https://ipfs.io', 'https://dweb.link'];
+// ipfs.io and dweb.link 301-redirect trustless requests here without CORS headers (C-P1),
+// so browsers cannot use them; they are aliases of this gateway.
+const GATEWAYS = ['https://trustless-gateway.link'];
 const TEST_CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
 const DELEGATED = 'https://delegated-ipfs.dev';
 

@@ -33,8 +33,8 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 | Area | State |
 |---|---|
 | Design | Complete up to MVP-3, plus Tor mode and public channels |
-| Proven | SDP rebuild from ~150-byte codes connects (Chrome, Safari, iPhone); camera permission exposes the real IP (Chrome **and iPhone**); a pending offer survives 53 s in the iOS background; crypto, QR and MLS crates fit in 293 KB gzip **with no C code**; Argon2id cost measured; **arti (Tor) builds for WASM (G1)**; **live Snowflake rendezvous + DataChannel to a proxy from Chrome 153, Safari 26.5 and iPhone Safari (iOS 18.7) (G2 ✅)**; a browser (including iPhone) can publish an IPNS record and read it back through a public gateway |
-| Next | 1. Mac run with cross-engine S1 and the gateway curl diagnostic. 2. S6 at ≥ 120 s. 3. Start MVP-1. 4. In parallel, TOR-1 steps E3–E5 (G3, G4) |
+| Proven | SDP rebuild from ~150-byte codes connects in every tested pair: Chrome ↔ Chrome, Safari ↔ Safari, iPhone, and **Chrome ↔ Safari in both directions**; camera permission exposes the real IP (Chrome and iPhone); a pending offer survives 53 s in the iOS background; the protocol crates fit in 291 KB gzip **with no C code**; Argon2id 34 ms (t = 4, Apple Silicon); **arti (Tor) builds for WASM on Linux and macOS (G1)**; **live Snowflake rendezvous + DataChannel from Chrome, Safari and iPhone (G2)**; browsers (incl. iPhone) publish an IPNS record and read it back via `trustless-gateway.link` |
+| Next | 1. Start MVP-1. 2. In parallel, TOR-1 steps E3–E5 (gates G3, G4). 3. Remaining measurements: TS3 (WARP run), S6 at ≥ 120 s, Firefox (needs Node 22 for Playwright), E8; S3, S7, S9 need MVP-1 |
 | Blocked on devices | S3, S6, S7, S9 (phones, real networks) |
 
 ---
@@ -1084,11 +1084,11 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 
 | ID | Question | Result so far (container, 2026-09-28) | Run | Gates |
 |---|---|---|---|---|
-| S1 | Does the Appendix A template SDP connect, in every offerer × answerer browser pair? | ✅ Chrome ↔ Chrome (Chromium 141, Chrome 153); ✅ real Safari 26.5 in one tab; ✅ iPhone Safari (iOS 18.7) in one tab. Raw-IP and mDNS candidates. ⏳ Chrome ↔ Safari cross-engine (Mac run), Firefox | 🤖 | §8 |
+| S1 | Does the Appendix A template SDP connect, in every offerer × answerer browser pair? | ✅ Chrome ↔ Chrome (Chromium 141, Chrome 153); ✅ **Safari 26.5 → Chrome 153 and Chrome 153 → Safari 26.5** (real browsers, macOS, fields relayed as the binary codes would be); ✅ Safari and iPhone Safari in one tab. Raw-IP and mDNS candidates. ⏳ Firefox | 🤖 | §8 |
 | S2 | Real code sizes per browser | ✅ Chrome, macOS Safari 26.5 and iPhone Safari are identical: ufrag 4, pwd 24, `actpass`/`active`, mid 0, sctp-port 5000, max-message-size 262144. Invite 141 B (IPv4 host), **153 B (mDNS, the default)**, about 179 B (plus srflx v4 and v6), versus 586–657 B of raw SDP. ⏳ Firefox | 🤖 | §8.5 |
 | S3 | Path switch without signalling (T0) | ⏳ | ✋ two devices | §13 |
 | S4 | Does camera permission disable mDNS obfuscation? | ✅ **Yes on Chrome 153 and on iPhone Safari (iOS 18.7)**: after camera permission, host candidates carry the raw IP; without it, mDNS. Same on macOS Safari without permission (mDNS). So the invite builder's own filtering (§9.4) is mandatory on every target | 🤖 / iPhone page | §9.4 |
-| S5 | WASM sizes of the protocol crates | ✅ gzip: Noise 37 KB; key-file crypto 130 KB; QR 34 KB; all three 176 KB; with openmls 293 KB. **The whole protocol stack builds with no C compiler** (verified with `CC=/bin/false`) once `snow` is used **without** its `std` feature, because `snow`'s `std` silently enables `ring` (C). Also: `hkdf::SimpleHkdf` for BLAKE2s | 🤖 | §22 |
+| S5 | WASM sizes of the protocol crates | ✅ gzip (Linux and macOS agree within 1 %): Noise 38 KB; key-file crypto 131 KB; QR 33 KB; all three 176 KB; with openmls 291 KB. **The whole protocol stack builds with no C compiler** (verified with `CC=/bin/false`, and on macOS with Apple clang) once `snow` is used **without** its `std` feature, because `snow`'s `std` silently enables `ring` (C). Also: `hkdf::SimpleHkdf` for BLAKE2s | 🤖 | §22 |
 | S5b | Argon2id cost in WASM | ✅ x86 server: m 19 MiB t 4 = 61 ms. **Apple Silicon (V8): t 2 = 21 ms, t 4 = 32 ms; m 64 MiB t 3 = 98 ms.** Memory 21 MiB (85 MiB at 64 MiB), never shrinks. The spec uses m 19 MiB, t 4 | 🤖 | §7.3 |
 | S6 | iOS: does a pending connection survive the background? | ✅ **iPhone (iOS 18.7): a pending offer survived 53 s in the background** (have-local-offer, gathering complete), then connected and delivered a message. ⏳ repeat at ≥ 120 s to set the invite TTL guidance; until then the §17.5 fallback (iOS users answer) is **not** needed | iPhone page | §17.5 |
 | S7 | Answer-link hand-off between tabs | ⏳ | ✋ | §8.7 |
@@ -1096,11 +1096,11 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 | S9 | 15 connections on iOS | ⏳ | ✋ iPhone | §14.1 |
 | TS3 | WebRTC through WARP or a VPN shows the VPN exit | ⏳ | 🤖 (run twice) | §29.1 |
 | TS4 | IPv6 bypassing a v4-only VPN | ⏳ | 🤖 | §29.2 |
-| E1 | arti on `wasm32` (**G1**) | ✅ arti 0.46.0: 16/16 crates, plus `arti-client` with onion client and service, ephemeral keystore, bridges, PT, rustls. Upstream has wasm stubs; `coarsetime` uses `performance.now()`. TLS: **ring** with `wasm32_unknown_unknown_js`. **Drop the `compression` feature** (it pulls zstd/xz C code); then **ring is the only C code**. Building ring for wasm32 needs an LLVM clang with the WebAssembly backend (Linux clang, or `brew install llvm` on macOS, because Apple's clang has none). Extension point for Snowflake: `AbstractPtMgr` / `ChanMgr::set_pt_mgr` | 🤖 | §28 |
+| E1 | arti on `wasm32` (**G1**) | ✅ **Linux and macOS (arm64)**: arti 0.46.0, 16/16 crates, plus `arti-client` with onion client and service, ephemeral keystore, bridges, PT, rustls. Upstream has wasm stubs; `coarsetime` uses `performance.now()`. TLS: **ring** with `wasm32_unknown_unknown_js`. **Without the `compression` feature** (zstd/xz), **ring is the only C code**; it needs an LLVM clang with the WebAssembly backend (Linux clang; macOS `brew install llvm`). Extension point for Snowflake: `AbstractPtMgr` / `ChanMgr::set_pt_mgr` | 🤖 | §28 |
 | E2 | Snowflake from a browser (**G2**) | ✅ **Live, desktop:** Chrome 153 and Safari 26.5 (macOS) get a proxy answer from the broker and open a DataChannel to a volunteer proxy, through **both** the CDN URL (`1098762253.rsc.cdn77.org`, no domain fronting needed) and `snowflake-broker.torproject.net`. Rendezvous 0.7–4.8 s; DataChannel open 2–6 s after start; sometimes the first tries report no proxy available, so retry. Protocol: `POST /client`, body `1.0\n{"offer": <JSON SDP>, "nat": "unknown", "fingerprint": <bridge fp>}`; stack: WebRTC → encapsulation → KCP → smux. ⏳ iPhone | 🤖 | §28 |
 | E3–E7 | Turbotunnel, bootstrap, onion hosting, size, hardening | ⏳ needs TOR-1 code | — | G3, G4 |
 | E8 | Does a hidden desktop tab with an open DataChannel keep its timers? | ⏳ | 🤖 (E8=1) | §27, §28.3 |
-| C-P1 | Gateways: trustless CAR with CORS | ✅ `trustless-gateway.link`: CAR served to Chrome, Safari and iPhone (119 874 B). ❌ `ipfs.io`, `dweb.link`: fail identically on every browser and device **on the same home network**. Likely network-side (curl diagnostic pending). **Default list: `trustless-gateway.link` first** | 🤖 | App. D |
+| C-P1 | Gateways: trustless CAR with CORS | ✅ `trustless-gateway.link`: CAR served to Chrome, Safari and iPhone (119 874 B), CORS `*`. **Resolved:** `ipfs.io` and `dweb.link` answer trustless requests with a **301 redirect to `trustless-gateway.link` that has no CORS header**, so browsers refuse it. They are aliases, not independent gateways. **Default list: `trustless-gateway.link` only** (one operator: availability risk, §D.6.3) | 🤖 | App. D |
 | C-P2, C-P3, C-P5 | Two onions in one tab; loading 1 000 posts; OPFS quota | ⏳ after TOR-1 | — | App. D |
 | C-P4 | Republishing signed IPNS records; browser PUT | ✅ **Live:** Chrome, Safari and **iPhone** `PUT` a signed record to `delegated-ipfs.dev` (200), and `trustless-gateway.link` serves back the **identical 397-byte record**. Kubo `name put` also accepts third-party records (source) | 🤖 | App. D |
 
@@ -1552,7 +1552,8 @@ https://<owner>.github.io/p2p-chat/channel.html#c=<ipns-name>&o=<channel-onion>[
 
 #### D.6.3 Default gateways (D6)
 
-- `trustless-gateway.link`, `ipfs.io` and `dweb.link`, used in order with a 4 s timeout; the reader keeps the highest valid record.
+- `trustless-gateway.link` (the only public trustless gateway that works from browsers; `ipfs.io` and `dweb.link` redirect to it without CORS, spike C-P1). Timeout 4 s. The list is editable, so a follower's own gateway can be added.
+- **Single-operator risk:** if that gateway is down, readers without Tor cannot read mirrored channels. Readers with Tor are unaffected, because they read from onion hosts and mirrors directly.
 - The gateway software defaults to CORS `*` and supports trustless CAR and IPNS-record responses (spike C-P1, from source).
 
 ### D.7 Followers and mirrors
@@ -1596,7 +1597,7 @@ https://<owner>.github.io/p2p-chat/channel.html#c=<ipns-name>&o=<channel-onion>[
 
 | ID | Question | Status |
 |---|---|---|
-| C-P1 | Gateways serve CAR and IPNS records with CORS | ✅ `trustless-gateway.link` (live, Chrome and Safari); ❌ `ipfs.io` and `dweb.link` failed in the browsers (diagnosing) |
+| C-P1 | Gateways serve CAR and IPNS records with CORS | ✅ `trustless-gateway.link` (live: Chrome, Safari, iPhone). `ipfs.io`/`dweb.link` only redirect there without CORS |
 | C-P2 | A tab hosting 2 onion services at once (the chat onion and one channel onion) | ⏳ (after TOR-1) |
 | C-P3 | Time to load a channel with 1 000 posts over an onion | ⏳ |
 | C-P4 | Republishing a signed IPNS record without the key | ✅ Live: browser `PUT` to `delegated-ipfs.dev`, read back byte-identical from `trustless-gateway.link` |

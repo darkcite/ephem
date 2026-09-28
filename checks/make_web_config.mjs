@@ -13,7 +13,7 @@ export async function baseConfig(extra = {}) {
   return {
     label: 'browser', net: true, autorun: false, interactive: true, cross: false, resultUrl: null,
     cid: CID,
-    gateways: ['https://trustless-gateway.link', 'https://ipfs.io', 'https://dweb.link'],
+    gateways: ['https://trustless-gateway.link'], // ipfs.io/dweb.link redirect here without CORS (C-P1)
     delegated: 'https://delegated-ipfs.dev',
     stun: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }],
     snowflake: {

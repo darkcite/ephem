@@ -7,9 +7,7 @@
  "resultUrl": null,
  "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
  "gateways": [
-  "https://trustless-gateway.link",
-  "https://ipfs.io",
-  "https://dweb.link"
+  "https://trustless-gateway.link"
  ],
  "delegated": "https://delegated-ipfs.dev",
  "stun": [

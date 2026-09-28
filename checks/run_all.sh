@@ -126,7 +126,7 @@ if [ "${NET:-1}" != 0 ]; then
   {
     echo "## C-P1 diagnostic (curl, Origin: http://127.0.0.1)"; echo
     echo "| Gateway | HTTP | Redirect to | Access-Control-Allow-Origin | Content-Type |"; echo "|---|---|---|---|---|"
-    for gw in https://trustless-gateway.link https://ipfs.io https://dweb.link; do
+    for gw in https://trustless-gateway.link https://ipfs.io https://dweb.link; do  # the latter two: expected 301 without CORS
       H="$(curl -sS -m 20 -o /dev/null -D - -H 'Origin: http://127.0.0.1' -H 'Accept: application/vnd.ipld.car' "$gw/ipfs/$CID?format=car&dag-scope=entity" 2>&1 | tr -d '\r')"
       code="$(echo "$H" | awk '/^HTTP/{c=$2} END{print c}')"
       loc="$(echo "$H" | awk 'tolower($1)=="location:"{print $2}' | tail -1)"
