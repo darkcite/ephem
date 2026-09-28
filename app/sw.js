@@ -5,7 +5,7 @@
 // - Tor mode (tor.html and the Tor build, §28.2) is cached on first use only: direct users never
 //   download it. It belongs to the same version (the build id covers it).
 // VERSION, FILES and TOR_FILES are written by tools/stamp.py (run by ./build.sh).
-const VERSION = '5f41b5fb8082';
+const VERSION = '5b3f0cca4217';
 const FILES = ["./", "index.html", "app.css", "app.js", "slots.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
 const TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm"];
 const CACHE = `ephem-${VERSION}`;

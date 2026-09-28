@@ -361,8 +361,8 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
   switch (kind) {
     case EV.CODE: {
       const code = text(ptr, len);
-      if (room?.owner && num === 1) {
-        showRoomInvite(code);
+      if (room?.owner && (num === 1 || num === 5)) {
+        showRoomInvite(num, code);
         break;
       }
       codeExpires = num === 1 || num === 3 || num === 5 ? Date.now() + Number($('s-ttl').value) * 1000 : 0;
@@ -634,8 +634,8 @@ function hideRoomInvite() {
   box.querySelector('.qr').replaceChildren();
 }
 
-function showRoomInvite(code) {
-  renderCodeBox($('room-invite').querySelector('.codebox'), 1, code);
+function showRoomInvite(kind, code) {
+  renderCodeBox($('room-invite').querySelector('.codebox'), kind, code);
   $('t-room-answer').value = '';
   $('room-invite').hidden = false;
 }
@@ -656,7 +656,7 @@ function renderRoom() {
   for (const [idx, name] of before) if (!names.has(idx) && !removedByMe.delete(idx)) sysLine(`${name} is no longer in the room.`);
   const ul = $('members');
   ul.replaceChildren();
-  const LINK = { me: 'you', connected: 'direct', connecting: 'connecting…', suspended: 'reconnecting…', 'no-path': 'no direct path', none: 'not connected' };
+  const LINK = { me: 'you', connected: TOR ? 'via Tor' : 'direct', connecting: 'connecting…', suspended: 'reconnecting…', 'no-path': 'no direct path', none: 'not connected' };
   for (const [idx, r, , link, , sas] of rows) {
     const i = Number(idx);
     const li = document.createElement('li');
@@ -958,23 +958,26 @@ function applyCode(raw, scanned) {
     if (!confirm(`This code asks for your identity “${app.identity_label()}”. Only continue if the other device is yours. Continue?`)) return;
     transferring = 'sender';
   }
-  const group = (info & 0xff) === 1 && (info >> 8) & FLAG_GROUP;
+  const kind = info & 0xff;
+  const group = (kind === 1 || kind === 5) && (info >> 8) & FLAG_GROUP;
   if (group) {
-    // Rooms connect everyone directly: every member sees every other member's IP (§29.2).
+    // Direct rooms connect everyone directly: every member sees every other member's IP
+    // (§29.2). Over Tor nobody sees anyone's IP.
     const observer = (info >> 8) & FLAG_OBSERVER;
-    if (!confirm(`This is an invite to a room${observer ? ', as a read-only observer' : ''}. Every member of the room will see your IP address, and you theirs (direct connections, never a relay). Join?`)) return;
+    const as = observer ? ', as a read-only observer' : '';
+    if (!confirm(kind === 5 ? `This is an invite to a room${as}, through Tor. Join?`
+      : `This is an invite to a room${as}. Every member of the room will see your IP address, and you theirs (direct connections, never a relay). Join?`)) return;
   }
   applyPrefs();
   if (app.apply_code(v, scanned) !== 0) {
     if (transferring === 'sender') transferring = null;
     return;
   }
-  if ((info & 0xff) === 1) {
-    room = group ? { owner: false, role: (info >> 8) & FLAG_OBSERVER ? 2 : 1, confirmed: false } : null;
+  if (kind === 1 || kind === 5) {
+    room = group ? { owner: false, role: (info >> 8) & FLAG_OBSERVER ? 2 : 1, confirmed: kind === 5 } : null;
     myIdx = 1;
-  } else if ((info & 0xff) === 5) {
-    room = null;
-    myIdx = 1;
+  }
+  if (kind === 5) {
     status('connecting via Tor');
     $('note-title').textContent = 'Connecting through Tor…';
     $('note-text').textContent = 'Reaching your peer\'s onion service. This usually takes 10–60 seconds; their tab must be open.';
@@ -1353,7 +1356,7 @@ async function main() {
     $('verified').textContent = 'owner';
     $('verified').className = 'pill ok';
     status('room open', 'ok');
-    openChat('Room created. Invite members one at a time; everyone connects directly to everyone else.');
+    openChat(`Room created. Invite members one at a time; everyone connects ${TOR ? 'through Tor' : 'directly'} to everyone else.`);
   };
   $('b-room-invite').onclick = () => { hideRoomInvite(); applyPrefs(); app.room_invite(false, Number($('s-ttl').value)); };
   $('b-room-observer').onclick = () => { hideRoomInvite(); applyPrefs(); app.room_invite(true, Number($('s-ttl').value)); };

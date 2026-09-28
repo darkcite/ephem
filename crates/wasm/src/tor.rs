@@ -13,6 +13,7 @@
 //! asynchronously). Per-stream setup allocates; the per-frame path reuses those buffers.
 
 use crate::{Inner, Link, Out, Shared, emit, ev, now_ms, on_event, room};
+use ephem_core::room::OWNER_IDX;
 use ephem_core::{Role, Session, State};
 use ephem_crypto::PeerId;
 use ephem_crypto::contacts::cflags;
@@ -108,19 +109,34 @@ pub(crate) fn start(inner: &Shared, sf: Snowflake, network_toml: &str) -> Result
 pub(crate) fn invite(inner: &Shared, ttl_s: u32) -> Result<(), ErrorCode> {
     let now_s = (now_ms() / 1000) as u32;
     let (inv, room) = crate::ids();
-    // Copy of the 104-byte code out of the session (setup path): emitting borrows the tab.
-    let mut code = [0u8; TOR_CODE_LEN];
-    {
+    let id = {
         let mut g = inner.borrow_mut();
         if g.tor.tor.is_none() {
             return Err(ErrorCode::TorUnavailable);
         }
         g.reset();
         let s = Session::tor_host(g.identity(), inv, room, now_s + ttl_s.clamp(60, 1800), g.settings());
-        code.copy_from_slice(s.local_code());
-        g.add_link(1, s, false);
+        g.add_link(1, s, false)
+    };
+    offer(inner, id);
+    Ok(())
+}
+
+/// The TOR_INVITE of hosting link `id`: to the UI (CODE 5), or sealed to a room member through
+/// the owner (§14.4). Nothing else to start: the peer dials us.
+pub(crate) fn offer(inner: &Shared, id: u32) {
+    // Copy of the 104-byte code out of the session (setup path): sending it borrows the tab.
+    let mut code = [0u8; TOR_CODE_LEN];
+    let (i, via_owner) = {
+        let g = inner.borrow();
+        let Some(i) = g.find(id) else { return };
+        code.copy_from_slice(g.links[i].sess.local_code());
+        (i, g.links[i].via_owner)
+    };
+    let r = if via_owner { room::relay_code(inner, id, &code) } else { crate::emit_code(inner, i, &code) };
+    if let Err(e) = r {
+        crate::emit_err(ev::ERROR, e);
     }
-    crate::emit_code(inner, 0, &code)
 }
 
 /// A chat from a TOR_INVITE: dial the inviter's onion (in the background, until connected).
@@ -130,13 +146,16 @@ pub(crate) fn join(inner: &Shared, code: &[u8], now_s: u32, scanned: bool) -> Re
         if g.tor.tor.is_none() {
             return Err(ErrorCode::TorUnavailable);
         }
-        // Rooms over Tor: TOR-4.
-        if Code::decode(code)?.flags & flags::GROUP != 0 {
-            return Err(ErrorCode::NotPermitted);
-        }
-        let s = Session::tor_dialer(g.identity(), code, now_s, g.settings(), scanned)?;
+        let f = Code::decode(code)?.flags;
+        let group = f & flags::GROUP != 0;
+        // Room links: no read receipts, no typing (§11.7).
+        let settings = if group { room::room_settings(&g) } else { g.settings() };
+        let s = Session::tor_dialer(g.identity(), code, now_s, settings, scanned)?;
         g.reset();
-        g.add_link(0, s, false)
+        if group {
+            g.room = Some(room::Room::joining(f & flags::OBSERVER != 0));
+        }
+        g.add_link(if group { OWNER_IDX } else { 0 }, s, false)
     };
     dial(inner, lid);
     Ok(())
@@ -348,11 +367,14 @@ async fn incoming(inner: Shared, s: DataStream) {
             if !g.links[i].sess.tor() {
                 continue;
             }
+            // A link to a room member takes only the key the signed state names (§14.4).
+            let pinned = g.links[i].via_owner.then(|| g.room.as_ref().and_then(|r| r.member_key(g.links[i].member)));
             let Inner { id, links, meta, inbox, .. } = &mut *g;
             let Link { sess, rtc, member, peer, .. } = &mut links[i];
             // Our reply (IK message 2) goes to this new stream.
             let mut out = Out { rtc: rtc.as_ref(), tor: Some(&wire), meta, inbox, peer, link: next, member: *member };
-            if sess.tor_accept(id, now, &buf[2..2 + n], |_| true, &mut |e| on_event(&mut out, e)) == Ok(true) {
+            let allow = |k: &PeerId| pinned.is_none_or(|p| p == Some(*k));
+            if sess.tor_accept(id, now, &buf[2..2 + n], allow, &mut |e| on_event(&mut out, e)) == Ok(true) {
                 taken = Some(i);
                 break;
             }

@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-NNPou+MKhXK7AqyK3QZdcQlIfbVOtPQXHJqLe6yje2E='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://snowflake-broker.torproject.net; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="5f41b5fb8082">
-<meta name="ephem-wasm" content="sha384-9UTANY36r87IvfQZNeugPr58jrCoJ9qli6AF5EGNTDzmY6bsipBdxFwJG5OQ8MZZ">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-+09MGOworWrd1GrjWoEdDSNVceDYJmN5IEwQE1Ae0Os='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://snowflake-broker.torproject.net; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="5b3f0cca4217">
+<meta name="ephem-wasm" content="sha384-161R7gVVkMIKv3bT34eOFyI+WqIsk3JdhbxCnSJAXBRQ9Lsv9NeQI3JUQyawgAZp">
 <link rel="stylesheet" href="app.css" integrity="sha384-KZyITPZ3GHGWJGfigtvweOjJ0Q+0JiKzjPh8eCB1I2ZnwRrJ+pWIlL92vZbPl9uM">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-YtRQ6LXB664AgzE9mIjRO9+hOuGx9Co+MTx6iVCvDIWc528vII6t1ptalI7+tO5+","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem_tor.js":"sha384-FXZsqI7uQQ6RJ4TYrsMqqGX5ZP6aqJ8BdlCqi0V5XjeNU2teAPWhnsXy67BZRca9"}}</script>
-<script type="module" src="app.js" integrity="sha384-YtRQ6LXB664AgzE9mIjRO9+hOuGx9Co+MTx6iVCvDIWc528vII6t1ptalI7+tO5+"></script>
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-zKV4mHUK4R0EsfKx3e7AcntpJoHEbTv/cO6o5tbRCUktwT+mxsD+5IAtyF9pWFTs","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem_tor.js":"sha384-8UJ9md0Hs4icXD9YG73PYN6GRrcil+Zwn1/2U4/7RYlQKQnNCiT3hy6zXV2h8J3F"}}</script>
+<script type="module" src="app.js" integrity="sha384-zKV4mHUK4R0EsfKx3e7AcntpJoHEbTv/cO6o5tbRCUktwT+mxsD+5IAtyF9pWFTs"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -48,9 +48,9 @@
       <p>Creates an invite code. Show it as a QR code, or send the link.</p>
       <button id="b-invite" class="primary">Create invite</button>
     </div>
-    <div class="card direct-only">
+    <div class="card">
       <h2>Or open a room</h2>
-      <p>Up to 16 people, each connected directly to every other one. You own the room: you invite members (or read-only observers) and can remove them. When you leave, the room is gone.</p>
+      <p>Up to 16 people, each connected <span class="direct-only">directly</span><span class="tor-only">through Tor</span> to every other one. You own the room: you invite members (or read-only observers) and can remove them. When you leave, the room is gone.</p>
       <button id="b-room">Create room</button>
     </div>
     <div class="card tor-only">
@@ -208,7 +208,7 @@
         <button id="b-room-observer" class="ghost">Invite observer</button>
       </div>
       <div id="room-invite" hidden>
-        <p class="note">Let the new member scan this code, or send them the link. It works once. Then paste their answer below.</p>
+        <p class="note">Let the new member scan this code, or send them the link. It works once. <span class="direct-only">Then paste their answer below.</span><span class="tor-only">No answer is needed: they connect through Tor.</span></p>
         <div class="codebox">
           <div class="qr" aria-label="QR code"></div>
           <textarea class="link" rows="2" readonly spellcheck="false"></textarea>
@@ -217,8 +217,8 @@
             <button class="share">Share…</button>
           </div>
         </div>
-        <textarea id="t-room-answer" rows="2" placeholder="Paste their answer (https://…/app/#a=…)" spellcheck="false" autocomplete="off"></textarea>
-        <div class="actions">
+        <textarea id="t-room-answer" class="direct-only" rows="2" placeholder="Paste their answer (https://…/app/#a=…)" spellcheck="false" autocomplete="off"></textarea>
+        <div class="actions direct-only">
           <button id="b-room-answer">Add to room</button>
           <button id="b-scan-room" class="scan">Scan answer</button>
         </div>

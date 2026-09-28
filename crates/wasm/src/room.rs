@@ -9,13 +9,21 @@
 //! new link. Of every pair of members, the one with the greater `PeerId` offers (introductions
 //! and T2 resumes alike), so both never offer at once.
 //!
+//! Tor mode (§28.7): the same model over Tor streams. The codes are TOR_INVITEs: the offering
+//! member hosts (its onion is in the sealed invite) and the other one dials it; nothing is
+//! answered, and a lost member link is redialled by its dialler instead of T2.
+//!
 //! Setup path only (joins, removals, reconnects): allocations here are acceptable. Sending a
 //! message costs one indirect call per link ([`fan_out`], [`each`]), not a per-frame cost.
 
 use crate::{Inner, PENDING, Shared, emit, emit_err, ev, ids, now_ms, on_link, rtc};
+#[cfg(feature = "tor")]
+use crate::tor;
 use ephem_core::room::{MAX_MEMBERS, OWNER_IDX, RoomRole, RoomState, seal_context, signal_decode, signal_encode};
 use ephem_core::{Event, Privacy, RoomLink, Session, Settings, State};
 use ephem_crypto::{Identity, seal};
+#[cfg(feature = "tor")]
+use ephem_crypto::PeerId;
 use ephem_proto::ErrorCode;
 use ephem_proto::code::{Code, Kind, flags};
 use ephem_proto::frame::rtype;
@@ -57,8 +65,16 @@ impl Room {
         Self { state: Some(RoomState::new(room_id, id)), me: OWNER_IDX, owner: true, role: RoomRole::Owner, confirmed: true, ..Self::blank() }
     }
 
+    /// A member's side before the first state. Over Tor nobody sees anyone's IP address, so
+    /// there is nothing to confirm before meeting the other members (§29.2).
     pub(crate) fn joining(observer: bool) -> Self {
-        Self { role: if observer { RoomRole::Observer } else { RoomRole::Member }, ..Self::blank() }
+        Self { role: if observer { RoomRole::Observer } else { RoomRole::Member }, confirmed: cfg!(feature = "tor"), ..Self::blank() }
+    }
+
+    /// The key the signed state names for member `idx`.
+    #[cfg(feature = "tor")]
+    pub(crate) fn member_key(&self, idx: u8) -> Option<PeerId> {
+        self.state.as_ref()?.member(idx).map(|m| m.peer)
     }
 
     fn blank() -> Self {
@@ -82,8 +98,52 @@ impl Room {
     }
 }
 
+/// The offering session of a new room link: a direct invite, or in the Tor build a TOR_INVITE
+/// to our onion (§28.7).
+fn host_session(g: &Inner, inv: [u8; 16], room_id: [u8; 16], expires: u32, privacy: Privacy, drop_ipv6: bool) -> Session {
+    #[cfg(feature = "tor")]
+    let _ = (privacy, drop_ipv6);
+    #[cfg(feature = "tor")]
+    return Session::tor_host(g.identity(), inv, room_id, expires, room_settings(g));
+    #[cfg(not(feature = "tor"))]
+    Session::offerer(g.identity(), inv, room_id, expires, privacy, drop_ipv6, room_settings(g))
+}
+
+/// The joining session from another member's code (the kind of this build).
+fn join_session(g: &Inner, code: &[u8], privacy: Privacy, drop_ipv6: bool) -> Result<Session, ErrorCode> {
+    #[cfg(feature = "tor")]
+    let _ = (privacy, drop_ipv6);
+    #[cfg(feature = "tor")]
+    return Session::tor_dialer(g.identity(), code, now_s(), room_settings(g), false);
+    #[cfg(not(feature = "tor"))]
+    Session::answerer(g.identity(), code, now_s(), privacy, drop_ipv6, room_settings(g), false)
+}
+
+/// Starts the offering side of link `id`: an RTCPeerConnection and its code, or over Tor the
+/// link's TOR_INVITE (shown, or sealed to the member).
+pub(crate) fn start_offer(inner: &Shared, id: u32, privacy: Privacy) {
+    #[cfg(feature = "tor")]
+    {
+        let _ = privacy;
+        tor::offer(inner, id);
+    }
+    #[cfg(not(feature = "tor"))]
+    rtc::start(inner.clone(), id, privacy, rtc::Step::Offer);
+}
+
+/// Starts the answering side of link `id`: over Tor, dialling the inviter's onion.
+fn start_answer(inner: &Shared, id: u32, privacy: Privacy) {
+    #[cfg(feature = "tor")]
+    {
+        let _ = privacy;
+        tor::dial(inner, id);
+    }
+    #[cfg(not(feature = "tor"))]
+    rtc::start(inner.clone(), id, privacy, rtc::Step::Answer);
+}
+
 /// Room links carry no read receipts and no typing notices (§11.7).
-fn room_settings(g: &Inner) -> Settings {
+pub(crate) fn room_settings(g: &Inner) -> Settings {
     Settings { read_receipts: false, typing: false, ..g.settings() }
 }
 
@@ -122,7 +182,7 @@ pub(crate) fn invite(inner: &Shared, observer: bool, ttl_s: u32) -> Result<(u32,
     }
     let (inv, _) = ids();
     let (privacy, drop_ipv6) = g.privacy();
-    let mut s = Session::offerer(g.identity(), inv, room_id, now_s() + ttl_s.clamp(60, 1800), privacy, drop_ipv6, room_settings(&g));
+    let mut s = host_session(&g, inv, room_id, now_s() + ttl_s.clamp(60, 1800), privacy, drop_ipv6);
     s.add_flags(flags::GROUP | if observer { flags::OBSERVER } else { 0 });
     Ok((g.add_link(PENDING, s, false), privacy))
 }
@@ -291,7 +351,6 @@ fn connect_members(inner: &Shared) {
         let Some(o) = g.by_member(OWNER_IDX).filter(|o| g.links[*o].sess.state() == State::Connected) else { return };
         let privacy = g.links[o].sess.privacy();
         let (_, drop_ipv6) = g.privacy();
-        let settings = room_settings(&g);
         let now = now_ms();
         let Some(Room { state: Some(st), confirmed: true, me, role, seq, retry_at, .. }) = g.room.as_ref() else { return };
         let (me, role, seq, room_id) = (*me, *role, *seq, st.room_id);
@@ -307,14 +366,14 @@ fn connect_members(inner: &Shared) {
                 continue;
             }
             let (inv, _) = ids();
-            let mut s = Session::offerer(g.identity(), inv, room_id, now_s() + INTRO_TTL_S, privacy, drop_ipv6, settings);
+            let mut s = host_session(&g, inv, room_id, now_s() + INTRO_TTL_S, privacy, drop_ipv6);
             s.set_room(RoomLink { me, peer: idx, my_role: role, peer_role });
             s.set_seq_base(seq);
             started.push((g.add_link(idx, s, true), privacy));
         }
     }
     for (id, privacy) in started {
-        rtc::start(inner.clone(), id, privacy, rtc::Step::Offer);
+        start_offer(inner, id, privacy);
     }
 }
 
@@ -347,8 +406,12 @@ fn on_signal(inner: &Shared, body: &[u8]) {
         }
     };
     let Ok(c) = Code::decode(&code) else { return };
+    // Modes never mix (§28.2): a Tor room carries only Tor invites, a direct room none.
+    if (c.kind == Kind::TorInvite) != cfg!(feature = "tor") {
+        return;
+    }
     match c.kind {
-        Kind::Invite => {
+        Kind::Invite | Kind::TorInvite => {
             let mut g = inner.borrow_mut();
             let Some(r) = g.room.as_mut() else { return };
             if !r.confirmed {
@@ -359,7 +422,6 @@ fn on_signal(inner: &Shared, body: &[u8]) {
             drop(g);
             accept_invite(inner, from, &code);
         }
-        Kind::TorInvite => {}
         Kind::Answer | Kind::ResumeAnswer => {
             let id = {
                 let mut g = inner.borrow_mut();
@@ -400,7 +462,7 @@ fn accept_invite(inner: &Shared, from: u8, code: &[u8]) {
         let Some(o) = g.by_member(OWNER_IDX) else { return };
         let privacy = g.links[o].sess.privacy();
         let (_, drop_ipv6) = g.privacy();
-        let mut s = match Session::answerer(g.identity(), code, now_s(), privacy, drop_ipv6, room_settings(&g), false) {
+        let mut s = match join_session(&g, code, privacy, drop_ipv6) {
             Ok(s) if s.room_id() == room_id && s.code_flags() & flags::GROUP != 0 => s,
             _ => return,
         };
@@ -412,7 +474,7 @@ fn accept_invite(inner: &Shared, from: u8, code: &[u8]) {
         let privacy = s.privacy();
         (g.add_link(from, s, true), privacy)
     };
-    rtc::start(inner.clone(), id, privacy, rtc::Step::Answer);
+    start_answer(inner, id, privacy);
 }
 
 /// Member leaving: tells the owner first (the GOODBYEs follow when the links close).
@@ -496,7 +558,8 @@ pub(crate) fn tick(inner: &Shared) {
             let mine = g.identity().peer_id();
             for i in 0..g.links.len() {
                 let l = &g.links[i];
-                if !owner_up || !l.via_owner || l.sess.state() != State::Suspended || l.sess.remote() > mine || now < l.t2_at + RETRY_MS {
+                // Over Tor the dialler redials by itself (§28.5): no T2.
+                if !owner_up || !l.via_owner || l.sess.tor() || l.sess.state() != State::Suspended || l.sess.remote() > mine || now < l.t2_at + RETRY_MS {
                     continue;
                 }
                 let (inv, _) = ids();

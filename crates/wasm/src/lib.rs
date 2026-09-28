@@ -945,7 +945,7 @@ impl App {
     pub fn room_invite(&self, observer: bool, ttl_s: u32) -> u32 {
         match room::invite(&self.inner, observer, ttl_s) {
             Ok((id, privacy)) => {
-                rtc::start(self.inner.clone(), id, privacy, rtc::Step::Offer);
+                room::start_offer(&self.inner, id, privacy);
                 0
             }
             Err(e) => status(Err(e)),
