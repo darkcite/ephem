@@ -40,7 +40,7 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 | Built | **MVP-1 feature-complete, 41/41 end-to-end checks in Chromium** (APP-E2E, §24.2): landing page; `/app/` PWA; temporary or saved identity (encrypted key file, one identity per tab); invite → answer by QR (camera scanner in wasm), link or paste, hand-off between tabs; Noise KK; SAS policy; 1:1 chat with pending queue and ticks 🕓 ✓ ✓✓, typing, reply, edit, delete, self-destruct timers; T3 reconnect codes; diagnostics with relay rejection; "what your peer sees" panel and IPv6 warning; version-pinned service worker, SRI, offline start. 188 KB gzip wasm. 33 native unit tests |
 | Built (MVP-2) | **MVP-2 feature-complete, 18/18 end-to-end checks** (APP-E2E-MVP2, §24.2): up to 8 remembered identities (IndexedDB) with sign-in from the list; nicknames; contacts in the key file (verified by SAS, SAS skipped next time, impersonation warning, backup-out-of-date notice); reactions; identity transfer to another device over P2P; in-band ICE restart T1 (perfect negotiation, triggered by a stuck path, a network change or by hand); full diagnostics. 40 native unit tests |
 | Built (MVP-3) | **Rooms, 18/18 end-to-end checks with four browsers** (APP-E2E-ROOM, §24.2): owner-controlled rooms of up to 16 with member and **observer** roles; the owner-signed room state (Ed25519) verified by every member; introductions through the owner with **sealed** signalling (the owner forwards what it cannot read); full mesh; one sequence number per sender on every link; sender labels, replies across members, delivery "✓ k/N"; owner moderation and room timer; removal, leaving, disposal; **T2** (lost member links come back by themselves through the owner). 225 KB gzip wasm. 46 native unit tests |
-| Next | 1. Merge to `main`, make the repo public and switch on Pages (§23.1a, owner decision 2026-09-28). 2. Device runs of the room flow (S9: 16 links on iOS Safari). 3. In parallel, TOR-1 steps E3–E5 (gates G3, G4). Camera/QR work waits until Tor is in (owner decision) |
+| Next | 1. Tor mode: TOR-1 steps E3–E5 (gates G3, G4), then TOR-2… (§28, Appendix C). Work continues on the development branch; **merge to `main`, public repo and Pages only once Tor is fully implemented** (§23.1a, owner decision 2026-09-28). 2. Device runs of the room flow (S9: 16 links on iOS Safari). Camera/QR work waits until Tor is in (owner decision) |
 | Blocked on devices | S3, S6, S7, S9 (phones, real networks) |
 
 ---
@@ -1068,7 +1068,7 @@ Members     4 / 8  (links 5 / 6)
 
 ### 23.1a Release and site layout
 
-- **The repository stays private until MVP-1 is finished**, then it becomes public and GitHub Pages is switched on (Settings → Pages → Deploy from a branch, repository root; `.nojekyll` is already present).
+- **The repository stays private, and all work stays on the development branch, until Tor mode is fully implemented** (owner decision 2026-09-28, superseding "after MVP-1" and "after MVP-3"); then it is merged to `main`, made public and GitHub Pages is switched on (Settings → Pages → Deploy from a branch, repository root; `.nojekyll` is already present).
 - **Pages layout** (project site `https://<owner>.github.io/ephem/`):
 
   | Path | Content |
