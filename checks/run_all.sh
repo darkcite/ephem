@@ -8,6 +8,7 @@
 #   BROWSERS=chrome,webkit   engines to test (default). Options:
 #                chrome   = your installed Google Chrome (no download)
 #                chromium, firefox, webkit = Playwright builds (downloaded once; webkit = Safari's engine)
+#   FORCE_BROWSER_INSTALL=1   re-download Playwright engines even if cached
 #   SAFARI=1       also run the checks in your real Safari (macOS; opens a Safari tab, results collected automatically)
 #   NET=0          skip live-network checks (Snowflake, STUN, IPFS)
 #   E8=1           also run the 7-minute hidden-tab test (opens a visible Chrome window)
@@ -73,11 +74,30 @@ fi
 
 # ---------------------------------------------------------------- browsers
 BROWSERS="${BROWSERS:-chrome,webkit}"
-say "Installing JS dependencies (npm)"
-( cd "$ROOT" && npm install --no-audit --no-fund 2>&1 ) | tee "$OUT/npm.log" | tail -3
+# npm: only when node_modules is missing or older than package.json / package-lock.json
+if [ ! -d "$ROOT/node_modules/playwright" ] || [ "$ROOT/package.json" -nt "$ROOT/node_modules/.package-lock.json" ] \
+   || [ "$ROOT/package-lock.json" -nt "$ROOT/node_modules/.package-lock.json" ]; then
+  say "Installing JS dependencies (npm)"
+  ( cd "$ROOT" && npm install --no-audit --no-fund 2>&1 ) | tee "$OUT/npm.log" | tail -3
+else
+  echo "npm dependencies: up to date (skipped)"
+fi
+
+# Playwright engines: only those whose binary is not already in the Playwright cache
+# (~/Library/Caches/ms-playwright on macOS, ~/.cache/ms-playwright on Linux).
+# FORCE_BROWSER_INSTALL=1 re-installs anyway. 'chrome' is your installed Google Chrome: never downloaded.
 DL=""
 for b in $(echo "$BROWSERS" | tr ',' ' '); do
-  case "$b" in chromium|firefox|webkit) DL="$DL $b" ;; esac
+  case "$b" in
+    chromium|firefox|webkit)
+      if [ "${FORCE_BROWSER_INSTALL:-0}" = 1 ] || ! ( cd "$ROOT" && node -e "
+        const pw = require('playwright'), fs = require('fs');
+        process.exit(fs.existsSync(pw['$b'].executablePath()) ? 0 : 1);" 2>/dev/null ); then
+        DL="$DL $b"
+      else
+        echo "Playwright $b: already installed (skipped)"
+      fi ;;
+  esac
 done
 if [ -n "$DL" ]; then
   say "Downloading Playwright engines:$DL (one-time; progress below)"
