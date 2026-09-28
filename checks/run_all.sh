@@ -5,7 +5,8 @@
 # Usage:   ./checks/run_all.sh [label]
 #   label       free text stored with the results, e.g. "home-wifi" or "warp-on"
 # Env:
-#   BROWSERS=chrome,webkit   engines to test (default). Options:
+#   BROWSERS=chrome   engines to test (default: your installed Chrome only; Safari is covered by SAFARI=1
+#                     and the iPhone page). Options:
 #                chrome   = your installed Google Chrome (no download)
 #                chromium, firefox, webkit = Playwright builds (downloaded once; webkit = Safari's engine)
 #   FORCE_BROWSER_INSTALL=1   re-download Playwright engines even if cached
@@ -73,7 +74,7 @@ fi
 } > "$OUT/REPORT.md"
 
 # ---------------------------------------------------------------- browsers
-BROWSERS="${BROWSERS:-chrome,webkit}"
+BROWSERS="${BROWSERS:-chrome}"
 # npm: only when node_modules is missing or older than package.json / package-lock.json
 if [ ! -d "$ROOT/node_modules/playwright" ] || [ "$ROOT/package.json" -nt "$ROOT/node_modules/.package-lock.json" ] \
    || [ "$ROOT/package-lock.json" -nt "$ROOT/node_modules/.package-lock.json" ]; then
@@ -100,9 +101,16 @@ for b in $(echo "$BROWSERS" | tr ',' ' '); do
   esac
 done
 if [ -n "$DL" ]; then
-  say "Downloading Playwright engines:$DL (one-time; progress below)"
+  NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
+  if [ "$NODE_MAJOR" -gt 24 ]; then
+    echo "warning: Node $NODE_MAJOR is newer than this Playwright supports; its installer can hang after downloading."
+    echo "         If it does, use Node 22 LTS (brew install node@22) or drop those engines from BROWSERS."
+  fi
+  say "Downloading Playwright engines:$DL (one-time; progress below; gives up after 5 minutes)"
+  # macOS has no `timeout`; perl's alarm is available everywhere.
   # shellcheck disable=SC2086
-  ( cd "$ROOT" && npx --no-install playwright install $DL 2>&1 ) | tee "$OUT/playwright-install.log"
+  ( cd "$ROOT" && perl -e 'alarm shift; exec @ARGV' 300 npx --no-install playwright install $DL 2>&1 ) | tee "$OUT/playwright-install.log"
+  [ "${PIPESTATUS[0]}" = 0 ] || echo "warning: Playwright install did not finish; engines that are not installed will be skipped."
 fi
 
 # ---------------------------------------------------------------- S8 / TS3 raw STUN

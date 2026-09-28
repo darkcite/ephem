@@ -14,7 +14,7 @@ import * as b36 from 'multiformats/bases/base36';
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 const OUT = process.argv[2] || path.join(HERE, 'out', 'manual');
-const BROWSERS = (process.env.BROWSERS || 'chrome,webkit').split(',').filter(Boolean);
+const BROWSERS = (process.env.BROWSERS || 'chrome').split(',').filter(Boolean);
 const ENGINE = (k) => (k === 'chrome' ? 'chromium' : k);
 const NET = process.env.NET !== '0';
 const E8 = process.env.E8 === '1';
