@@ -1,5 +1,5 @@
 {
-  "name": "p2p-chat-checks",
+  "name": "ephem-checks",
   "private": true,
   "type": "module",
   "description": "Checkpoint suite for the P2P chat design (see docs/P2P-CHAT.md \u00a724).",

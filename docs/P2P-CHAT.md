@@ -1,6 +1,6 @@
 # Ephem: design, specification and plan
 
-**Ephem** is the product name of this ephemeral, backend-free, peer-to-peer messenger (decided 2026-09-28). The repository and its Pages path keep the working name `p2p-chat` until the owner renames them; if renamed to `ephem`, the site moves to `https://<owner>.github.io/ephem/`.
+**Ephem** is the product name of this ephemeral, backend-free, peer-to-peer messenger (decided 2026-09-28). The repository is `darkcite/ephem` (renamed from `p2p-chat`); the site is `https://<owner>.github.io/ephem/`.
 
 | Field | Value |
 |---|---|
@@ -8,7 +8,7 @@
 | Document | The **single** project document. It replaces the earlier SPEC, REVIEW, plans and spike notes (all merged here on 2026-09-28) |
 | Spec level | v0.6 (see the decision log, §25) |
 | Status | Architecture and protocol draft. MVP-1 is ready to start. **Gate G2 passed on desktop and iOS**; Tor mode and public channels are now gated only by G3–G4 (need TOR-1 code) (§23.3) |
-| Deployment | GitHub Pages, project site `https://<owner>.github.io/p2p-chat/` |
+| Deployment | GitHub Pages, project site `https://<owner>.github.io/ephem/` |
 | Runtime | Browser PWA. **Only our WASM app is built: no native programs (P10)** |
 | Implementation | Rust (edition 2024) → `wasm32-unknown-unknown` |
 | Transport | **Direct mode:** WebRTC DataChannel (SCTP / DTLS / ICE / UDP). **Tor mode** (opt-in, gated): a Tor client built into the WASM app, reaching Tor through Snowflake (§28) |
@@ -145,7 +145,7 @@ Application backend, WebSocket or HTTP signalling, TURN, chat relay, message dat
 ### 6.1 Workspace
 
 ```
-p2p-chat/
+ephem/
 ├── Cargo.toml                      # workspace; release: lto="fat", codegen-units=1, panic="abort", opt-level="s"|3
 ├── crates/
 │   ├── proto/                      # #![no_std] — zero-copy codecs, no alloc
@@ -442,7 +442,7 @@ Only UDP candidates with component 1 are carried.
 | Candidates (1 mDNS + 1 srflx-v4 + 1 srflx-v6) | 45 |
 | **Total** | **≈ 191 B** |
 | base64url, no padding | ≈ 255 characters |
-| Full link `https://<host>/p2p-chat/#i=` + payload | ≈ 290 characters, which is a QR of about version 12-M (byte mode) |
+| Full link `https://<host>/ephem/#i=` + payload | ≈ 290 characters, which is a QR of about version 12-M (byte mode) |
 
 - **No compression**: the payload is high-entropy.
 - **No multi-frame QR**: the worst case (8 IPv6 candidates) is about 300 B, which is about v15-M and still scans easily.
@@ -1046,7 +1046,7 @@ Members     4 / 8  (links 5 / 6)
 ### 23.1a Release and site layout
 
 - **The repository stays private until MVP-1 is finished**, then it becomes public and GitHub Pages is switched on (Settings → Pages → Deploy from a branch, repository root; `.nojekyll` is already present).
-- **Pages layout** (project site `https://<owner>.github.io/p2p-chat/`):
+- **Pages layout** (project site `https://<owner>.github.io/ephem/`):
 
   | Path | Content |
   |---|---|
@@ -1100,7 +1100,7 @@ NET=0 SKIP_ARTI=1 ./checks/run_all.sh quick   # offline, fast
 - **`SAFARI=1`** also runs the page in your real Safari, **including cross-engine S1** (Chrome ↔ Safari in both directions, exchanging only the minimal fields through a local mailbox).
 - **`ONLY=`** limits a run to some sections: `stun, gateways, browser, safari, iphone, sizes, argon2, arti`.
 - **iPhone while the repo is private:** `IPHONE=1` serves `checks/web/` from the laptop through a free Cloudflare quick tunnel (`brew install cloudflared`, no account), prints a QR code, and collects the results automatically. `S6_SECONDS` sets the S6 target (default 120 s).
-- **iPhone once the repo is public (G2, S6, S4):** open **https://darkcite.github.io/p2p-chat/checks/web/** in Safari. Tap **1** (automatic checks), **2** (S6: leave the app for about 60 s, then come back), **3** (S4: allow the camera), then **Share** or **Copy** the results. The page is `checks/web/` served by GitHub Pages from this branch (repo root, with `.nojekyll`). Refresh the test IPNS record in `checks/web/config.json` with `node checks/make_web_config.mjs`.
+- **iPhone once the repo is public (G2, S6, S4):** open **https://darkcite.github.io/ephem/checks/web/** in Safari. Tap **1** (automatic checks), **2** (S6: leave the app for about 60 s, then come back), **3** (S4: allow the camera), then **Share** or **Copy** the results. The page is `checks/web/` served by GitHub Pages from this branch (repo root, with `.nojekyll`). Refresh the test IPNS record in `checks/web/config.json` with `node checks/make_web_config.mjs`.
 - **Output:** `checks/out/<timestamp>-<label>/REPORT.md`, plus raw JSON and logs.
 
 ### 24.2 Checkpoint list and results
@@ -1125,7 +1125,7 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 | E1 | arti on `wasm32` (**G1**) | ✅ **Linux and macOS (arm64)**: arti 0.46.0, 16/16 crates, plus `arti-client` with onion client and service, ephemeral keystore, bridges, PT, rustls. Upstream has wasm stubs; `coarsetime` uses `performance.now()`. TLS: **ring** with `wasm32_unknown_unknown_js`. **Without the `compression` feature** (zstd/xz), **ring is the only C code**; it needs an LLVM clang with the WebAssembly backend (Linux clang; macOS `brew install llvm`). Extension point for Snowflake: `AbstractPtMgr` / `ChanMgr::set_pt_mgr` | 🤖 | §28 |
 | E2 | Snowflake from a browser (**G2**) | ✅ **Live:** Chrome 153, Safari 26.5, **Firefox 142** (macOS) and iPhone Safari (iOS 18.7) get a proxy answer from the broker and open a DataChannel to a volunteer proxy, through **both** the CDN URL (`1098762253.rsc.cdn77.org`, no domain fronting needed) and `snowflake-broker.torproject.net`. Rendezvous 0.7–4.8 s; DataChannel open 2–6 s after start; sometimes the first tries report no proxy available, so retry. Protocol: `POST /client`, body `1.0\n{"offer": <JSON SDP>, "nat": "unknown", "fingerprint": <bridge fp>}`; stack: WebRTC → encapsulation → KCP → smux. ⏳ iPhone | 🤖 | §28 |
 | E3–E7 | Turbotunnel, bootstrap, onion hosting, size, hardening | ⏳ needs TOR-1 code | — | G3, G4 |
-| E8 | Does a hidden desktop tab with an open DataChannel keep its timers? | ❌ **Safari 26.5 (macOS): throttled.** After 198 s hidden, the longest timer gap was **103 s**, even with an open DataChannel. ⏳ Chrome 153 and Firefox 142: the first run was invalid (a 1–2 s occlusion ended it early); the test now needs one continuous hidden period of ≥ 6 min, or reports FAIL immediately on a gap ≥ 30 s. **Consequences:** (1) Tor mode and channel hosting (§27, §28) cannot stay reachable from a background Safari tab, so the UI must say "keep this tab visible" there; (2) app-level PING timing must tolerate throttled peers (§12) | 🤖 (E8=1) / E8REAL=1 | §12, §27, §28.3 |
+| E8 | Does a hidden desktop tab with an open DataChannel keep its timers? | ✅ **Chrome 153: yes** (604 s hidden, max gap 2.0 s). ✅ **Firefox 142: yes** (611 s hidden, max gap 1.5 s). ❌ **Safari 26.5: no**, confirmed twice (198 s hidden → 103 s gap; 604 s hidden → **150 s gap**). **Consequences:** (1) Tor mode and channel hosting (§27, §28) stay reachable from a background tab in Chrome and Firefox, but **not in Safari**, where the UI says "keep this tab visible" and recommends Chrome or Firefox for channel owners; (2) app-level PING timing tolerates throttled peers (§12) | 🤖 (E8=1) / E8REAL=1 | §12, §27, §28.3 |
 | C-P1 | Gateways: trustless CAR with CORS | ✅ `trustless-gateway.link`: CAR served to Chrome, Safari and iPhone (119 874 B), CORS `*`. **Resolved:** `ipfs.io` and `dweb.link` answer trustless requests with a **301 redirect to `trustless-gateway.link` that has no CORS header**, so browsers refuse it. They are aliases, not independent gateways. **Default list: `trustless-gateway.link` only** (one operator: availability risk, §D.6.3) | 🤖 | App. D |
 | C-P2, C-P3, C-P5 | Two onions in one tab; loading 1 000 posts; OPFS quota | ⏳ after TOR-1 | — | App. D |
 | C-P4 | Republishing signed IPNS records; browser PUT | ✅ **Live:** Chrome, Safari and **iPhone** `PUT` a signed record to `delegated-ipfs.dev` (200), and `trustless-gateway.link` serves back the **identical 397-byte record**. Kubo `name put` also accepts third-party records (source) | 🤖 | App. D |
@@ -1300,7 +1300,7 @@ base-uri 'none'; form-action 'none'
   - timing correlation by a global observer;
   - that sessions are linked when a **saved** identity is reused, because its onion address stays the same.
 - **iOS:** reachable **only while the app is in the foreground**. In the background, Snowflake and all circuits pause. On return, Tor re-attaches (warm start from the IndexedDB cache) and contacts can dial again.
-- **Desktop Safari:** hidden tabs are throttled heavily (E8: timer gaps of about 100 s after 3 min), so Tor circuits and Snowflake keep-alives in a background Safari tab are unreliable. The UI shows "Keep this tab visible to stay reachable via Tor" in Safari. Chrome and Firefox: ⏳ E8.
+- **Desktop Safari:** hidden tabs are throttled heavily (E8: timer gaps of 103–150 s), so Tor circuits and Snowflake keep-alives in a background Safari tab are unreliable. The UI shows "Keep this tab visible to stay reachable via Tor" in Safari. **Chrome and Firefox are not throttled** with an open DataChannel (E8: max gap ≤ 2 s over 10 min), so background tabs there stay reachable.
 - **Censored networks:** where the broker and the AMP cache are blocked, Tor mode is unavailable (no domain fronting in browsers, and nothing native, P10).
 
 ### 28.9 Gates (details in Appendix C)
@@ -1566,7 +1566,7 @@ Deleting a post rewrites it with `deleted = true` and an empty body. Older copie
 #### D.6.1 Channel link
 
 ```
-https://<owner>.github.io/p2p-chat/channel.html#c=<ipns-name>&o=<channel-onion>[&m=<mirror-onion>…]
+https://<owner>.github.io/ephem/channel.html#c=<ipns-name>&o=<channel-onion>[&m=<mirror-onion>…]
 ```
 
 - The IPNS name is the channel's identity. The onion addresses are **hints**, because everything is verified against the IPNS key.

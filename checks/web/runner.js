@@ -137,7 +137,7 @@
   $('s4').onclick = s4;
   $('e8').onclick = e8;
   $('copy').onclick = async () => { await navigator.clipboard.writeText(text()); log('Copied.'); };
-  $('share').onclick = () => navigator.share ? navigator.share({ title: 'p2p-chat checks', text: text() }) : log('Share not available; use Copy.');
+  $('share').onclick = () => navigator.share ? navigator.share({ title: 'Ephem checks', text: text() }) : log('Share not available; use Copy.');
   $('finish').onclick = async () => { await send(true); log(cfg.resultUrl ? 'Results sent to the laptop.' : 'No laptop connected: use Copy or Share.'); };
   for (const id of ['s6', 's4', 'finish', 'e8']) $(id).hidden = !cfg.interactive;
   // ?mode=e8: dedicated E8 page: arm immediately, hide everything else.

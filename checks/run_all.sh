@@ -241,7 +241,7 @@ cat >> "$OUT/REPORT.md" <<'EOF'
 |---|---|---|
 | TS3 | Run this script twice: `./checks/run_all.sh warp-off`, then with Cloudflare WARP (or your VPN) on: `./checks/run_all.sh warp-on`. Compare the S8 tables | With the VPN on, every IPv4 **and** IPv6 address shown belongs to the VPN, not to your ISP |
 | S3 | Two devices in a chat (once MVP-1 exists); switch one device from Wi-Fi to mobile data | Recorded per browser: does the chat recover without a new code (T0)? |
-| G2, S6, S4 (iPhone) | Open https://darkcite.github.io/p2p-chat/checks/web/ in Safari on the iPhone: tap 1 (checks), 2 (S6: leave for ~60 s, come back), 3 (S4 camera), then Share/Copy the results | E2 rows PASS (gate G2 on iOS); S6 PASS after ≥ 60 s in the background |
+| G2, S6, S4 (iPhone) | Open https://darkcite.github.io/ephem/checks/web/ in Safari on the iPhone: tap 1 (checks), 2 (S6: leave for ~60 s, come back), 3 (S4 camera), then Share/Copy the results | E2 rows PASS (gate G2 on iOS); S6 PASS after ≥ 60 s in the background |
 | S7 | Desktop: open an answer link in a new tab while the inviting tab is open | The answer is handed to the inviting tab and the new tab closes |
 | S9 | iPhone: a room with 15 peers for 10 minutes | No reload or memory kill; battery use recorded |
 | E3–E7 | Snowflake Turbotunnel, arti bootstrap, onion hosting in WASM | Needs the TOR-1 implementation; not runnable yet |
