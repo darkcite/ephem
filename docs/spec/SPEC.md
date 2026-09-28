@@ -2,13 +2,13 @@
 
 | Field          | Value |
 |----------------|-------|
-| Version        | 0.5 |
-| Status         | Architecture / Protocol Draft. Owner decisions up to v0.5 applied (§25); open question in §25.4 |
-| Supersedes     | v0.4 (answers to QN2–QN12, contact cards, Tor-only channel owners, embedded-Tor research), v0.3, v0.2, v0.1 (rationale in [`REVIEW-v0.1.md`](REVIEW-v0.1.md)) |
+| Version        | 0.6 |
+| Status         | Architecture / Protocol Draft. Owner decisions up to v0.6 applied (§25). **Only our WASM app is built: no native companion programs** (§2 P10). Spike results: [`../spikes/RESULTS-2026-09-28.md`](../spikes/RESULTS-2026-09-28.md) |
+| Supersedes     | v0.5 (companion removed; Tor and hidden channel owners are WASM-only; spike results applied), v0.4, v0.3, v0.2, v0.1 (rationale in [`REVIEW-v0.1.md`](REVIEW-v0.1.md)) |
 | Deployment     | GitHub Pages, project site `https://<owner>.github.io/p2p-chat/` |
 | Runtime        | Browser PWA |
 | Implementation | Rust (edition 2024) → `wasm32-unknown-unknown` |
-| Transport      | **Direct mode:** WebRTC DataChannel (SCTP / DTLS / ICE / UDP). **Tor mode** (opt-in, desktop): onion-to-onion streams through a local companion (§28) |
+| Transport      | **Direct mode:** WebRTC DataChannel (SCTP / DTLS / ICE / UDP). **Tor mode** (opt-in, research-gated): a Tor client built into the WASM app, reaching Tor through Snowflake (§28) |
 | Signalling     | Two-way out-of-band exchange (QR, link, paste, share). **No signalling server** |
 | Relay          | None in direct mode: TURN is disabled locally and relay candidates are rejected from the peer. Tor mode routes through the volunteer Tor network, by explicit user choice only (§28) |
 | STUN           | Public, free, no registration: Google and Cloudflare by default; the list is user-editable (§9.3). Needed in practice for any connection that is not on the same LAN |
@@ -57,6 +57,7 @@ There is no server, relay, database or history. Network paths can be thrown away
 | P7 | **No history.** Private chats are RAM only, and keys are zeroized when the session ends. This applies to **every private chat, with no exception**. The only exception in the whole system is a separate, opt-in feature: **public channels** (§27), which are public, permanent publications and never contain private-chat data. |
 | P8 | **Failure is explicit.** No silent relay, whether a server or a peer. If there is no direct path, the application says so. There is never a silent switch between direct mode and Tor mode, in either direction. |
 | P9 | **Trust is explicit.** Security is never stronger than (a) the integrity of the out-of-band channel and (b) the code served by the static host. The UI and documentation MUST say so. |
+| P10 | **Only our WASM.** The project builds and ships only the static web app (HTML, JS glue, WASM). No native companion, helper, daemon, extension or app-store build. A feature that cannot be done inside the browser sandbox is not built. Users MAY run third-party software on their own (a VPN, WARP, Kubo), but the app never requires it. |
 
 ## 3. Layers
 
@@ -114,7 +115,7 @@ Application backend, WebSocket or HTTP signalling, TURN, chat relay, message dat
 | Static host / repository owner | Serving honest code | CSP, SRI, a service worker that pins the version and asks before updating (§17), reproducible builds with published hashes |
 | Browser and OS | Everything | Out of scope (§21) |
 | STUN operator | Nothing about security. It learns metadata only | Configurable list, and a LAN-only mode |
-| `p2pchat-companion` (Tor mode only) | Moving opaque encrypted bytes, and hosting the onion service | It never sees plaintext (Noise is end-to-end in the PWA). Reproducible builds, hashes published in the Release, and a local token plus Origin check (§28.3) |
+| Embedded Tor client (Tor mode only, §28) | Correct Tor protocol behaviour, built from upstream arti with a small patch set | Our code; reviewed and fuzzed like the rest of the WASM (§28.9) |
 
 ## 6. Architecture: sans-IO core
 
@@ -144,7 +145,7 @@ p2p-chat/
 │   │   ├── room.rs                 # membership, dedup high-water marks (§14)
 │   │   ├── sendq.rs                # fixed ring send queue + backpressure (§11.5)
 │   │   ├── messages.rs             # message table: TTL, edit, delete, replies, reactions, ticks (§11.7)
-│   │   ├── transport.rs            # Transport = Direct(WebRTC) | Tor(companion), mode guard (§28.5)
+│   │   ├── transport.rs            # Transport = Direct(WebRTC) | Tor(embedded), mode guard (§28.5)
 │   │   └── io.rs                   # Input / Action enums, ActionSink (fixed capacity)
 │   └── wasm/                       # the ONLY crate touching the browser
 │       ├── lib.rs                  # #[wasm_bindgen] ChatApp facade
@@ -153,8 +154,8 @@ p2p-chat/
 │       ├── qr.rs                   # qrcode (encode) + BarcodeDetector / rqrr (decode)
 │       ├── share.rs                # Web Share, clipboard, BroadcastChannel hand-off
 │       ├── keystore.rs             # file download/upload + IndexedDB slots (≤ 8) + Web Locks (§7.2)
-│       └── tor.rs                  # WebSocket client to p2pchat-companion (§28.3)
-├── companion/                      # native binary (Linux/macOS/Windows): embedded arti + 127.0.0.1 WebSocket bridge (§28)
+│       └── tor/                    # embedded Tor (§28): arti runtime shim, Snowflake transport, IndexedDB dir cache
+│                                   # built as a separate lazily-loaded WASM module (tor_bg.wasm), used only by tor.html
 ├── web/                            # static assets (§4.1)
 ├── tests/                          # native replay/fuzz of proto + core
 └── docs/spec/                      # this document
@@ -257,7 +258,7 @@ The app opens on a sign-in screen:
 | TLV | Section | Value |
 |---|---|---|
 | 0x01 | CONTACTS | `u16 count` (≤ 256), then one entry per contact (§7.5) |
-| 0x02 | COMPANION | `token [u8; 32]`, `port u16` (Tor mode, §28.3) |
+| 0x02 | — | Reserved (was the companion token in v0.5) |
 | 0x03 | KUBO | `u8 len` + RPC token (only for followers who mirror to IPFS, public channels plan §7.2) |
 | 0x04 | CARD | `card_secret [u8; 16]`, `expires_at u32` (0 = never): the secret in your current contact card (§7.5) |
 | other | — | Kept unchanged on re-save, so newer app versions can add sections |
@@ -820,11 +821,11 @@ Wallet authentication is not in any current phase (§7.4). Identity comes only f
 
 ```
 default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self';
-img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:47431; worker-src 'self';
+img-src 'self' data: blob:; connect-src 'self'; worker-src 'self';
 manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'
 ```
 
-- `connect-src 'self' ws://127.0.0.1:47431` stops `fetch` or XHR from sending data anywhere. The **only** exception is the local companion's fixed WebSocket port, used in Tor mode (§28.3). It is loopback only, and useless without the companion's token.
+- `connect-src 'self'` stops `fetch` or XHR from sending data anywhere. Tor sessions run on a separate page, `tor.html`, with its own CSP (§28.6).
 - **Limit:** browsers do not reliably enforce the CSP `webrtc` directive, so peer connections cannot be restricted by CSP.
 
 ### 17.4 Mobile lifecycle
@@ -894,8 +895,8 @@ Members     4 / 8  (links 5 / 6)
 | 0x0033 | E_CONNECTION_TIMEOUT | |
 | 0x0034 | E_NETWORK_CHANGED | |
 | 0x0035 | E_PEER_OFFLINE | |
-| 0x0036 | E_TOR_UNAVAILABLE | Tor mode: the companion is not running, not bootstrapped, or cannot reach the onion. There is **no fallback** to direct mode |
-| 0x0037 | E_COMPANION_AUTH | Tor mode: wrong companion token or Origin |
+| 0x0036 | E_TOR_UNAVAILABLE | Tor mode: the embedded Tor client cannot bootstrap (Snowflake broker or proxies unreachable) or cannot reach the onion. There is **no fallback** to direct mode |
+| 0x0037 | — | Reserved (was E_COMPANION_AUTH in v0.5) |
 | 0x0040 | E_PROTOCOL_MISMATCH | |
 | 0x0041 | E_MESSAGE_TOO_LARGE | |
 | 0x0042 | E_BACKPRESSURE | Send queue or pending ring is full |
@@ -960,7 +961,7 @@ Members     4 / 8  (links 5 / 6)
 | Out-of-band channel MITM (messenger) | Swaps invite and answer | SAS comparison on another channel |
 | Malicious peer | Fake identity, injection, replay, joining, abuse of membership, relay candidates | Keys pinned by the invite, AEAD with strict nonces, owner-only admission and MLS commits, relay filtering |
 | Thief of a key file | Offline passphrase guessing; this also exposes the contacts list | Argon2id. The UI enforces a minimum passphrase strength |
-| Local process (Tor mode) | Connects to the companion's loopback port | 32-byte token, Origin check, and it cannot decrypt Noise traffic |
+| Snowflake proxy / broker (Tor mode) | Sees your IP and that you use Snowflake; a malicious proxy can drop traffic | Tor's own encryption and circuit verification inside WASM; proxy rotation (Turbotunnel keeps the session across proxies) |
 | Static host | Serves altered code | SRI, a service worker that pins the version and asks before updating, reproducible builds |
 | STUN operator | Learns IPs and timing | Configurable list, LAN-only mode |
 | Browser extension or device | Full access | Out of scope |
@@ -997,7 +998,7 @@ Members     4 / 8  (links 5 / 6)
 | Zero-copy networking | §11.6 lists the unavoidable copies |
 | SIMD | `-C target-feature=+simd128`, supported by all target browsers. **AVX2 is not available in WASM** |
 | Thread pinning, NUMA, lock-free SPSC across threads | **Not applicable.** WASM here is single-threaded: Pages cannot send COOP/COEP headers, so there is no `SharedArrayBuffer`. The design is single-writer by construction |
-| Raw sockets, io_uring, RDMA, kernel bypass | **Not applicable** in a browser sandbox. The native `companion` is I/O glue on the cold path (Tor latency is hundreds of ms), built with the same release profile and no logging in release |
+| Raw sockets, io_uring, RDMA, kernel bypass | **Not applicable** in a browser sandbox. Nothing native is built (P10) |
 | crossbeam bounded channels | **Not applicable** (single thread). Fixed rings in `core` instead |
 | Build profile | `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`; `wasm-opt -O3` (or `-Oz` if binary size wins, decided by spike S5) |
 
