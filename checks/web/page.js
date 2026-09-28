@@ -4,6 +4,13 @@
 window.C = (() => {
   const st = { pc: null, dc: null, got: [] };
 
+  // Every network request is bounded: a stalled connection must never hang a check.
+  async function fetchT(url, opts = {}, ms = 15000) {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+    try { const r = await fetch(url, { ...opts, signal: ctl.signal }); const body = new Uint8Array(await r.arrayBuffer()); return { r, body }; }
+    finally { clearTimeout(t); }
+  }
+
   // ---------- SDP minimal-field extraction and template rebuild (S1, S2) ----------
   function extract(sdp) {
     const g = (re) => (sdp.match(re) || [])[1];
@@ -198,9 +205,9 @@ window.C = (() => {
       });
       const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 30000);
       const resp = await fetch(new URL('client', brokerUrl).toString(), { method: 'POST', body, signal: ctl.signal });
-      clearTimeout(to);
       out.httpStatus = resp.status; // a readable response proves the broker's CORS policy allows this origin
       const txt = await resp.text();
+      clearTimeout(to);
       out.steps.push(`broker responded ${resp.status} after ${ms()} ms`);
       let j = null; try { j = JSON.parse(txt); } catch (_) { out.brokerBody = txt.slice(0, 200); }
       if (!j || !j.answer) { out.error = (j && j.error) || 'no answer'; return out; }
@@ -219,8 +226,7 @@ window.C = (() => {
   // ---------- C-P1 / C-P4: IPFS gateways and delegated IPNS publishing ----------
   async function gwCar(gw, cid) {
     try {
-      const r = await fetch(`${gw}/ipfs/${cid}?format=car&dag-scope=entity`, { headers: { Accept: 'application/vnd.ipld.car' } });
-      const b = new Uint8Array(await r.arrayBuffer());
+      const { r, body: b } = await fetchT(`${gw}/ipfs/${cid}?format=car&dag-scope=entity`, { headers: { Accept: 'application/vnd.ipld.car' } });
       return { gw, status: r.status, type: r.headers.get('content-type'), bytes: b.length, ok: r.ok && /car/.test(r.headers.get('content-type') || '') };
     } catch (e) { return { gw, error: `${e.name}: ${e.message}` }; }
   }
@@ -228,15 +234,14 @@ window.C = (() => {
   async function ipnsPut(base, name, recordB64) {
     try {
       const rec = Uint8Array.from(atob(recordB64), (c) => c.charCodeAt(0));
-      const r = await fetch(`${base}/routing/v1/ipns/${name}`, { method: 'PUT', headers: { 'Content-Type': 'application/vnd.ipfs.ipns-record' }, body: rec });
-      return { base, status: r.status, ok: r.ok, body: (await r.text()).slice(0, 160) };
+      const { r, body } = await fetchT(`${base}/routing/v1/ipns/${name}`, { method: 'PUT', headers: { 'Content-Type': 'application/vnd.ipfs.ipns-record' }, body: rec });
+      return { base, status: r.status, ok: r.ok, body: new TextDecoder().decode(body).slice(0, 160) };
     } catch (e) { return { base, error: `${e.name}: ${e.message}` }; }
   }
 
   async function ipnsGet(gw, name, recordB64) {
     try {
-      const r = await fetch(`${gw}/ipns/${name}?format=ipns-record`, { headers: { Accept: 'application/vnd.ipfs.ipns-record' } });
-      const b = new Uint8Array(await r.arrayBuffer());
+      const { r, body: b } = await fetchT(`${gw}/ipns/${name}?format=ipns-record`, { headers: { Accept: 'application/vnd.ipfs.ipns-record' } });
       const want = atob(recordB64);
       const same = b.length === want.length && b.every((x, i) => x === want.charCodeAt(i));
       return { gw, status: r.status, bytes: b.length, sameRecord: same, ok: r.ok && same };

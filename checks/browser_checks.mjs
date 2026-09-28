@@ -41,6 +41,19 @@ await new Promise((r) => srv.listen(0, '127.0.0.1', r));
 const ORIGIN = `http://127.0.0.1:${srv.address().port}`;
 
 const results = [];
+const step = (m) => console.log(`  … ${m}`);
+function writeOut() {
+  fs.writeFileSync(path.join(OUT, 'browser.json'), JSON.stringify(results, null, 1));
+  const md = ['| ID | Check | Result | Details |', '|---|---|---|---|',
+    ...results.map((r) => `| ${r.id} | ${r.name} | ${r.status} | ${(typeof r.details === 'string' ? r.details : JSON.stringify(r.details)).replace(/\|/g, '\\|').slice(0, 400)} |`)];
+  fs.writeFileSync(path.join(OUT, 'browser.md'), md.join('\n') + '\n');
+}
+// Whole-run limit: never hang; keep whatever finished.
+const WATCHDOG_MIN = Number(process.env.WATCHDOG_MIN || (process.env.E8 === '1' ? 30 : 20));
+setTimeout(() => {
+  rec('ENV', 'watchdog', 'FAIL', `browser checks exceeded ${WATCHDOG_MIN} min; partial results written`);
+  writeOut(); process.exit(3);
+}, WATCHDOG_MIN * 60 * 1000).unref();
 const rec = (id, name, status, details) => { results.push({ id, name, status, details }); console.log(`[${status}] ${id} ${name}: ${typeof details === 'string' ? details : JSON.stringify(details)}`); };
 
 function launchOpts(kind, { camera } = {}) {
@@ -73,6 +86,7 @@ for (const b of BROWSERS) {
 
 // ---------- S2: code sizes per browser ----------
 for (const b of avail) {
+  step(`S2 ${b}: gathering an offer`);
   try {
     const { browser, page } = await openPage(b);
     const f = await page.evaluate(() => C.offer([]));
@@ -84,6 +98,7 @@ for (const b of avail) {
 
 // ---------- S1: template-rebuilt SDP, full offerer x answerer matrix ----------
 for (const a of avail) for (const b of avail) {
+  step(`S1 ${a} → ${b}: connecting (up to 20 s)`);
   let A, B;
   try {
     A = await openPage(a); B = await openPage(b);
@@ -108,6 +123,7 @@ for (const a of avail) for (const b of avail) {
 // a FAIL here is a hint, not proof, that two peers behind this NAT/VPN cannot connect.
 if (NET) {
   const k = avail[0];
+  step(`S1 ${k} via srflx only: gathering via STUN and connecting (up to 30 s)`);
   let A, B;
   try {
     A = await openPage(k); B = await openPage(k);
@@ -131,6 +147,7 @@ for (const b of avail) {
   const scen = [['no permission', {}, null], ['permission granted, camera never opened', { grant: true, camera: true }, null],
                 ['camera opened and stopped', { grant: true, camera: true }, false], ['camera live', { grant: true, camera: true }, true]];
   for (const [name, opts, cam] of scen) {
+    step(`S4 ${b}: ${name}`);
     if (b === 'firefox' && name.startsWith('permission granted')) { rec('S4', `${b}: ${name}`, 'N/A', 'Firefox has no persistent grant in this harness'); continue; }
     let P;
     try {
@@ -147,6 +164,7 @@ for (const b of avail) {
 if (NET) {
   // ---------- S8 / TS3 / TS4: public addresses a peer would see ----------
   for (const b of avail) {
+    step(`S8 ${b}: gathering srflx via STUN (up to 8 s)`);
     let P;
     try {
       P = await openPage(b);
@@ -160,6 +178,7 @@ if (NET) {
 
   // ---------- E2 / gate G2: live Snowflake rendezvous + DataChannel to a proxy ----------
   for (const b of avail) for (const broker of SNOWFLAKE_BROKERS) {
+    step(`E2 ${b} via ${new URL(broker).host}: broker + proxy DataChannel (up to 3 tries × ~60 s)`);
     let P;
     try {
       P = await openPage(b);
@@ -179,6 +198,7 @@ if (NET) {
     try {
       P = await openPage(b);
       for (const gw of GATEWAYS) {
+        step(`C-P1 ${b}: CAR from ${new URL(gw).host}`);
         const r = await P.page.evaluate(([g, c]) => C.gwCar(g, c), [gw, TEST_CID]);
         rec('C-P1', `${b} CAR from ${new URL(gw).host}`, r.ok ? 'PASS' : 'FAIL', r);
       }
@@ -187,6 +207,7 @@ if (NET) {
   }
 
   // ---------- C-P4: browser publishes a signed IPNS record, gateways serve it back ----------
+  step('C-P4: PUT a signed IPNS record, then read it back (up to ~60 s)');
   try {
     const priv = await keys.generateKeyPair('Ed25519');
     const name = pid.peerIdFromPrivateKey(priv).toCID().toString(b36.base36);
@@ -240,7 +261,5 @@ if (E8 && e8kind) {
 }
 
 srv.close();
-fs.writeFileSync(path.join(OUT, 'browser.json'), JSON.stringify(results, null, 1));
-const md = ['| ID | Check | Result | Details |', '|---|---|---|---|',
-  ...results.map((r) => `| ${r.id} | ${r.name} | ${r.status} | ${(typeof r.details === 'string' ? r.details : JSON.stringify(r.details)).replace(/\|/g, '\\|').slice(0, 400)} |`)];
-fs.writeFileSync(path.join(OUT, 'browser.md'), md.join('\n') + '\n');
+writeOut();
+process.exit(0);
