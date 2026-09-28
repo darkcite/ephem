@@ -2,17 +2,18 @@
 
 | Field          | Value |
 |----------------|-------|
-| Version        | 0.2 |
-| Status         | Architecture / Protocol Draft. Open questions in §25 |
-| Supersedes     | v0.1. The rationale for every change is in [`REVIEW-v0.1.md`](REVIEW-v0.1.md) |
-| Deployment     | Static host (GitHub Pages or equivalent) |
+| Version        | 0.3 |
+| Status         | Architecture / Protocol Draft. Owner decisions applied (§25) |
+| Supersedes     | v0.2 (owner decisions), v0.1 (the rationale for every change is in [`REVIEW-v0.1.md`](REVIEW-v0.1.md)) |
+| Deployment     | GitHub Pages, project site `https://<owner>.github.io/p2p-chat/` |
 | Runtime        | Browser PWA |
 | Implementation | Rust (edition 2024) → `wasm32-unknown-unknown` |
 | Transport      | WebRTC DataChannel (SCTP / DTLS / ICE / UDP) |
 | Signalling     | Two-way out-of-band exchange (QR, link, paste, share). **No signalling server** |
 | Relay          | None. TURN is disabled locally and relay candidates are rejected from the peer |
-| STUN           | Third-party, user-configurable. Needed in practice for any connection that is not on the same LAN (§9.3) |
-| Persistence    | None (RAM only) |
+| STUN           | Public, free, no registration: Google and Cloudflare by default; the list is user-editable (§9.3). Needed in practice for any connection that is not on the same LAN |
+| Persistence    | No messages, ever. The identity key is saved only if the user chooses to (encrypted, §7.3) |
+| Targets        | Desktop Chrome, Edge, Firefox and Safari; iOS Safari, both as a tab and as an installed PWA (§17.5) |
 
 Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in RFC 2119.
 
@@ -63,7 +64,7 @@ There is no server, relay, database or history. Network paths can be thrown away
 +------------------------------------------------+
 | 5 Application   rooms, members, messages, UI   |  Rust (core)       + JS (DOM only)
 | 4 Crypto        Noise KK (1:1), MLS (groups),  |  Rust (crypto)
-|                 SAS, wallet binding            |
+|                 SAS, identity key file         |
 | 3 P2P protocol  frames, sequencing, recovery,  |  Rust (proto, core)
 |                 peer-relayed signalling        |
 | 2 WebRTC        PC, DataChannel, ICE, stats    |  Browser, driven by Rust (wasm via web-sys)
@@ -95,8 +96,7 @@ Only a static host is required:
 
 | Service | Purpose | What it learns | Carries chat? |
 |---|---|---|---|
-| STUN (user-configurable list) | Discover server-reflexive (srflx) and global IPv6 candidates | The public IP and port of each peer, and when they connect | **No** |
-| EVM RPC (MVP-2, only if ERC-1271 is enabled, Q5) | Verify smart-contract wallet signatures | The wallet address being checked | **No** |
+| STUN (default list in §9.3, user-editable) | Discover server-reflexive (srflx) and global IPv6 candidates | The public IP and port of each peer, and when they connect | **No** |
 
 ### 4.3 Forbidden
 
@@ -127,10 +127,10 @@ p2p-chat/
 │   │   ├── b64url.rs               # base64url codec into caller-provided buffers
 │   │   └── error.rs                # ErrorCode (u16, §19)
 │   ├── crypto/
-│   │   ├── identity.rs             # X25519 static key, PeerId, display handle
+│   │   ├── identity.rs             # 32-byte seed → X25519 static + Ed25519 signing keys, PeerId, display handle
+│   │   ├── keyfile.rs              # encrypted identity export/import (Argon2id + XChaCha20-Poly1305, §7.3)
 │   │   ├── noise.rs                # Noise_KK session wrapper (snow), in-place encrypt/decrypt
 │   │   ├── sas.rs                  # short authentication string from handshake hash
-│   │   ├── wallet.rs               # (MVP-2) SIWE/EIP-191 binding + k256 ecrecover
 │   │   └── mls.rs                  # (MVP-3) openmls group wrapper
 │   ├── core/                       # pure deterministic state machines, no wasm-bindgen
 │   │   ├── session.rs              # per-peer connection FSM (§12)
@@ -144,7 +144,7 @@ p2p-chat/
 │       ├── stats.rs                # getStats → Diagnostics
 │       ├── qr.rs                   # qrcode (encode) + BarcodeDetector / rqrr (decode)
 │       ├── share.rs                # Web Share, clipboard, BroadcastChannel hand-off
-│       └── wallet.rs               # (MVP-2) EIP-1193 provider adapter
+│       └── keystore.rs             # file download/upload + optional IndexedDB slot for the encrypted identity
 ├── web/                            # static assets (§4.1)
 ├── tests/                          # native replay/fuzz of proto + core
 └── docs/spec/                      # this document
@@ -155,7 +155,8 @@ p2p-chat/
 ```rust
 pub enum Input<'a> {
     Tick,                                        // timer (driven by adapter, e.g. every 250 ms)
-    UserCreateInvite, UserApplyCode(&'a [u8]),   // decoded invite/answer/resume bytes
+    UserNewIdentity, UserImportIdentity { blob: &'a [u8], pass: &'a [u8] },
+    UserCreateInvite, UserApplyCode(&'a [u8], CodeSource), // decoded bytes; source = Scan | Link | Paste (§10.4)
     UserSend(&'a [u8]),                          // UTF-8 already in wasm rx/tx buffer
     RtcLocalDescription { conn: ConnId, ufrag: &'a [u8], pwd: &'a [u8], fp: &'a [u8; 32] },
     RtcLocalCandidate  { conn: ConnId, cand: CandidateBin },
@@ -194,24 +195,58 @@ impl Core {
 #[repr(C)] #[derive(Copy, Clone)] pub struct InviteId(pub [u8; 16]); // CSPRNG
 ```
 
-- The static key pair is generated when the app starts, stays in wasm memory only (never written to storage), and is zeroized on exit (`zeroize`).
-- `PeerId` is the public key itself. It is not hashed, and there is no second key in MVP-1/2.
+- An identity is a **32-byte seed**. Two keys are derived from it with domain-separated HKDF-BLAKE2s:
+  - `HKDF(seed, "p2pchat/x25519")` → the X25519 static key, used by Noise (§10.1);
+  - `HKDF(seed, "p2pchat/ed25519")` → the Ed25519 signing key, used for MLS credentials (MVP-3). It is sent to peers inside the Noise channel, so it is bound to the `PeerId`.
+- `PeerId` is the X25519 public key itself. It is not hashed.
+- While the app runs, the seed and the derived secret keys live only in wasm linear memory. They are zeroized on sign-out and on `pagehide`.
 - **Display handle:** `anon_` plus the first 6 hex digits of `BLAKE2s(PeerId)`. It is **not authentication**. Nicknames are free text that users choose, and are only ever shown inside the encrypted channel.
 - Rule: `PeerId ≠ IP ≠ port ≠ candidate ≠ RTCPeerConnection ≠ DTLS certificate`.
 
-### 7.2 Wallet binding (MVP-2)
+### 7.2 Sign-in ("login")
 
-- The wallet signs a SIWE (EIP-4361) message. The statement binds `PeerId`, `RoomId` and an expiry, and `nonce = BLAKE2s(RoomId ‖ PeerId ‖ InviteId)[..16]` in hex.
-- The binding is sent **only inside the Noise channel**. It is never placed in an invite.
-- EOA signatures are verified offline (EIP-191 plus `k256` ecrecover). ERC-1271 needs RPC and is optional (Q5).
-- The wallet key never signs network traffic. The static key stays the session key.
-- The UI MUST warn that a wallet address links sessions together.
+The app opens on a sign-in screen with three choices:
+
+| Choice | What happens | Privacy |
+|---|---|---|
+| **New temporary identity** (default) | A fresh seed from the CSPRNG. Nothing is saved; the identity is gone when the tab closes | Sessions cannot be linked to each other |
+| **New identity + save** | A fresh seed, then the user picks a passphrase and saves the encrypted key file (§7.3) | The same `PeerId` in every session: peers can recognise you and link your sessions. The UI MUST say so |
+| **Use saved identity** | The user loads the key file (or a copy kept on this device) and enters the passphrase | As above |
+
+There are no accounts and no server. "Login" only means unlocking a key the user holds.
+
+### 7.3 Encrypted identity key file
+
+Layout (little-endian), about 107 bytes in total:
+
+| Size | Field |
+|---|---|
+| 4 | magic `"P2PK"` |
+| 1 | `ver` = 1 |
+| 1 | `kdf` = 1 (Argon2id) |
+| 4 | KDF parameters: `u16 m_mib` (default 19), `u8 t` (default 2), `u8 p` (default 1) |
+| 16 | `salt` |
+| 24 | `nonce` |
+| 48 | `ciphertext` (32-byte seed plus a 16-byte tag) |
+| 1 + n | optional nickname (≤ 32 B), included as associated data (AAD) |
+
+- Encryption: Argon2id(passphrase, salt) gives a 32-byte key, used with XChaCha20-Poly1305. The header bytes are also authenticated as AAD. The Argon2id defaults are the OWASP minimum.
+- Save and load options:
+  1. **Download** it as `p2pchat-<handle>.p2pkey`, and load it back with a file picker. This is the reliable option on every target.
+  2. **Copy** it as base64url text (about 145 characters) that the user keeps in a password manager.
+  3. **Remember on this device**: keep the same encrypted blob in IndexedDB. The passphrase is still needed each time; it is never stored. **Limit:** Safari deletes storage written by scripts after 7 days without a visit, for sites used in a Safari tab (not for installed PWAs). Only option 1 or 2 is a real backup.
+- Each passphrase attempt (Argon2id) allocates about 19 MiB. This happens once, during sign-in, **before** the zero-allocation phase starts (§22).
+- Wrong passphrase or damaged file: `E_KEYFILE_INVALID`. There is no recovery: a lost file or passphrase means a lost identity.
+
+### 7.4 Wallet identity: deferred
+
+Wallet sign-in is removed from the MVP plan. When it comes back, the design in REVIEW A13 applies: the wallet signs a binding to the `PeerId`, the binding is only sent inside the encrypted channel, and WalletConnect is excluded.
 
 ## 8. Rendezvous
 
 ### 8.1 The exchange is always two-way
 
-Browser WebRTC cannot finish DTLS or ICE without the remote description (REVIEW R1). Every new pairwise link therefore needs exactly one **invite → answer** exchange. The first link is done out of band. Later links inside a room can be relayed through a peer (§14.3).
+Browser WebRTC cannot finish DTLS or ICE without the remote description (REVIEW R1). Every new pairwise link therefore needs exactly one **invite → answer** exchange. The first link is done out of band. Later links inside a room are signalled through the owner (§14.4).
 
 ```
 Alice (offerer)                                   Bob (answerer)
@@ -237,6 +272,8 @@ Alice (offerer)                                   Bob (answerer)
 | Remote | Link sent through the system share sheet or a messenger | Bob shares a link back. Alice taps it (the new tab forwards it to the owning tab through `BroadcastChannel`, §8.7) or pastes it |
 | Same device (testing) | Clipboard | Clipboard |
 
+**iOS:** `BarcodeDetector` is not available in Safari, so the in-app scanner decodes QR codes with the Rust `rqrr` crate from camera frames. A link or a QR scanned with the iOS Camera app always opens in a **Safari tab**, never in the installed PWA. Users of the installed PWA must therefore scan with the in-app scanner or paste the code. The UI MUST say this.
+
 ### 8.3 Binary layout (little-endian, `#[repr(C)]`-compatible, parsed in place)
 
 **Common header (4 bytes)**
@@ -245,7 +282,7 @@ Alice (offerer)                                   Bob (answerer)
 |---|---|---|---|
 | 0 | 1 | `ver` | Protocol major version = `1` |
 | 1 | 1 | `kind` | `1` = INVITE, `2` = ANSWER, `3` = RESUME_INVITE, `4` = RESUME_ANSWER |
-| 2 | 1 | `flags` | bit0 `LAN_ONLY`, bit1 `WALLET_REQUIRED` (MVP-2), bit2 `GROUP` (MVP-3). Other bits MUST be 0 |
+| 2 | 1 | `flags` | bit0 `LAN_ONLY`, bit1 `GROUP` (MVP-3). Other bits are reserved and MUST be 0 |
 | 3 | 1 | `n_cand` | 0..=8 |
 
 **INVITE / RESUME_INVITE body**
@@ -265,7 +302,7 @@ Alice (offerer)                                   Bob (answerer)
 
 Rules:
 
-- Nothing in these messages is secret in the key sense. There are no private keys and no wallet data. The messages are still **sensitive bootstrap material**: whoever answers first wins the link (§8.6).
+- Nothing in these messages is secret in the key sense. There are no private keys. The messages are still **sensitive bootstrap material**: whoever answers first wins the link (§8.6).
 - The invite is not signed. A self-signature adds nothing, because authenticity comes from the out-of-band channel and the SAS.
 - Parsers MUST reject any length outside the ranges above, unknown `ver`, unknown `kind`, non-zero reserved flag bits, and trailing bytes (`E_INVALID_INVITE`).
 
@@ -298,13 +335,13 @@ Only UDP candidates with component 1 are carried.
 - **No compression**: the payload is high-entropy.
 - **No multi-frame QR**: the worst case (8 IPv6 candidates) is about 300 B, which is about v15-M and still scans easily.
 - Fragment keys: `#i=` invite, `#a=` answer, `#r=` resume invite, `#q=` resume answer.
-- *Optional optimization*: uppercase Base32 in QR alphanumeric mode saves about one QR version. It needs a URL that is valid in uppercase, which means a custom domain (Q7). It is not in the MVP.
+- *Optional optimization*: uppercase Base32 in QR alphanumeric mode saves about one QR version. It needs a URL that is valid in uppercase. GitHub Pages project paths are case-sensitive, so this needs a custom domain. It is not planned.
 
 ### 8.6 Lifetime, single use and races
 
 - `expires_at = now + TTL`. The TTL defaults to 5 min and can be set from 1 to 30 min.
 - **Alice enforces** the expiry: she rejects an answer after `expires_at` with `E_EXPIRED_INVITE` and closes the connection. Bob's check is advisory, with ±120 s tolerance for clock skew.
-- An offer belongs to exactly one `RTCPeerConnection`, so **each invite is single-use by construction**. A second answer for a consumed `invite_id` gets `E_INVITE_CONSUMED`. To invite N people, Alice makes N invites (or uses §14.3).
+- An offer belongs to exactly one `RTCPeerConnection`, so **each invite is single-use by construction**. A second answer for a consumed `invite_id` gets `E_INVITE_CONSUMED`. To invite N people, Alice makes N invites (in a room, each joiner still gets an invite from the owner, §14.4).
 - Race: if a third party answers first, Alice connects to them. The SAS (§10.4) and the display of who is connected catch this.
 
 ### 8.7 URL and fragment hygiene
@@ -312,6 +349,7 @@ Only UDP candidates with component 1 are carried.
 - Codes travel **only in the URL fragment**, which browsers never send to the host.
 - On load, the app reads the fragment, runs `history.replaceState(null, '', '<base>/')`, and passes the bytes to the core.
 - If a tab opened from a link is not the owning tab, it posts the code on `BroadcastChannel('p2pchat-codes')`. It closes itself if the owning tab acknowledges within 500 ms. Otherwise it offers paste or scan.
+- **iOS:** a Safari tab and the installed PWA have separate storage, so `BroadcastChannel` cannot connect them. When there is no acknowledgement, the tab offers "Copy code", and the user pastes it into the app.
 - A clipboard write is followed by a best-effort clear of the clipboard 60 s later.
 
 ## 9. WebRTC configuration
@@ -344,7 +382,18 @@ Only UDP candidates with component 1 are carried.
 
 - Browsers hide host IPs behind mDNS (`<uuid>.local`). Without STUN, connectivity works **only on the same local link**, and that includes public IPv6 hosts.
 - A direct path over IPv6 across networks needs a **dual-stack STUN server** (one with an AAAA record). The srflx-v6 candidate it returns is the global address.
-- Default STUN list: see Q2. The list is editable in settings.
+- **Default STUN list.** These are public servers: free, no account, no key. They have no SLA, may rate-limit, and each one learns the user's public IP.
+
+  | Server | Operator | Default |
+  |---|---|---|
+  | `stun:stun.l.google.com:19302` | Google | yes |
+  | `stun:stun.cloudflare.com:3478` | Cloudflare | yes |
+  | `stun:stun1.l.google.com:19302` … `stun4` | Google | no (optional) |
+  | `stun:global.stun.twilio.com:3478` | Twilio | no (optional) |
+
+- The default has **two** servers from two operators. That covers one operator being down while keeping gathering fast: Chromium warns that five or more servers slow down discovery, and every extra server is one more operator that sees the user's IP.
+- The list is editable in settings, with a limit of 4 entries. Only `stun:` URLs are accepted; `turn:` and `turns:` are rejected (§9.2).
+- Whether each default server has an IPv6 (AAAA) address is checked in spike S8. A dual-stack server is needed for the direct IPv6 path.
 - **LAN-only mode**: no STUN, only mDNS host candidates, and the `LAN_ONLY` flag is set in the invite.
 
 ### 9.4 Candidate privacy modes
@@ -378,7 +427,7 @@ The builder filters by mode **regardless of what the browser exposes**.
 ### 10.2 Why two layers
 
 - DTLS protects the transport.
-- Noise gives: (a) identity that continues across new `RTCPeerConnection`s and DTLS certificates; (b) authentication that does not depend on the transport, for peer-relayed signalling (§14.3) and future transports; (c) a clear, pinned root for the SAS.
+- Noise gives: (a) identity that continues across new `RTCPeerConnection`s and DTLS certificates; (b) authentication that does not depend on the transport, for owner-relayed signalling (§14.4) and future transports; (c) a clear, pinned root for the SAS.
 - For chat, the cost of double encryption is negligible.
 
 ### 10.3 Groups (MVP-3)
@@ -391,12 +440,19 @@ MLS (RFC 9420) via `openmls`, compiled for `wasm32`. See §14.4 for ordering.
   - **6 decimal digits** = `u32::from_le_bytes([s[0], s[1], s[2], 0]) % 10^6` (24 bits, negligible bias);
   - **4 emoji**, one per byte of `s[3..7]`, from a fixed 256-entry table.
 - It is shown on both devices after the handshake.
-- **Remote exchange:** the UI prompts the users to compare the SAS on a *different* channel, such as a voice call. A user can mark the peer as **verified**. Unverified peers carry a persistent badge.
-- **In-person QR:** the SAS is optional, because the out-of-band channel is physically authenticated.
+- Both exchange scenarios are supported. The core decides the SAS policy from where the code came from (`CodeSource` in §6.2):
+
+  | How the code arrived (either side) | SAS policy |
+  |---|---|
+  | Both codes scanned with the in-app camera | Optional. The SAS is shown, but the link is treated as in person |
+  | At least one code opened from a link or pasted | **Prompted.** A full-width banner asks the users to compare the SAS on another channel, such as a voice call. The peer keeps an "unverified" badge until someone taps "Codes match" |
+
+- "Codes don't match" closes the link with `E_SAS_REJECTED` and shows a warning that the exchange may have been intercepted.
+- A saved identity (§7.2) does not skip the SAS, because the MVP keeps no contact list.
 
 ### 10.5 Primitives and randomness
 
-- Use RustCrypto crates only: `x25519-dalek`, `chacha20poly1305`, `blake2`, `zeroize`, `k256` (MVP-2). **No hand-written cryptographic primitives.**
+- Use RustCrypto crates only: `x25519-dalek`, `ed25519-dalek`, `chacha20poly1305` (including XChaCha20), `blake2`, `hkdf`, `argon2`, `zeroize`. **No hand-written cryptographic primitives.**
 - The CSPRNG is `getrandom` with the `wasm_js` backend, which calls `crypto.getRandomValues`.
 - WebCrypto is **not** on the protocol path: it is async-only and would split state between JS and Rust.
 
@@ -426,14 +482,13 @@ MLS (RFC 9420) via `openmls`, compiled for `wasm32`. See §14.4 for ordering.
 
 | `rtype` | Name | Body | Phase |
 |---|---|---|---|
-| 0x01 | HELLO | ver_min u8, ver_max u8, caps u32 bitset, max_msg u16, nick_len u8, nick | MVP-1 |
+| 0x01 | HELLO | ver_min u8, ver_max u8, caps u32 bitset, max_msg u16, sign_pk [u8; 32] (Ed25519, §7.1), nick_len u8, nick | MVP-1 |
 | 0x02 | CHAT | chat_seq u64, UTF-8 text (≤ 4 096 B) | MVP-1 |
 | 0x03 | ACK | chat_seq u64 (cumulative) | MVP-1 |
 | 0x04 | PING / 0x05 PONG | t_ms u64 | MVP-1 |
 | 0x06 | GOODBYE | ErrorCode u16 | MVP-1 |
 | 0x07 | REKEY | – | MVP-1 |
-| 0x10 | SIGNAL_OFFER / 0x11 SIGNAL_ANSWER | target conn / peer, AnswerBin-shaped body | MVP-2 (T1), MVP-3 (§14.3) |
-| 0x20 | WALLET_BIND | SIWE message + 65-byte signature | MVP-2 |
+| 0x10 | SIGNAL_OFFER / 0x11 SIGNAL_ANSWER | target conn / peer, AnswerBin-shaped body | MVP-2 (T1), MVP-3 (§14.4) |
 | 0x30… | ROOM_* / MLS_* | defined in MVP-3 | MVP-3 |
 
 Unknown `rtype` values are ignored if `rflags.bit0` (IGNORABLE) is set. Otherwise they cause `E_PROTOCOL_MISMATCH`.
@@ -450,7 +505,7 @@ Unknown `rtype` values are ignored if `rflags.bit0` (IGNORABLE) is set. Otherwis
 
 - Every code and frame carries `ver`.
 - If majors differ, the connection is closed with `E_PROTOCOL_MISMATCH`.
-- HELLO carries `ver_min..ver_max` and a capability bitset: bit0 wallet, bit1 group, bit2 resume, and so on. The session uses the intersection.
+- HELLO carries `ver_min..ver_max` and a capability bitset: bit0 group, bit1 resume, bit2 in-band restart, and so on. The session uses the intersection.
 
 ### 11.5 Backpressure
 
@@ -511,7 +566,7 @@ Honest baseline: when a device's **only** network changes, all of its links drop
 |---|---|---|---|---|
 | **T0** | The ICE agent switches to an already-validated backup pair, or continual gathering finds a peer-reflexive path | None | A second interface was gathered at connect time, or the stationary peer is directly reachable *(spike S3)* | Free (browser behaviour) |
 | **T1** | ICE restart. SIGNAL_OFFER/ANSWER travel over the **still-open** DataChannel, encrypted by Noise | In-band | The path is `disconnected` but not yet `failed`, or `NetChanged` fired before the path died | MVP-2 |
-| **T2** | ICE restart relayed **through another room member**, end-to-end encrypted (§14.3) | Peer-relayed | Group, with a partial break | MVP-3 |
+| **T2** | ICE restart relayed **through the room owner**, end-to-end encrypted (§14.4) | Peer-relayed | Group, with a partial break; the owner is still linked to both sides | MVP-3 |
 | **T3** | **Resume code**: RESUME_INVITE / RESUME_ANSWER exchanged out of band. Noise KK with the **same static keys** rebinds the session automatically (no room join, `chat_seq` continues, unacknowledged messages are resent) | Out of band | Always | MVP-1 |
 
 - Glare during T1 or T2 (both sides restart at once) is handled with the *perfect negotiation* pattern. The **polite** peer is the one whose `PeerId` is lexicographically greater.
@@ -524,45 +579,64 @@ Honest baseline: when a device's **only** network changes, all of its links drop
 
 ### 14.1 Topology
 
-- Full mesh. The member cap is Q3 (default 8, which means 28 links).
+- Full mesh, **up to 16 members**: 120 links in the room, 15 per member.
 - Each link is an independent pairwise session as in §8–§13.
+- Cost of the cap on each device: 15 `RTCPeerConnection`s, 15 × (64-frame send ring + 256-message resend ring) of preallocated memory, and 15 DTLS/ICE keepalive streams. This is acceptable for chat. It is checked on iOS Safari in spike S9.
 
-### 14.2 Propagation
+### 14.2 Room authority: the owner
 
-- The sender sends each message **directly** to every connected member. There is **no flooding and no forwarding** (REVIEW R6).
-- Deduplication uses `last_chat_seq[leaf_idx]`, a fixed array of length equal to the cap.
-- A member without a direct link to the sender does not receive the message. The UI shows that link as missing (Q6).
+- The room creator is the **owner**, and the only authority:
+  - only the owner creates invites and admits members;
+  - only the owner removes members;
+  - the owner is the **only MLS committer** (§14.5). Members send Proposals, such as "I am leaving".
+- There is **no succession**. When the owner leaves, the room is **disposed** (§14.6).
 
-### 14.3 Peer-relayed signalling (introductions)
+### 14.3 Propagation
 
-1. A new member M joins through an out-of-band exchange with any member X.
-2. X sends M's `PeerId` and the room state to the other members Y over the existing encrypted links. X vouches for M through an MLS Add, committed by the owner.
-3. For each Y, M and Y exchange SIGNAL_OFFER/ANSWER **through X**. The body is sealed M↔Y with the MLS exporter secret, so X forwards only ciphertext.
-4. The M↔Y link comes up directly. If ICE fails, that pair stays unlinked. **Chat is never relayed** unless Q6 allows it.
+- The sender sends each message **directly** to every connected member. There is **no flooding and no forwarding** (REVIEW R6). Forwarding is deferred and is not part of any current phase.
+- Deduplication uses `last_chat_seq[leaf_idx]`, a fixed array of 16.
+- A member without a direct link to the sender does not receive the message. The UI shows that link as missing ("no direct path to Carol").
 
-### 14.4 Group key management
+### 14.4 Joining (introductions by the owner)
 
-- MLS (RFC 9420). The credential is `PeerId` plus the optional wallet binding.
-- **Single committer:** the room owner (the creator). Other members send Proposals only, and the owner commits them. This avoids forked epochs without a delivery service.
-- **Owner succession:** if the owner is gone for longer than the grace period, the connected member with the lowest leaf index takes over. **Limit:** a network split can produce two owners; the MVP resolves this by requiring a re-invite.
-- A new joiner cannot read earlier epochs. Leaving or removal leads to a Commit and a new epoch.
+1. A new member M does the out-of-band exchange with the **owner** O (§8).
+2. O commits an MLS Add for M and sends the Welcome to M. O sends M's `PeerId` and signing key to every other member Y over the existing encrypted links.
+3. For each Y, M and Y exchange SIGNAL_OFFER/ANSWER **through O**. The body is sealed M↔Y with a key from the MLS exporter secret, so O forwards only ciphertext. This is signalling only, never chat.
+4. The M↔Y link comes up directly. If ICE fails, that pair stays unlinked, and both sides show it.
 
-## 15. Wallet authentication (MVP-2)
+### 14.5 Group key management
 
-- Provider: EIP-1193 injected provider, which exists in desktop extensions and in wallets' own in-app browsers. WalletConnect is excluded (it relies on a relay server, Q5).
-- Flow:
-  1. `personal_sign(SIWE message, §7.2)`.
-  2. Send WALLET_BIND in-band.
-  3. The peer checks it with `k256` ecrecover: the address matches, the domain equals the app origin, and the nonce and expiry are valid.
-- The UI shows "wallet-verified: 0xAB…CD" next to the peer. The wallet address is never logged.
+- MLS (RFC 9420). The credential is the Ed25519 signing key from §7.1, bound to the `PeerId` by the Noise session.
+- With a single committer there are no forked epochs, even without a delivery service.
+- A new joiner cannot read earlier epochs. A leave or removal leads to a Commit and a new epoch.
+
+### 14.6 Disposal
+
+The room is disposed when either of these happens:
+
+- the owner leaves on purpose (GOODBYE to every member), or closes the room;
+- no member has had a link to the owner for longer than the owner grace period (10 min, the same as `SUSPENDED` in §12). While the owner is unreachable, members can keep chatting on their existing links, but nobody can join or be removed.
+
+On disposal, every member's core:
+
+1. shows "Room closed by owner" or "Owner unreachable — room closed", with `E_ROOM_DISPOSED`;
+2. closes all links in the room;
+3. zeroizes the room's MLS and Noise state.
+
+There is no takeover. To continue, someone creates a new room and becomes its owner.
+
+## 15. Wallet authentication (deferred)
+
+Wallet authentication is not in any current phase (§7.4). Identity comes only from user-held keys (§7.2).
 
 ## 16. Persistence, logging and memory hygiene
 
 - **Never written:** messages, keys or codes to localStorage, IndexedDB, Cache Storage, a service-worker cache, the clipboard (beyond the moment of sharing, §8.7), IPFS, a blockchain, a server or analytics.
 - **Settings MAY be stored** in localStorage: STUN list, privacy mode, TTL, nickname. They are not secret.
+- **The identity key MAY be stored** only in its encrypted form (§7.3), and only if the user chooses it. Nothing else is persisted.
 - All secrets live in wasm linear memory and are zeroized on `CLOSED` and on `pagehide`.
 - **Limit:** chat text shown in the DOM exists as JS strings that cannot be zeroized, and the OS may swap RAM to disk. We do not claim otherwise.
-- **Logging:** only when `#[cfg(debug_assertions)]`. Release builds contain **no log calls at all**, removed at compile time. Debug logs may contain `PeerIdx`, states, candidate *types*, RTT, byte counts and error codes. They never contain plaintext, keys, codes, signatures or IP addresses.
+- **Logging:** only when `#[cfg(debug_assertions)]`. Release builds contain **no log calls at all**, removed at compile time. Debug logs may contain `PeerIdx`, states, candidate *types*, RTT, byte counts and error codes. They never contain plaintext, keys, passphrases, codes, signatures or IP addresses.
 
 ## 17. PWA, service worker and CSP
 
@@ -588,7 +662,7 @@ img-src 'self' data: blob:; connect-src 'self'; worker-src 'self';
 manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'
 ```
 
-- `connect-src 'self'` stops `fetch` or XHR from sending data anywhere. MVP-2 adds the RPC origin only if Q5 needs it.
+- `connect-src 'self'` stops `fetch` or XHR from sending data anywhere. No exception is planned, because the app makes no remote HTTP calls.
 - **Limit:** browsers do not reliably enforce the CSP `webrtc` directive, so peer connections cannot be restricted by CSP.
 
 ### 17.4 Mobile lifecycle
@@ -596,6 +670,17 @@ manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'
 - A connection may survive, be suspended, or be killed in the background. A killed connection goes to `SUSPENDED` / T3.
 - Messages sent while a peer is fully offline are lost: there is no mailbox, and the UI says so ("Messages are delivered only while peers are connected").
 - **Risk (spike S6):** iOS may kill the pending peer connection while Alice switches to a messenger to share an invite. Mitigations: use the system share sheet, and regenerate the invite automatically when the app returns to the foreground if the connection has died.
+
+### 17.5 iOS Safari (a required target)
+
+| Topic | Rule |
+|---|---|
+| QR scanning | `rqrr` in WASM from `getUserMedia` frames (there is no `BarcodeDetector`) |
+| Links | Always open in a Safari tab, not the PWA (§8.2). The PWA flow uses the in-app scanner or paste |
+| Tab ↔ PWA | Separate storage partitions, so there is no `BroadcastChannel` hand-off (§8.7) |
+| Backgrounding | Safari suspends the page soon after it goes to the background. Sharing uses the share sheet, which keeps the app in the foreground. **Reading** the answer in a messenger puts the app in the background, which is the S6 risk. **Spike S6 gates the remote flow on iOS**: if the pending connection does not survive about 60 s in the background, the remote flow on iOS is changed so that the iOS user is always the **answerer**. The answerer can rebuild its peer connection from the invite it still holds, and the offerer, typically on desktop, keeps waiting |
+| Storage | IndexedDB may be deleted after 7 days in a Safari tab (§7.3). Key files are the backup |
+| WASM | `simd128` is supported from Safari 16.4. The target is the current and previous major iOS versions |
 
 ## 18. Diagnostics UI
 
@@ -624,8 +709,10 @@ Members     4 / 8  (links 5 / 6)
 | 0x0003 | E_INVITE_CONSUMED | A second answer for the same invite |
 | 0x0004 | E_ANSWER_MISMATCH | The answer's `invite_id` is unknown or belongs to another connection |
 | 0x0010 | E_INVALID_ROOM | |
-| 0x0011 | E_ROOM_FULL | |
-| 0x0020 | E_AUTH_FAILED | Wallet binding invalid, or static key mismatch |
+| 0x0011 | E_ROOM_FULL | The room already has 16 members |
+| 0x0012 | E_ROOM_DISPOSED | The owner left or was unreachable past the grace period (§14.6) |
+| 0x0013 | E_NOT_OWNER | A non-owner tried an owner-only action |
+| 0x0020 | E_AUTH_FAILED | Static key mismatch, or an invalid signing-key binding |
 | 0x0021 | E_CRYPTO_FAILED | Noise or MLS failure, nonce gap, or bad tag |
 | 0x0022 | E_SAS_REJECTED | The user marked the SAS as a mismatch |
 | 0x0030 | E_ICE_FAILED | |
@@ -638,6 +725,7 @@ Members     4 / 8  (links 5 / 6)
 | 0x0041 | E_MESSAGE_TOO_LARGE | |
 | 0x0042 | E_BACKPRESSURE | |
 | 0x0050 | E_BROWSER_UNSUPPORTED | No `RTCPeerConnection`, WASM or `crypto.getRandomValues` |
+| 0x0060 | E_KEYFILE_INVALID | Wrong passphrase, or a damaged or unsupported key file |
 
 ## 20. Limits (defaults)
 
@@ -649,7 +737,10 @@ Members     4 / 8  (links 5 / 6)
 | Frame | ≤ 16 384 B |
 | Send queue | 64 frames per connection |
 | Unacknowledged resend ring | 256 messages per peer |
-| Room size | 8 (Q3) |
+| Room size | 16 members (120 links) |
+| Owner grace (room disposal) | 10 min |
+| STUN servers | 2 by default, at most 4 |
+| Argon2id (key file) | m = 19 MiB, t = 2, p = 1 |
 | App ping interval | 15 s idle |
 | Suspended grace | 10 min |
 | Rekey | 2^20 messages or 10 min |
@@ -660,7 +751,8 @@ Members     4 / 8  (links 5 / 6)
 
 - message confidentiality and integrity against network observers and against the static host;
 - peer authentication, pinned to the out-of-band exchange and optionally SAS-verified;
-- room membership (MLS, MVP-3);
+- room membership (MLS, owner-controlled, MVP-3);
+- a saved identity key at rest (Argon2id + XChaCha20-Poly1305; as strong as the passphrase);
 - no central storage or relay;
 - no traffic replay across sessions.
 
@@ -672,7 +764,9 @@ Members     4 / 8  (links 5 / 6)
 - a malicious static host serving altered code (mitigated, not eliminated: §17.2);
 - a swapped code on a remote out-of-band channel when the SAS is not compared;
 - a peer secretly routing its own side through a relay or VPN;
-- delivery to offline peers.
+- delivery to offline peers;
+- unlinkability between sessions **when a saved identity is reused** (the same `PeerId` every time);
+- the room surviving its owner.
 
 **Attackers considered:**
 
@@ -680,7 +774,8 @@ Members     4 / 8  (links 5 / 6)
 |---|---|---|
 | Network observer | IPs, timing, sizes, volume | DTLS + Noise hide the contents. Metadata is accepted as exposed |
 | Out-of-band channel MITM (messenger) | Swaps invite and answer | SAS comparison on another channel |
-| Malicious peer | Fake identity, injection, replay, joining, abuse of membership, relay candidates | Keys pinned by the invite, AEAD with strict nonces, owner-committed MLS, relay filtering |
+| Malicious peer | Fake identity, injection, replay, joining, abuse of membership, relay candidates | Keys pinned by the invite, AEAD with strict nonces, owner-only admission and MLS commits, relay filtering |
+| Thief of a key file | Offline passphrase guessing | Argon2id. The UI enforces a minimum passphrase strength |
 | Static host | Serves altered code | SRI, a service worker that pins the version and asks before updating, reproducible builds |
 | STUN operator | Learns IPs and timing | Configurable list, LAN-only mode |
 | Browser extension or device | Full access | Out of scope |
@@ -706,7 +801,7 @@ Members     4 / 8  (links 5 / 6)
 
 | Rule | Application here |
 |---|---|
-| No allocation after init | Rust core: all buffers (RX/TX slots, send rings, resend rings, member tables) are allocated once in `ChatApp::new`, and linear memory never grows afterwards. Allocations inside `web-sys` and `wasm-bindgen-futures` at the JS boundary happen on the control plane (signalling and stats) and are **documented exceptions** |
+| No allocation after init | Rust core: all buffers (RX/TX slots, send rings, resend rings, member tables sized for 16) are allocated once in `ChatApp::new`, after sign-in, and linear memory never grows afterwards. Argon2id's working memory during sign-in (§7.3) is part of the init phase. Allocations inside `web-sys` and `wasm-bindgen-futures` at the JS boundary happen on the control plane (signalling and stats) and are **documented exceptions** |
 | POD `#[repr(C)]`, `Copy`, no heap fields in protocol types | Yes (§7.1, §8.3, §11.1) |
 | No `dyn`; generics | Yes. The `core` ↔ `wasm` boundary is the `Input` / `Action` enums, not trait objects |
 | No iterators or bounds checks in hot loops | Applies to frame parse, encrypt/decrypt and dedup (index loops, `get_unchecked` behind `debug_assert!`) |
@@ -723,10 +818,10 @@ Members     4 / 8  (links 5 / 6)
 
 | Phase | Scope |
 |---|---|
-| **MVP-1** | 1:1; two-way exchange by QR, link and paste; binary codes with SDP reconstruction; configurable STUN and privacy modes; relay prohibition; Noise KK; SAS; T3 resume code; RAM only; basic diagnostics; CSP, SRI and a version-pinned service worker |
-| **MVP-2** | T1 in-band ICE restart and `NetChanged` handling; full diagnostics; wallet binding (EVM EOA, SIWE) |
-| **MVP-3** | Rooms up to the cap; peer-relayed signalling; MLS with a single committer; T2 recovery |
-| **Later** | File transfer (separate channel, chunking), voice and video, larger rooms and alternative topologies |
+| **MVP-1** | Sign-in (temporary identity, or saved identity with an encrypted key file); 1:1; two-way exchange by QR, link and paste; binary codes with SDP reconstruction; STUN defaults and privacy modes; relay prohibition; Noise KK; SAS policy by code source; T3 resume code; no message persistence; basic diagnostics; CSP, SRI and a version-pinned service worker; desktop browsers and iOS Safari |
+| **MVP-2** | T1 in-band ICE restart and `NetChanged` handling; full diagnostics |
+| **MVP-3** | Owner-controlled rooms of up to 16 members; introductions by the owner; MLS with the owner as single committer; room disposal; T2 recovery through the owner |
+| **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16 |
 
 ## 24. Validation spikes (must finish before the design they gate is frozen)
 
@@ -737,16 +832,28 @@ Members     4 / 8  (links 5 / 6)
 | S3 | T0 behaviour per browser: continual gathering, backup pairs, recovery through a peer-reflexive path | §13 |
 | S4 | Does camera permission disable mDNS obfuscation, and does that persist after the camera track stops? | §9.4 |
 | S5 | Size of `snow`, and later `openmls`, on `wasm32`; `-O3` vs `-Oz` | §22 |
-| S6 | iOS lifetime of a pending `RTCPeerConnection` while in the background during sharing | §17.4 |
-| S7 | `BroadcastChannel` hand-off between a Safari tab and an installed PWA | §8.7 |
+| S6 | iOS lifetime of a pending `RTCPeerConnection` while in the background during sharing. **Gates the remote flow on iOS** | §17.4, §17.5 |
+| S7 | Link hand-off on desktop browsers (`BroadcastChannel`). On iOS it is already known not to work between a tab and the PWA; the paste fallback is the design | §8.7 |
+| S8 | IPv6 reachability (AAAA records) of the default STUN servers, and srflx-v6 gathering on each target | §9.3 |
+| S9 | 15 simultaneous peer connections on iOS Safari: memory, keepalive and battery | §14.1 |
 
-## 25. Open questions
+## 25. Owner decisions (resolved from v0.2 open questions)
 
-Recorded with their current defaults in [`REVIEW-v0.1.md` §4](REVIEW-v0.1.md#4-open-questions-for-the-owner): Q1 exchange scenario and whether the SAS is required, Q2 STUN policy, Q3 room cap, Q4 room authority, Q5 wallet scope, Q6 peer forwarding, Q7 hosting and domain, Q8 browser matrix.
+| # | Topic | Decision | Where |
+|---|---|---|---|
+| Q1 | Exchange scenario | Both in person and remote. The SAS policy follows the code source | §8.2, §10.4 |
+| Q2 | STUN | Google and Cloudflare by default, public and free; the list is editable | §9.3 |
+| Q3 | Room cap | 16 members | §14.1, §20 |
+| Q4 | Room authority | Only the owner admits members. When the owner leaves, the room is disposed | §14.2, §14.6 |
+| Q5 | Wallet | Deferred. Users generate keys at sign-in and may save them encrypted for reuse | §7.2–§7.4 |
+| Q6 | Peer forwarding | Deferred | §14.3 |
+| Q7 | Hosting | GitHub Pages project site | Header, §4.1 |
+| Q8 | Browsers | Desktop Chrome, Edge, Firefox, Safari, plus iOS Safari | §17.5 |
 
 ## 26. Out of scope
 
 - A custom NAT traversal, DTLS, WebRTC or cryptographic algorithm.
+- Wallet authentication and peer forwarding (deferred, §23).
 - A DHT.
 - Blockchain or IPFS message storage.
 - Server-side signalling.
@@ -793,7 +900,7 @@ Candidate line: `a=candidate:{foundation} 1 udp {priority} {addr} {port} typ {ho
 
 **Create and invite (Alice):**
 
-1. The app starts and generates the static key.
+1. Sign in: a temporary identity, or unlock a saved one.
 2. Create the room (`RoomId`).
 3. Create the peer connection and the negotiated DataChannel.
 4. `createOffer` and `setLocalDescription`.
@@ -805,7 +912,7 @@ Candidate line: `a=candidate:{foundation} 1 udp {priority} {addr} {port} typ {ho
 
 1. Scan or open the link. The fragment is read and stripped.
 2. Parse and validate: version, lengths, advisory expiry.
-3. Generate the static key.
+3. Sign in, if not already signed in.
 4. Create the peer connection and the negotiated DataChannel.
 5. Rebuild the offer SDP, then `setRemoteDescription` and `createAnswer`.
 6. Gather and filter.

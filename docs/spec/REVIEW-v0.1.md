@@ -3,9 +3,9 @@
 | Field    | Value                                                |
 |----------|------------------------------------------------------|
 | Reviewed | v0.1 (Architecture / Protocol Draft)                 |
-| Output   | [`SPEC.md`](SPEC.md) v0.2 (all decisions below are applied there) |
+| Output   | [`SPEC.md`](SPEC.md) v0.3 (all decisions below, plus the owner's answers in §4, are applied there) |
 | Date     | 2026-09-28                                           |
-| Status   | Open questions pending owner answers (see §4)        |
+| Status   | Closed. Owner answered every question (§4)          |
 
 This document records **why** v0.2 differs from v0.1. Every point is one of:
 
@@ -259,15 +259,17 @@ SPEC §22 maps each rule to its browser equivalent or marks it not applicable, s
 
 ---
 
-## 4. Open questions for the owner
+## 4. Owner decisions
 
-| # | Question | v0.2 default until answered |
-|---|---|---|
-| Q1 | Main exchange scenario: **in person** (two scans) or **remote** (links through a messenger)? This decides whether SAS verification is optional or required. | Both are supported. SAS is prompted for, but not required, when the exchange was remote. |
-| Q2 | **STUN policy.** Which servers (Google, Cloudflare, your own)? On by default, or "LAN-only" by default with STUN opt-in? | On by default, with a user-editable list and a "LAN-only" privacy mode |
-| Q3 | **Maximum room size** for MVP-3 | 8 (28 links) |
-| Q4 | **Room authority.** Does only the owner admit and remove members, or may any member invite? What happens when the owner leaves? | The owner is the single MLS committer; the lowest connected leaf index takes over |
-| Q5 | **Wallet.** Which chains (EVM/SIWE, Solana, others)? Is the WalletConnect relay acceptable on mobile? Are ERC-1271 smart wallets needed (which means RPC)? | EVM EOA only, SIWE (EIP-4361), no WalletConnect, no RPC |
-| Q6 | **Peer forwarding** when two members cannot connect directly: allow it as an explicit "relayed via X" link, or never? | Never in MVP-3 |
-| Q7 | **Hosting.** Custom domain, or `user.github.io/p2p-chat/`? Is IPFS mirroring wanted? | `github.io` project path; no IPFS |
-| Q8 | **Browser support matrix.** Is iOS Safari required (this affects A15, A16, and the QR scanner fallback)? | Latest 2 versions of Chrome, Edge, Firefox and Safari, desktop and mobile |
+These questions were open in v0.2. The owner's answers are applied in SPEC v0.3 (§25).
+
+| # | Question | Owner decision | Spec impact |
+|---|---|---|---|
+| Q1 | Exchange scenario: in person or remote? | **Both** | The SAS policy follows the code source: optional when both codes were scanned in the app, prompted when a code came through a link or paste (SPEC §10.4) |
+| Q2 | STUN servers and default | **Google and Cloudflare, plus others, all public** | Yes: these are free and need no registration, but they come with no SLA and each operator sees the user's IP. Default is 2 servers (Google, Cloudflare); Twilio and extra Google hosts are optional; the list is editable, at most 4 (SPEC §9.3) |
+| Q3 | Maximum room size | **16** | 120 links per room, 15 per member; tested on iOS in spike S9 (SPEC §14.1) |
+| Q4 | Room authority and owner leaving | **Only the owner admits. When the owner leaves, the room is disposed** | The owner is the single MLS committer, with no succession; `E_ROOM_DISPOSED` (SPEC §14.2, §14.6) |
+| Q5 | Wallet | **Deferred.** Users generate a key pair at sign-in and may save it for reuse, or use a new one each time | Sign-in screen; key file encrypted with Argon2id + XChaCha20-Poly1305; a note that reusing a key links sessions (SPEC §7.2, §7.3) |
+| Q6 | Peer forwarding | **Deferred** | No forwarding in any current phase (SPEC §14.3) |
+| Q7 | Hosting | **GitHub Pages** (project site) | The uppercase QR optimization is dropped, because project paths are case-sensitive (SPEC §8.5) |
+| Q8 | Browsers | **Desktop browsers + iOS Safari** | New SPEC §17.5 covers the in-app QR decoder (`rqrr`), no link hand-off between the Safari tab and the PWA, and the background risk that gates the iOS remote flow (spike S6) |
