@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Ephem Tor lab</title>
+<pre id="log"></pre>
+<script type="module">
+// Browser half of E4 (docs/P2P-CHAT.md Appendix C.5): tor_bg.wasm bootstraps through the lab's
+// Snowflake broker/proxy/bridge over real WebRTC, then reaches the lab onion. Driven by
+// checks/tor-lab/e2e_tor.mjs, which passes the lab parameters to window.run().
+import init, { TorNet, tor_log } from './pkg/tor.js';
+const log = (t) => { document.getElementById('log').textContent += t + '\n'; };
+window.run = async ({ broker, fp, stun, nat, net, onion, port, level }) => {
+  const t0 = performance.now();
+  const ms = () => Math.round(performance.now() - t0);
+  const out = { steps: [] };
+  try {
+    await init();
+    tor_log(level || 'info');
+    const tor = new TorNet(broker, fp, stun, nat, net);
+    const timer = setInterval(() => console.log('status: ' + tor.status()), 5000);
+    await Promise.race([tor.bootstrap(), new Promise((_, no) => setTimeout(() => no(new Error('bootstrap timeout: ' + tor.status())), 180000))]);
+    clearInterval(timer);
+    out.bootstrapMs = ms();
+    out.steps.push(`bootstrapped ${out.bootstrapMs} ms: ${tor.status()}`);
+    let s = null;
+    for (let i = 0; !s; i++) {
+      try { s = await tor.connect(onion, port); } catch (e) {
+        if (ms() > 120000) throw e;
+        out.steps.push(`connect: ${e}`);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+    out.connectMs = ms();
+    const msg = new TextEncoder().encode('ephem in the browser over tor');
+    await s.write(msg);
+    let got = new Uint8Array();
+    while (got.length < msg.length) {
+      const b = await s.read(1024);
+      if (!b.length) break;
+      got = new Uint8Array([...got, ...b]);
+    }
+    out.echo = new TextDecoder().decode(got);
+    out.echoMs = ms();
+    out.ok = out.echo === 'ephem in the browser over tor';
+  } catch (e) {
+    out.error = String(e);
+  }
+  out.steps.forEach(log);
+  log(JSON.stringify(out));
+  return out;
+};
+</script>

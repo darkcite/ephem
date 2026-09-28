@@ -1083,7 +1083,10 @@ impl<R: Runtime> TorClient<R> {
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
         {
             let _ = config;
-            Ok(TestingStateMgr::new())
+            // The tab is the only user of its in-memory state: hold the lock from the start.
+            let mgr = TestingStateMgr::new();
+            mgr.try_lock().map_err(ErrorDetail::StateMgrSetup)?;
+            Ok(mgr)
         }
     }
 
@@ -2265,7 +2268,8 @@ impl<R: Runtime> TorClient<R> {
 
     /// Return a [`Future`] which resolves
     /// once this TorClient has stopped.
-    #[cfg(feature = "experimental-api")]
+    // Ephem patch: needs the on-disk state manager's lock, which a browser tab does not have.
+    #[cfg(all(feature = "experimental-api", not(all(target_arch = "wasm32", target_os = "unknown"))))]
     #[instrument(skip_all, level = "trace")]
     pub fn wait_for_stop(
         &self,

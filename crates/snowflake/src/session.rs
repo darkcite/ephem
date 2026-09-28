@@ -54,7 +54,7 @@ impl Session {
             client_id,
             channel: false,
             need_prefix: false,
-            out: Box::new([0; MAX_MESSAGE]),
+            out: crate::boxed(0),
             out_len: 0,
             last_nop: 0,
             err: None,

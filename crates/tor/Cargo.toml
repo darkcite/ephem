@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ephem-snowflake = { path = "../snowflake" }
-arti-client = { version = "0.46", default-features = false, features = ["onion-service-client", "onion-service-service", "ephemeral-keystore", "bridge-client", "keymgr", "experimental-api"] }
+arti-client = { version = "0.46", default-features = false, features = ["onion-service-client", "ephemeral-keystore", "bridge-client", "keymgr", "experimental-api"] }
 tor-rtcompat = { version = "0.46", default-features = false }
 futures = "0.3"
 tor-general-addr = "0.46"
@@ -24,12 +24,13 @@ tracing = "0.1"
 wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Request", "RequestInit", "RequestMode", "Response", "Headers", "RtcConfiguration", "RtcIceServer", "RtcPeerConnection", "RtcPeerConnectionState", "RtcIceGatheringState", "RtcDataChannel", "RtcDataChannelInit", "RtcDataChannelType", "RtcDataChannelState", "RtcSdpType", "RtcSessionDescription", "RtcSessionDescriptionInit", "MessageEvent"] }
+web-sys = { version = "0.3", features = ["Window", "Request", "RequestInit", "RequestMode", "Response", "Headers", "RtcConfiguration", "RtcIceServer", "RtcPeerConnection", "RtcPeerConnectionState", "RtcIceGatheringState", "RtcDataChannel", "RtcDataChannelInit", "RtcDataChannelType", "RtcDataChannelState", "RtcSdpType", "RtcSessionDescription", "RtcSessionDescriptionInit", "MessageEvent", "console"] }
 ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
 rustls-pki-types = { version = "1", features = ["web"] }
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

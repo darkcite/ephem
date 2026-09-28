@@ -1,4 +1,4 @@
-//! KCP (ikcp / kcp-go v5.6.8 compatible), as Snowflake configures it: stream mode, congestion
+//! KCP (ikcp / kcp-go v5 compatible; ported from v5.6.8, interop-tested against v5.6.24), as Snowflake configures it: stream mode, congestion
 //! window off (`nc = 1`), no FEC, no crypto, MTU 1400, `nodelay = 0`, interval 10 ms, no fast
 //! resend. Sans-IO: the caller passes the time and receives output packets through a closure.
 //!
@@ -110,10 +110,10 @@ impl Kcp {
             ts_probe: 0,
             probe_wait: 0,
             dead: false,
-            acks: Box::new([(0, 0); WND]),
+            acks: crate::boxed((0, 0)),
             nacks: 0,
-            snd: Box::new([SndSeg { ts: 0, resendts: 0, rto: 0, fastack: 0, xmit: 0, len: 0, acked: false, data: [0; MSS] }; WND]),
-            rcv: Box::new([RcvSeg { present: false, len: 0, data: [0; MSS] }; WND]),
+            snd: crate::boxed(SndSeg { ts: 0, resendts: 0, rto: 0, fastack: 0, xmit: 0, len: 0, acked: false, data: [0; MSS] }),
+            rcv: crate::boxed(RcvSeg { present: false, len: 0, data: [0; MSS] }),
             buf: [0; MTU],
         }
     }

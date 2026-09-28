@@ -1516,7 +1516,7 @@ Candidate line: `a=candidate:{foundation} 1 udp {priority} {addr} {port} typ {ho
 
 **Key simplification: the bridge is a "TCP" address.** arti needs no pluggable-transport manager. The Snowflake bridge line's placeholder address (`192.0.2.3:80`, as in Tor Browser) is configured as an ordinary bridge, and our runtime's `NetStreamProvider::connect` returns the **Snowflake stream** for exactly that address, and refuses every other address (`E_TOR_UNAVAILABLE`; this is also the transport guard of §28.5, since the Tor code can open no other socket). arti then runs TLS (rustls) and the Tor link handshake over that stream, exactly as over TCP. The snowflake server on the bridge side forwards the stream to the bridge's ORPort unchanged.
 
-**Wire stack of the Snowflake stream** (from the reference Go client v2.9.2, kcp-go v5.6.8, smux v1.5.24):
+**Wire stack of the Snowflake stream** (ported from the reference Go client v2.9.2 with kcp-go v5.6.8 and smux v1.5.24; interop-tested against snowflake v2.14.1 with kcp-go v5.6.24 and smux v1.5.56):
 
 | Layer | Format | Our implementation |
 |---|---|---|

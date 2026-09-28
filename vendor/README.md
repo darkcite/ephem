@@ -10,8 +10,9 @@ use SQLite unconditionally in 0.46).
 
 | Crate | Patch | Why |
 |---|---|---|
-| `arti-client` | `src/client.rs` `statemgr_from_config`: on wasm32, `TestingStateMgr::new()` (in-memory) instead of `unimplemented!()` | A browser tab has no state directory. Guard and circuit-timeout state lives in memory for the session |
-| `tor-dirmgr` | new `src/storage/memory.rs` (`MemoryStore`); `config.rs` `open_store` returns it on wasm32; `err.rs`/`storage.rs` gate the SQLite error variant and module; `Cargo.toml` makes `rusqlite` a non-wasm dependency | Upstream always opens a SQLite cache (C library). The memory store keeps the same data with the same selection and expiry rules; everything in it is public directory data |
+| `arti-client` | `src/client.rs` `statemgr_from_config`: on wasm32, an in-memory `TestingStateMgr` (lock taken at once) instead of `unimplemented!()` | A browser tab has no state directory. Guard and circuit-timeout state lives in memory for the session |
+| `arti-client` | `wait_for_stop` (experimental API) compiled out on wasm32 | It waits on the on-disk state manager's lock |
+| `tor-dirmgr` | new `src/storage/memory.rs` (`MemoryStore`); `config.rs` `open_store` returns it on wasm32; `err.rs`/`storage.rs` gate the SQLite error variant, its match arms and the module; `lib.rs` allows the then-unused SQLite helpers on wasm32; `Cargo.toml` makes `rusqlite` a non-wasm dependency | Upstream always opens a SQLite cache (C library). The memory store keeps the same data with the same selection and expiry rules; everything in it is public directory data |
 
 To update: copy the new upstream versions over these directories and re-apply the marked
 "Ephem patch" hunks (search for `Ephem patch`).

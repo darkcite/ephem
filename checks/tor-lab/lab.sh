@@ -16,7 +16,7 @@ BIN="$HERE/bin"
 CHUTNEY="$HERE/.chutney"
 # Unix socket paths must stay under 108 bytes, so the data directory is short.
 LAB="${EPHEM_LAB:-/tmp/ephlab}"
-SF_VERSION="v2.9.2"
+SF_VERSION="v2.14.1"
 SF_MOD="gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2"
 BROKER_PORT=18080
 PROBE_PORT=18443
@@ -87,9 +87,15 @@ up() {
   bg probe "$BIN/sf-probetest" -disable-tls -addr "127.0.0.1:$PROBE_PORT" -stun "stun:127.0.0.1:$STUN_PORT" -unsafe-logging
   bg broker "$BIN/sf-broker" -disable-tls -disable-geoip -addr "127.0.0.1:$BROKER_PORT" -bridge-list-path "$LAB/bridges.json" -allowed-relay-pattern "^127.0.0.1$" -unsafe-logging
   sleep 1
-  bg proxy "$BIN/sf-proxy" -broker "http://127.0.0.1:$BROKER_PORT/" -relay "ws://127.0.0.1:$ptport/" -allow-non-tls-relay \
+  # Several proxies: arti opens a few bridge connections at once, and each proxy takes a new
+  # client only when it next polls the broker (every 20 s).
+  for i in 1 2 3 4; do
+  bg "proxy$i" "$BIN/sf-proxy" -broker "http://127.0.0.1:$BROKER_PORT/" -relay "ws://127.0.0.1:$ptport/" -allow-non-tls-relay \
     -allow-proxying-to-private-addresses -keep-local-addresses -allowed-relay-hostname-pattern "^127.0.0.1$" \
-    -nat-probe-server "http://127.0.0.1:$PROBE_PORT/probe" -stun "stun:127.0.0.1:$STUN_PORT" -capacity 20 -verbose -unsafe-logging
+    -nat-probe-server "http://127.0.0.1:$PROBE_PORT/probe" -stun "stun:127.0.0.1:$STUN_PORT" -capacity 0 -verbose -unsafe-logging
+  done
+  # -capacity 0 (unlimited): v2.14.1's runSession can return a capacity token twice (its
+  # deferred check races with the session goroutine), which blocks a bounded proxy forever.
 
   # The lab client's configuration (authorities, testing options) minus its own paths and
   # ports: the base of every extra lab client (tor for `verify`; arti gets the authorities).

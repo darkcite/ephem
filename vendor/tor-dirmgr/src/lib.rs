@@ -51,6 +51,8 @@
 // Attempting to apply the lint to just the use statement fails to suppress
 // this lint and instead produces another lint about a useless clippy attribute.
 #![allow(clippy::single_component_path_imports)]
+// Ephem patch: SQLite-only helpers are dead code in the wasm32 build (memory store).
+#![cfg_attr(all(target_arch = "wasm32", target_os = "unknown"), allow(dead_code))]
 
 mod bootstrap;
 pub mod config;

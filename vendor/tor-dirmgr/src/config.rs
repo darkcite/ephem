@@ -99,7 +99,7 @@ impl DirMgrConfig {
             let _ = readonly;
             return Ok(Box::new(crate::storage::MemoryStore::default()));
         }
-        #[allow(unreachable_code)]
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         Ok(Box::new(
             crate::storage::SqliteStore::from_path_and_mistrust(
                 &self.cache_dir,

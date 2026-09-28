@@ -1,4 +1,4 @@
-//! smux v2 client (xtaci/smux v1.5.24 compatible), one stream: the Tor connection to the bridge.
+//! smux v2 client (xtaci/smux compatible; ported from v1.5.24, interop-tested against v1.5.56), one stream: the Tor connection to the bridge.
 //!
 //! Frame: `ver u8 = 2, cmd u8, len u16 LE, sid u32 LE`, then `len` bytes. Commands: SYN 0, FIN 1,
 //! PSH 2, NOP 3 (keep-alive), UPD 4 (`consumed u32, window u32`: flow control). Sans-IO: frames
@@ -75,7 +75,7 @@ impl Smux {
             hdr_len: 0,
             upd: [0; 8],
             upd_len: 0,
-            buf: Box::new([0; RX_BUF]),
+            buf: crate::boxed(0),
             head: 0,
             len: 0,
             num_read: 0,

@@ -12,3 +12,6 @@ pub mod config;
 pub mod net;
 pub mod stream;
 pub mod tls;
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub mod web;

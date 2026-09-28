@@ -234,11 +234,12 @@ impl Error {
             | Error::UntimelyObject(_) => true,
 
             // These errors cannot come from a directory cache.
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+            Error::SqliteError(_) => false,
             Error::NoDownloadSupport
             | Error::CacheCorruption(_)
             | Error::CachePermissions(_)
             | Error::CacheAccess(_)
-            | Error::SqliteError(_)
             | Error::ReadOnlyStorage(_)
             | Error::UnrecognizedSchema { .. }
             | Error::DirectoryNotPresent
@@ -307,10 +308,11 @@ impl Error {
 
             Error::ConsensusInvalid { .. } | Error::CantAdvanceState => BootstrapAction::Reset,
 
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+            Error::SqliteError(_) => BootstrapAction::Fatal,
             Error::NoDownloadSupport
             | Error::OfflineMode
             | Error::CacheCorruption(_)
-            | Error::SqliteError(_)
             | Error::ReadOnlyStorage(_)
             | Error::UnrecognizedSchema { .. }
             | Error::ManagerDropped
