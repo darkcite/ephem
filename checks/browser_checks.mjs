@@ -102,6 +102,30 @@ for (const a of avail) for (const b of avail) {
   finally { if (A) await A.browser.close(); if (B) await B.browser.close(); }
 }
 
+// ---------- S1-srflx: connect through the public (or VPN) address only ----------
+// Host candidates are dropped, so the path must go out through the NAT/VPN and back in.
+// Both peers are on this machine, so success also needs the NAT/VPN to allow hairpinning:
+// a FAIL here is a hint, not proof, that two peers behind this NAT/VPN cannot connect.
+if (NET) {
+  const k = avail[0];
+  let A, B;
+  try {
+    A = await openPage(k); B = await openPage(k);
+    const off = await A.page.evaluate((s) => C.offer(s), DEFAULT_STUN);
+    const ans = await B.page.evaluate(([f, s]) => C.answer(f, s, 'srflx'), [off, DEFAULT_STUN]);
+    const nOff = off.cands.filter((c) => c.typ === 'srflx').length, nAns = ans.cands.filter((c) => c.typ === 'srflx').length;
+    if (!nOff || !nAns) {
+      rec('S1', `${k} → ${k} via srflx only`, 'INCONCLUSIVE', { srflxOffer: nOff, srflxAnswer: nAns, note: 'no srflx candidate (STUN unreachable?)' });
+    } else {
+      await A.page.evaluate((f) => C.applyAnswer(f, 'srflx'), ans);
+      const [oa, ob] = await Promise.all([A.page.evaluate(() => C.waitOpen(20000)), B.page.evaluate(() => C.waitOpen(20000))]);
+      rec('S1', `${k} → ${k} via srflx only (hairpin through NAT/VPN)`, oa === 'open' && ob === 'open' ? 'PASS' : 'FAIL',
+        { alice: oa, bob: ob, srflx: [...new Set(off.cands.filter((c) => c.typ === 'srflx').map((c) => c.addr))] });
+    }
+  } catch (e) { rec('S1', `${k} via srflx only`, 'FAIL', e.message.split('\n')[0]); }
+  finally { if (A) await A.browser.close(); if (B) await B.browser.close(); }
+}
+
 // ---------- S4: camera permission vs mDNS host obfuscation ----------
 for (const b of avail) {
   const scen = [['no permission', {}, null], ['permission granted, camera never opened', { grant: true, camera: true }, null],

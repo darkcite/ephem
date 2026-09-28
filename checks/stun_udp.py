@@ -64,6 +64,15 @@ def probe(host: str, port: int, family: int) -> str:
         sock.close()
 
 
+# Cloudflare WARP consumer egress ranges (IPv4 104.28.0.0/16, IPv6 2a09:bac0::/29).
+WARP_V4 = ("104.28.",)
+WARP_V6_PREFIXES = tuple(f"2a09:bac{n}:" for n in "01234567")
+
+
+def in_warp_range(ip: str) -> bool:
+    return ip.startswith(WARP_V4) or ip.lower().startswith(WARP_V6_PREFIXES)
+
+
 def https_view() -> dict:
     """Public IP as seen over HTTPS (TCP), and Cloudflare's WARP flag."""
     try:
@@ -96,10 +105,14 @@ def main() -> int:
     if not stun_ips or "ip" not in web:
         verdict = "INCONCLUSIVE: no STUN reply over UDP or no HTTPS answer (UDP blocked, or offline)"
     elif web.get("warp") in ("on", "plus"):
-        verdict = "PASS: WARP is on and UDP leaves through it" if stun_ips and web.get("ip") in stun_ips else \
-                  "FAIL: WARP is on for HTTPS but UDP/WebRTC bypasses it (peers see your real IP)"
+        # WARP uses several egress addresses (different ones for TCP and UDP), all in its own ranges.
+        via_warp = all(in_warp_range(x) for x in stun_ips)
+        verdict = ("PASS: WARP is on and UDP/WebRTC leaves through a WARP address (peers do not see your ISP address)"
+                   if via_warp else
+                   "FAIL: WARP is on for HTTPS but UDP/WebRTC leaves from a non-WARP address (peers see your real IP)")
     elif stun_ips and web.get("ip") and web.get("ip") not in stun_ips:
-        verdict = "FAIL: HTTPS and UDP leave from different IPs (a VPN that does not carry UDP?)"
+        verdict = ("CHECK: HTTPS and UDP leave from different IPs. Fine if both belong to your VPN (VPNs may use "
+                   "several exit addresses); a leak if the UDP address is your ISP's")
     else:
         verdict = "INFO: no WARP detected; TCP and UDP leave from the same IP. If a VPN is supposed to be on, it is not active"
     print(f"TS3 verdict: {verdict}")

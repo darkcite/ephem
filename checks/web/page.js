@@ -19,7 +19,8 @@ window.C = (() => {
   }
 
   // docs/P2P-CHAT.md Appendix A template.
-  function rebuild(f, role, sessId) {
+  // onlyTyp: keep only candidates of this type (e.g. 'srflx' to force the path through the public/VPN address).
+  function rebuild(f, role, sessId, onlyTyp) {
     const typPref = { host: 126, srflx: 100 };
     const lines = [
       'v=0', `o=- ${sessId} 2 IN IP4 127.0.0.1`, 's=-', 't=0 0', 'a=group:BUNDLE 0',
@@ -30,7 +31,7 @@ window.C = (() => {
       'a=sctp-port:5000', 'a=max-message-size:262144',
     ];
     f.cands.forEach((c, i) => {
-      if (!(c.typ in typPref)) return;
+      if (!(c.typ in typPref) || (onlyTyp && c.typ !== onlyTyp)) return;
       const pri = (typPref[c.typ] << 24) + ((65535 - i) << 8) + 255;
       const extra = c.typ === 'srflx' ? ' raddr 0.0.0.0 rport 0' : '';
       lines.push(`a=candidate:${c.typ}${i} 1 udp ${pri} ${c.addr} ${c.port} typ ${c.typ}${extra}`);
@@ -74,16 +75,16 @@ window.C = (() => {
     return f;
   }
 
-  async function answer(offerFields) {
-    const pc = mkpc([]);
-    await pc.setRemoteDescription({ type: 'offer', sdp: rebuild(offerFields, 'actpass', '1234567890') });
+  async function answer(offerFields, iceServers, onlyTyp) {
+    const pc = mkpc(iceServers || []);
+    await pc.setRemoteDescription({ type: 'offer', sdp: rebuild(offerFields, 'actpass', '1234567890', onlyTyp) });
     await pc.setLocalDescription(await pc.createAnswer());
     await gather(pc, 5000);
     return extract(pc.localDescription.sdp);
   }
 
-  async function applyAnswer(answerFields) {
-    await st.pc.setRemoteDescription({ type: 'answer', sdp: rebuild(answerFields, 'active', '987654321') });
+  async function applyAnswer(answerFields, onlyTyp) {
+    await st.pc.setRemoteDescription({ type: 'answer', sdp: rebuild(answerFields, 'active', '987654321', onlyTyp) });
   }
 
   function waitOpen(dc, pc, ms) {
