@@ -1086,8 +1086,8 @@ BROWSERS=chrome,firefox,webkit ./checks/run_all.sh all-engines   # adds Firefox 
 ./checks/run_all.sh warp-on                   # again with Cloudflare WARP / your VPN on (TS3)
 E8=1 ONLY=browser ./checks/run_all.sh e8     # only the browser checks + the 7-minute hidden-tab test (visible Chrome window)
 IPHONE=1 ONLY=iphone ./checks/run_all.sh iphone   # iPhone via a free Cloudflare quick tunnel + QR code (works while the repo is private)
-# E8 in real browsers: same command; open the printed URL on the Mac in Chrome/Safari/Firefox with ?label=mac-chrome etc.,
-# tap "E8", switch to another tab for ≥ 6 min, come back, tap "Send results"
+E8REAL=1 ONLY=e8real ./checks/run_all.sh e8   # E8 in your real Chrome, Safari and Firefox at once (macOS): each opens in E8 mode;
+                                               # switch to another tab in each for ≥ 6 min, then come back
 BROWSERS=chrome,firefox ONLY=browser ./checks/run_all.sh firefox   # Firefox (brew install node@22; picked up automatically)
 NET=0 SKIP_ARTI=1 ./checks/run_all.sh quick   # offline, fast
 ```

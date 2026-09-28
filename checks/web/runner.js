@@ -132,5 +132,10 @@
   $('share').onclick = () => navigator.share ? navigator.share({ title: 'p2p-chat checks', text: text() }) : log('Share not available; use Copy.');
   $('finish').onclick = async () => { await send(true); log(cfg.resultUrl ? 'Results sent to the laptop.' : 'No laptop connected: use Copy or Share.'); };
   for (const id of ['s6', 's4', 'finish', 'e8']) $(id).hidden = !cfg.interactive;
-  if (cfg.autorun) run();
+  // ?mode=e8: dedicated E8 page: arm immediately, hide everything else.
+  if (new URLSearchParams(location.search).get('mode') === 'e8') {
+    document.querySelectorAll('button').forEach((b) => { b.hidden = !['e8', 'copy'].includes(b.id); });
+    document.querySelector('p').innerHTML = `<b>E8 hidden-tab test (${cfg.label}).</b> Leave this tab: switch to <b>another tab in this same browser</b> (for example press ⌘T), wait <b>at least 6 minutes</b>, then come back here. The result is sent automatically.`;
+    e8();
+  } else if (cfg.autorun) run();
 })();

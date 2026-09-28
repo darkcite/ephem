@@ -10,7 +10,8 @@
 #                chrome   = your installed Google Chrome (no download)
 #                chromium, firefox, webkit = Playwright builds (downloaded once; webkit = Safari's engine)
 #   FORCE_BROWSER_INSTALL=1   re-download Playwright engines even if cached
-#   ONLY=a,b       run only these sections: stun, gateways, browser, safari, iphone, sizes, argon2, arti
+#   ONLY=a,b       run only these sections: stun, gateways, browser, safari, iphone, e8real, sizes, argon2, arti
+#   E8REAL=1       E8 in your real Chrome/Safari/Firefox (macOS): e.g. E8REAL=1 ONLY=e8real ./checks/run_all.sh e8
 #   IPHONE=1       serve the checks page to your iPhone through a free Cloudflare quick tunnel
 #                  (needs `brew install cloudflared`; works while the repo is private). S6_SECONDS=120
 #   SAFARI=1       also run the checks in your real Safari (macOS; opens a Safari tab, results collected automatically)
@@ -175,6 +176,13 @@ if [ "${IPHONE:-0}" = 1 ] && want iphone; then
   else
     echo "cloudflared is not installed: brew install cloudflared" | tee -a "$OUT/REPORT.md"
   fi
+fi
+
+# ---------------------------------------------------------------- E8 in real desktop browsers
+if [ "${E8REAL:-0}" = 1 ] && want e8real; then
+  say "E8 in your real browsers: Chrome, Safari, Firefox open in E8 mode (about 6 minutes)"
+  ( cd "$ROOT" && node e8_checks.mjs "$OUT" ) 2>&1 | tee "$OUT/e8.log"
+  { echo "## E8 (real browsers)"; echo; cat "$OUT/e8.md" 2>/dev/null || echo "no E8 results (see e8.log)"; echo; } >> "$OUT/REPORT.md"
 fi
 
 # ---------------------------------------------------------------- S5: wasm sizes
