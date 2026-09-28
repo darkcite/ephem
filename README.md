@@ -1,6 +1,6 @@
 # Ephem
 
-Ephemeral, serverless, end-to-end encrypted 1:1 chat that runs entirely in the browser (Rust → WebAssembly, WebRTC DataChannel, Noise KK). Two codes, one each way, by QR or link; no account, no server, no history.
+Ephemeral, serverless, end-to-end encrypted 1:1 chat that runs entirely in the browser (Rust → WebAssembly, WebRTC DataChannel, Noise KK). Two codes, one each way, by QR or link; no account, no server, no history. Replies, edits, deletes, self-destructing messages, read receipts, reconnect codes after a network change, and optional saved identities (encrypted key file).
 
 - **Try it:** `https://darkcite.github.io/ephem/` (landing) → `/app/`
 - **Design, spec, plan and checkpoint results:** [`docs/P2P-CHAT.md`](docs/P2P-CHAT.md)
@@ -14,18 +14,21 @@ Ephemeral, serverless, end-to-end encrypted 1:1 chat that runs entirely in the b
 | `crates/proto` | `no_std`, allocation-free wire formats: codes, SDP template, frames |
 | `crates/crypto` | Identity, Noise KK handshake, in-place transport cipher, SAS |
 | `crates/core` | Sans-IO session state machine (natively tested) |
-| `crates/wasm` | The only crate touching the browser (web-sys WebRTC adapter, QR) |
-| `checks/` | Checkpoint suite (`checks/run_all.sh`) and the app end-to-end test |
+| `crates/wasm` | The only crate touching the browser (web-sys WebRTC adapter, getStats, QR encode/scan, key files) |
+| `tools/` | `stamp.py` (integrity hashes + service-worker version, run by `build.sh`), `make_icons.py` |
+| `checks/` | Checkpoint suite (`checks/run_all.sh`) and the app end-to-end test (`checks/e2e_app.mjs`) |
 
 ## Build and test
 
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129
-./build.sh                         # → app/pkg/
+./build.sh                         # → app/pkg/, then stamps app/index.html and app/sw.js
 cargo test --workspace             # native unit tests
 cd checks && npm install && cd ..  # once
 E2E_BROWSER=chrome node checks/e2e_app.mjs   # two browsers chat end to end
 ```
 
 Serve the repository root with any static server (for example `python3 -m http.server`) and open `/app/`.
+
+After editing `app/*.js` or `app/*.css`, run `python3 tools/stamp.py` (or `./build.sh`): `index.html` pins their hashes, so unstamped edits are refused by the browser.

@@ -3,14 +3,31 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<!-- stamp:begin (tools/stamp.py) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-s2MQ/qbNkLsJkE3lCd/5XuifHJTkGFRjgixDPZR2dIg='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="c9bdc289a25d">
+<meta name="ephem-wasm" content="sha384-4qqUSMr7tpf8pD4Iw2IxiEDKakuKV6LvkxCEkObn5OHZvNlzhIJSyXlt508DhnIq">
+<link rel="stylesheet" href="app.css" integrity="sha384-9VXtyR25jMNB4Ed5HKFahiG+oxFFj4Y5Hc5tYdMp1FtqvWnhOnRb0q3HA0o4h/46">
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-VjIBliiSItAYyzW1BmqTiz4ijt1mNZTg9VuGQKHYnPY4aNYTBtlmKWzas+41MjGi","./pkg/ephem.js":"sha384-OsjNk41N9eWfqgzJ0qq62t1Za2Bqb5NV3b4O9Xl/BlGpPDhqIUwKCM/my1+1b0uB"}}</script>
+<script type="module" src="app.js" integrity="sha384-VjIBliiSItAYyzW1BmqTiz4ijt1mNZTg9VuGQKHYnPY4aNYTBtlmKWzas+41MjGi"></script>
+<!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#3a5bd9">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Ephem">
 <title>Ephem</title>
-<link rel="stylesheet" href="app.css">
-<script type="module" src="app.js"></script>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 </head>
 <body>
+<div id="update" class="update" hidden>
+  <span id="update-text"></span>
+  <button id="b-update" class="primary">Update</button>
+  <button id="b-update-later" class="ghost">Later</button>
+</div>
 <header class="bar">
   <a class="brand" href="../">Ephem</a>
   <span id="me" class="pill" title="Your display handle (not a proof of identity)">…</span>
@@ -24,6 +41,7 @@
   <section id="v-start" class="view" hidden>
     <h1>Start a private chat</h1>
     <p class="lead">Two codes, one each way. Nothing is stored: when either of you leaves, the chat is gone.</p>
+    <p id="ios-note" class="warn" hidden>Links open in Safari, not in this installed app. Scan codes with the in-app scanner, or paste them.</p>
 
     <div class="card">
       <h2>1 · Invite someone</h2>
@@ -155,8 +173,9 @@
     </div>
     <div id="diag" class="card diag" hidden>
       <p><strong>Path:</strong> <span id="diag-path">measuring…</span></p>
+      <label class="row"><input id="c-addr" type="checkbox"> Show addresses</label>
       <p><strong>What your peer sees:</strong> <span id="diag-exposure"></span></p>
-      <p class="note">Direct connection only. Messages exist only in these two tabs; pending messages exist only in this tab.</p>
+      <p class="note">Direct connection only, never a relay. Messages exist only in these two tabs and are delivered only while you are both connected; pending messages exist only in this tab.</p>
       <button id="b-drop" class="ghost">Simulate network loss</button>
     </div>
     <div id="resume" class="card resume" hidden>
@@ -206,7 +225,7 @@
 </div>
 
 <footer class="foot">
-  <p>Security depends on the codes reaching the right person and on the code this site serves. In direct mode your peer can see your IP address.</p>
+  <p>Security depends on the codes reaching the right person and on the code this site serves. In direct mode your peer can see your IP address. <span id="build"></span></p>
 </footer>
 </body>
 </html>

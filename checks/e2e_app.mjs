@@ -24,6 +24,8 @@ import QRCode from 'qrcode';
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
 const PASS = 'correct horse battery staple';
+// Test hook: when set, sw.js is served with this VERSION (simulates a new release).
+let swVersion = null;
 
 function serve() {
   const srv = http.createServer((q, r) => {
@@ -32,6 +34,10 @@ function serve() {
     const f = path.join(ROOT, path.normalize(p));
     if (!f.startsWith(ROOT + path.sep) || !fs.existsSync(f) || !fs.statSync(f).isFile()) { r.writeHead(404); r.end(); return; }
     r.writeHead(200, { 'content-type': TYPES[path.extname(f)] || 'application/octet-stream', 'cache-control': 'no-store' });
+    if (swVersion && p.endsWith('/sw.js')) {
+      r.end(fs.readFileSync(f, 'utf8').replace(/^const VERSION = .*;$/m, `const VERSION = '${swVersion}';`));
+      return;
+    }
     fs.createReadStream(f).pipe(r);
   });
   return new Promise((res) => srv.listen(0, '127.0.0.1', () => res(srv)));
@@ -80,10 +86,11 @@ const base = `http://127.0.0.1:${srv.address().port}`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ephem-e2e-'));
 const browserA = await launch();
 let browserB = null;
+const pages = [];
 
 try {
   const ctxA = await browserA.newContext({ acceptDownloads: true });
-  const a = await ctxA.newPage(); watch(a, 'alice');
+  const a = await ctxA.newPage(); watch(a, 'alice'); pages.push(['alice', a]);
 
   // ---- landing and boot ----
   await a.goto(`${base}/`);
@@ -117,6 +124,16 @@ try {
   await a.click('#b-id-do-load');
   await a.waitForFunction((h) => document.querySelector('#me').textContent === h, savedHandle, { timeout: 10000 });
   check('sign in with key text restores the identity', true, savedHandle);
+  const a3 = await ctxA.newPage(); watch(a3, 'alice-tab3');
+  await a3.goto(`${base}/app/`);
+  await a3.waitForSelector('#v-start:not([hidden])');
+  await a3.click('#b-id-load');
+  await a3.fill('#t-keyin', keyText);
+  await a3.fill('#i-pass-in', PASS);
+  await a3.click('#b-id-do-load');
+  await a3.waitForSelector('#error:not([hidden])', { timeout: 10000 });
+  check('same identity in a second tab refused (Web Lock)', /already open in another tab/.test(await a3.textContent('#error')) && (await a3.textContent('#me')) !== savedHandle);
+  await a3.close();
 
   // ---- invite ----
   await openSettings(a);
@@ -133,7 +150,7 @@ try {
   qrVideo(invite, video);
   browserB = await launch(['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${video}`]);
   const ctxB = await browserB.newContext({ permissions: ['camera'] });
-  const b = await ctxB.newPage(); watch(b, 'bob');
+  const b = await ctxB.newPage(); watch(b, 'bob'); pages.push(['bob', b]);
   await b.goto(`${base}/app/`);
   await b.waitForSelector('#v-start:not([hidden])');
   await openSettings(b);
@@ -242,6 +259,10 @@ try {
   await b.press('#t-msg', 'Enter');
   await msgWith(a, 'them', 'still here').waitFor({ timeout: 5000 });
   check('chat continues after reconnect', true);
+  if (process.env.E2E_SHOTS) {
+    await a.screenshot({ path: path.join(process.env.E2E_SHOTS, 'chat-alice.png') });
+    await b.screenshot({ path: path.join(process.env.E2E_SHOTS, 'chat-bob.png') });
+  }
 
   await b.click('#b-sas-ok');
   check('SAS confirm marks verified', (await b.textContent('#verified')) === 'verified');
@@ -257,10 +278,55 @@ try {
   await a.waitForSelector('#error:not([hidden])');
   check('invalid code rejected', /not a valid Ephem code/.test(await a.textContent('#error')));
 
+  // ---- service worker: offline, version pinning, update on consent (§17.1) ----
+  await a.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 10000 });
+  await ctxA.setOffline(true);
+  await a.reload();
+  await a.waitForSelector('#v-start:not([hidden])', { timeout: 10000 });
+  check('app loads offline from the service worker', /^anon_/.test(await a.textContent('#me')));
+  await ctxA.setOffline(false);
+  const oldBuild = await a.getAttribute('meta[name="ephem-build"]', 'content');
+  swVersion = 'next-build';
+  await a.evaluate(() => navigator.serviceWorker.getRegistration().then((r) => r.update()));
+  await a.waitForSelector('#update:not([hidden])', { timeout: 10000 });
+  await a.waitForFunction(() => document.querySelector('#update-text').textContent.includes('next-build'), null, { timeout: 5000 });
+  const stillOld = await a.evaluate(() => caches.keys());
+  check('new build waits and is offered to the user', stillOld.includes(`ephem-${oldBuild}`), `offered build next-build, running ${oldBuild}`);
+  await Promise.all([a.waitForEvent('load'), a.click('#b-update')]);
+  await a.waitForSelector('#v-start:not([hidden])', { timeout: 10000 });
+  const keys = await a.evaluate(() => caches.keys());
+  check('update activates only on consent, old cache removed', keys.includes('ephem-next-build') && !keys.includes(`ephem-${oldBuild}`), keys.join(', '));
+  swVersion = null;
+
+  // ---- integrity (§17.2): tampered code is refused ----
+  const ctxT = await browserA.newContext();
+  const t = await ctxT.newPage();
+  await t.route('**/pkg/ephem_bg.wasm', async (route) => {
+    const body = fs.readFileSync(path.join(ROOT, 'app/pkg/ephem_bg.wasm'));
+    body[body.length - 1] ^= 1;
+    await route.fulfill({ body, contentType: 'application/wasm' });
+  });
+  await t.goto(`${base}/app/`);
+  await t.waitForSelector('#error:not([hidden])', { timeout: 10000 });
+  check('tampered wasm refused (SRI)', /could not start/.test(await t.textContent('#error')));
+  await t.unroute('**/pkg/ephem_bg.wasm');
+  await t.route('**/app/app.js', async (route) => {
+    const body = fs.readFileSync(path.join(ROOT, 'app/app.js'), 'utf8') + '\n// tampered';
+    await route.fulfill({ body, contentType: 'text/javascript' });
+  });
+  await t.goto(`${base}/app/?t`);
+  await t.waitForTimeout(1500);
+  check('tampered app.js refused (SRI)', (await t.textContent('#status')) === 'starting');
+  await ctxT.close();
+
   check('no CSP violations or page errors', problems.length === 0, problems.join(' | '));
 } catch (e) {
   check('e2e flow', false, e.message.split('\n')[0]);
   if (problems.length) console.log(problems.join('\n'));
+  // E2E_SHOTS=dir: screenshots of every page at the failure, for debugging.
+  if (process.env.E2E_SHOTS) {
+    for (const [who, pg] of pages) await pg.screenshot({ path: path.join(process.env.E2E_SHOTS, `${who}.png`), fullPage: true }).catch(() => {});
+  }
 } finally {
   await browserA.close();
   await browserB?.close();

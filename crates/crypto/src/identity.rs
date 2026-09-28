@@ -21,6 +21,19 @@ impl PeerId {
         }
         out
     }
+
+    /// Web Lock name that keeps one identity in one tab (§7.2):
+    /// `p2pchat-id-` + first 16 hex digits of `BLAKE2s(PeerId)`.
+    pub fn lock_name(&self) -> [u8; 27] {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let h = Blake2s256::digest(self.0);
+        let mut out = *b"p2pchat-id-0000000000000000";
+        for i in 0..8 {
+            out[11 + 2 * i] = HEX[(h[i] >> 4) as usize];
+            out[12 + 2 * i] = HEX[(h[i] & 15) as usize];
+        }
+        out
+    }
 }
 
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -99,6 +112,9 @@ mod tests {
         assert_ne!(a.sign_pk(), a.peer_id().0);
         let h = a.peer_id().handle();
         assert!(h.starts_with(b"anon_") && h[5..].iter().all(u8::is_ascii_hexdigit));
+        let l = a.peer_id().lock_name();
+        assert!(l.starts_with(b"p2pchat-id-") && l[11..].iter().all(u8::is_ascii_hexdigit));
+        assert_eq!(&l[11..17], &h[5..11], "same hash prefix as the handle");
     }
 
     #[test]

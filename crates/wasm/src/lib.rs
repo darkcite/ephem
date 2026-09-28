@@ -263,6 +263,12 @@ impl App {
         String::from_utf8_lossy(&h).into_owned()
     }
 
+    /// Web Lock name for the current identity (§7.2: one identity per tab).
+    pub fn lock_name(&self) -> String {
+        let l = self.inner.borrow().id.peer_id().lock_name();
+        String::from_utf8_lossy(&l).into_owned()
+    }
+
     /// Label of the saved identity in use, or empty for a temporary identity.
     pub fn identity_label(&self) -> String {
         self.inner.borrow().saved.as_ref().map(|s| String::from_utf8_lossy(&s.label).into_owned()).unwrap_or_default()

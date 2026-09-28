@@ -10,7 +10,7 @@ const FRAG = { 1: 'i', 2: 'a', 3: 'r', 4: 'q' };
 const TTL_LABEL = { 5: '5 seconds', 30: '30 seconds', 60: '1 minute', 300: '5 minutes', 3600: '1 hour', 86400: '1 day' };
 const TTL_SHORT = { 5: '5s', 30: '30s', 60: '1m', 300: '5m', 3600: '1h', 86400: '1d' };
 // ErrorCode values (§19) for negative return values.
-const ERR = { 0x01: 'E_INVALID_INVITE', 0x02: 'E_EXPIRED_INVITE', 0x03: 'E_INVITE_CONSUMED', 0x04: 'E_ANSWER_MISMATCH', 0x10: 'E_INVALID_ROOM',
+const ERR = { 0x23: 'E_DUPLICATE_SESSION', 0x01: 'E_INVALID_INVITE', 0x02: 'E_EXPIRED_INVITE', 0x03: 'E_INVITE_CONSUMED', 0x04: 'E_ANSWER_MISMATCH', 0x10: 'E_INVALID_ROOM',
   0x20: 'E_AUTH_FAILED', 0x21: 'E_CRYPTO_FAILED', 0x22: 'E_SAS_REJECTED', 0x30: 'E_ICE_FAILED', 0x31: 'E_NO_DIRECT_PATH', 0x32: 'E_RELAY_REJECTED',
   0x35: 'E_PEER_OFFLINE', 0x40: 'E_PROTOCOL_MISMATCH', 0x41: 'E_MESSAGE_TOO_LARGE', 0x42: 'E_BACKPRESSURE', 0x43: 'E_NOT_PERMITTED', 0x60: 'E_KEYFILE_INVALID' };
 const MESSAGES = {
@@ -32,6 +32,7 @@ const MESSAGES = {
   E_NOT_PERMITTED: 'That is not possible right now.',
   E_KEYFILE_INVALID: 'Wrong passphrase, or the key file is damaged.',
   E_BROWSER_UNSUPPORTED: 'This browser does not support WebRTC data channels.',
+  E_DUPLICATE_SESSION: 'This identity is already open in another tab. Close it there first.',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -45,6 +46,9 @@ let composing = null;          // { mode: 'reply' | 'edit', mine, seq }
 let readSent = 0;
 let typingTimer = 0;
 let scanStop = null;
+let pathText = '';
+let lockRelease = null;        // releases the Web Lock of the saved identity in use (§7.2)
+let updateWorker = null;
 const msgs = new Map();        // 'm:<seq>' (mine) / 't:<seq>' (theirs) → { li, body, tick, text, meta }
 const visibleTheirs = new Set();
 
@@ -95,12 +99,17 @@ function renderExposure() {
 }
 
 // ---- messages ------------------------------------------------------------------------------
+// The page scrolls (composer is sticky): follow new messages only if the reader is at the bottom.
+const atBottom = () => innerHeight + scrollY >= document.documentElement.scrollHeight - 160;
+const toBottom = () => scrollTo(0, document.documentElement.scrollHeight);
+
 function sysLine(t) {
+  const follow = atBottom();
   const li = document.createElement('li');
   li.className = 'sys';
   li.textContent = t;
   $('log').append(li);
-  $('log').scrollTop = $('log').scrollHeight;
+  if (follow) toBottom();
 }
 
 function quoteText(mine, seq) {
@@ -138,8 +147,9 @@ function addMessage(mine, seq, body, ttl, reply) {
   }
   const m = { li, body: b, tick, meta, text: body, mine, seq, deleted: false, level: 0 };
   msgs.set(li.dataset.key, m);
+  const follow = mine || atBottom();
   $('log').append(li);
-  $('log').scrollTop = $('log').scrollHeight;
+  if (follow) toBottom();
   if (!mine) io.observe(li);
   return m;
 }
@@ -330,7 +340,8 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       $('peer-state').textContent = num ? 'in background' : '';
       break;
     case EV.PATH:
-      $('diag-path').textContent = text(ptr, len);
+      pathText = text(ptr, len);
+      renderPath();
       break;
     case EV.SUSPENDED:
       status('disconnected', 'bad');
@@ -397,6 +408,29 @@ function reset() {
   status('ready');
   renderIdentity();
   show('v-start');
+}
+
+// The UI never shows raw IP addresses unless "show addresses" is on (§18).
+function renderPath() {
+  $('diag-path').textContent = $('c-addr').checked
+    ? pathText
+    : pathText.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '•••').replace(/\[[0-9a-fA-F:.]+\]/g, '[•••]');
+}
+
+// One saved identity per tab: a Web Lock named after the key (§7.2). Temporary identities are
+// unique by construction and need none.
+async function lockIdentity() {
+  lockRelease?.();
+  lockRelease = null;
+  if (!navigator.locks || !app.identity_label()) return true;
+  const name = app.lock_name();
+  return new Promise((resolve) => {
+    navigator.locks.request(name, { ifAvailable: true }, (lock) => {
+      if (!lock) return resolve(false);
+      resolve(true);
+      return new Promise((release) => { lockRelease = release; });
+    });
+  });
 }
 
 function renderIdentity() {
@@ -510,6 +544,7 @@ function saveIdentity() {
   $('t-keytext').value = b64u(blob);
   $('id-saved').hidden = false;
   renderIdentity();
+  lockIdentity();
 }
 
 async function loadIdentity() {
@@ -523,6 +558,11 @@ async function loadIdentity() {
   const pw = enc.encode($('i-pass-in').value);
   $('i-pass-in').value = '';
   if (app.load_identity(bytes, pw) === 0) {
+    if (!(await lockIdentity())) {
+      app.new_temporary_identity();
+      renderIdentity();
+      return error('E_DUPLICATE_SESSION');
+    }
     $('id-load').hidden = true;
     $('i-file').value = '';
     $('t-keyin').value = '';
@@ -613,6 +653,41 @@ if (bc) {
   });
 }
 
+// ---- version pinning (§17.1): a new build waits until the user agrees ------------------------
+async function registerWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const reg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => null);
+  if (!reg) return;
+  const offer = (w) => {
+    if (!w || !navigator.serviceWorker.controller) return; // first install: nothing to replace
+    updateWorker = w;
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.source === w && e.data?.version) $('update-text').textContent = `A new version of Ephem is available (build ${e.data.version}).`;
+    });
+    $('update-text').textContent = 'A new version of Ephem is available.';
+    w.postMessage('version');
+    $('update').hidden = false;
+  };
+  offer(reg.waiting);
+  reg.addEventListener('updatefound', () => {
+    const w = reg.installing;
+    w?.addEventListener('statechange', () => { if (w.state === 'installed') offer(w); });
+  });
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (updateWorker && !reloading) {
+      reloading = true;
+      location.reload();
+    }
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+}
+
+function applyUpdate() {
+  if (chatOpen && !confirm('Updating reloads Ephem and ends the current chat. Update now?')) return;
+  updateWorker?.postMessage('activate');
+}
+
 // ---- boot ----------------------------------------------------------------------------------
 const io = new IntersectionObserver((entries) => {
   for (const e of entries) {
@@ -625,7 +700,9 @@ const io = new IntersectionObserver((entries) => {
 
 async function main() {
   const frag = takeFragment();
-  wasm = await init();
+  // The wasm module is fetched with the SHA-384 pinned in index.html (§17.2).
+  const wasmSri = document.querySelector('meta[name="ephem-wasm"]')?.content;
+  wasm = await init({ module_or_path: fetch(new URL('./pkg/ephem_bg.wasm', import.meta.url), wasmSri ? { integrity: wasmSri } : {}) });
   app = new App();
   metaPtr = app.meta_ptr();
   renderIdentity();
@@ -658,7 +735,10 @@ async function main() {
     ended('E_SAS_REJECTED');
   };
   $('b-info').onclick = () => { $('diag').hidden = !$('diag').hidden; if (!$('diag').hidden) renderExposure(); };
+  $('b-update').onclick = applyUpdate;
+  $('b-update-later').onclick = () => { $('update').hidden = true; };
   $('b-drop').onclick = () => app.drop_path();
+  $('c-addr').onchange = renderPath;
   $('b-resume').onclick = () => app.create_resume(Number($('s-ttl').value));
   $('b-scan-resume').onclick = () => scan((t) => applyCode(t, true));
   $('b-resume-apply').onclick = () => { applyCode($('t-resume').value, false); $('t-resume').value = ''; };
@@ -674,7 +754,11 @@ async function main() {
   }
   $('b-id-save').onclick = () => { $('id-save').hidden = !$('id-save').hidden; $('id-load').hidden = true; $('id-saved').hidden = true; };
   $('b-id-load').onclick = () => { $('id-load').hidden = !$('id-load').hidden; $('id-save').hidden = true; };
-  $('b-id-temp').onclick = () => { if (app.new_temporary_identity() === 0) renderIdentity(); else error('E_NOT_PERMITTED'); };
+  $('b-id-temp').onclick = () => {
+    if (app.new_temporary_identity() !== 0) return error('E_NOT_PERMITTED');
+    lockIdentity();
+    renderIdentity();
+  };
   $('b-id-do-save').onclick = saveIdentity;
   $('b-id-do-load').onclick = loadIdentity;
   for (const id of ['s-privacy', 'c-v6', 'c-read', 'c-typing']) $(id).onchange = applyPrefs;
@@ -692,6 +776,11 @@ async function main() {
     $('expiry').textContent = s >= 0 && !$('v-code').hidden ? `Code expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : '';
   }, 1000);
   addEventListener('pagehide', () => app.close());
+
+  $('ios-note').hidden = navigator.standalone !== true;
+  const build = document.querySelector('meta[name="ephem-build"]')?.content;
+  if (build) $('build').textContent = `Build ${build}.`;
+  registerWorker();
 
   status('ready');
   show('v-start');

@@ -19,4 +19,5 @@ wasm-bindgen --target web --no-typescript --out-dir app/pkg --out-name ephem \
 if command -v wasm-opt >/dev/null; then
   wasm-opt -Os --enable-bulk-memory --enable-nontrapping-float-to-int -o app/pkg/ephem_bg.wasm app/pkg/ephem_bg.wasm
 fi
+python3 tools/stamp.py
 ls -l app/pkg

@@ -391,14 +391,26 @@ fn selected_pair(report: &js_sys::Map) -> Option<(String, bool)> {
     }
     let local = report.get(&field(&pair, "localCandidateId")?);
     let remote = report.get(&field(&pair, "remoteCandidateId")?);
+    // `type addr:port`, IPv6 in brackets so the UI can hide addresses (§18).
     let desc = |c: &JsValue| {
         let addr = field(c, "address").or_else(|| field(c, "ip")).and_then(|x| x.as_string()).unwrap_or_else(|| "?".into());
         let port = field(c, "port").and_then(|x| x.as_f64()).unwrap_or(0.0);
-        (text_field(c, "candidateType"), addr, port)
+        let ty = text_field(c, "candidateType");
+        if addr.contains(':') { format!("{ty} [{addr}]:{port}") } else { format!("{ty} {addr}:{port}") }
     };
-    let (lt, la, lp) = desc(&local);
-    let (rt, ra, rp) = desc(&remote);
-    let proto = text_field(&local, "protocol");
-    let relay = lt == "relay" || rt == "relay";
-    Some((format!("you {lt} {la}:{lp} ↔ peer {rt} {ra}:{rp} ({proto})"), relay))
+    let relay = text_field(&local, "candidateType") == "relay" || text_field(&remote, "candidateType") == "relay";
+    let num = |k: &str| field(&pair, k).and_then(|x| x.as_f64()).unwrap_or(0.0);
+    let kb = |b: f64| b / 1024.0;
+    Some((
+        format!(
+            "you {} ↔ peer {} ({}) · RTT {:.0} ms · ↑ {:.1} KB ↓ {:.1} KB",
+            desc(&local),
+            desc(&remote),
+            text_field(&local, "protocol"),
+            num("currentRoundTripTime") * 1000.0,
+            kb(num("bytesSent")),
+            kb(num("bytesReceived"))
+        ),
+        relay,
+    ))
 }

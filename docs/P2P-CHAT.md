@@ -37,8 +37,8 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 |---|---|
 | Design | Complete up to MVP-3, plus Tor mode and public channels |
 | Proven | SDP rebuild from ~150–165-byte codes connects in **every tested pair: Chrome, Safari, Firefox and iPhone, both directions across engines**; camera permission exposes the real IP in Chrome and iPhone Safari but **not Firefox**; a pending offer survives **182 s** in the iOS background; the protocol crates fit in 291 KB gzip **with no C code**; Argon2id 34 ms (t = 4, Apple Silicon); **arti (Tor) builds for WASM on Linux and macOS (G1)**; **live Snowflake rendezvous + DataChannel from Chrome, Safari, Firefox and iPhone (G2)**; browsers publish an IPNS record and read it back via `trustless-gateway.link` |
-| Built | **MVP-1 step M1 works end to end** (APP-E2E, §24.2): landing page, `/app/` with invite → answer by QR, link or paste, answer-link hand-off between tabs, Noise KK, SAS, 1:1 chat with delivery ticks, leave. Crates `proto`, `crypto`, `core`, `wasm` (189 KB wasm before gzip) |
-| Next | 1. MVP-1 steps M2 (saved identity/key file, pending queue, read/typing, reply/edit/delete, self-destruct, QR scanner) and M3 (T3 resume code, diagnostics and §29.2 disclosure panel, IPv6 warning, service worker, SRI). 2. In parallel, TOR-1 steps E3–E5 (gates G3, G4). 3. S3, S7, S9 and two-device S10 with the app |
+| Built | **MVP-1 feature-complete, 41/41 end-to-end checks in Chromium** (APP-E2E, §24.2): landing page; `/app/` PWA; temporary or saved identity (encrypted key file, one identity per tab); invite → answer by QR (camera scanner in wasm), link or paste, hand-off between tabs; Noise KK; SAS policy; 1:1 chat with pending queue and ticks 🕓 ✓ ✓✓, typing, reply, edit, delete, self-destruct timers; T3 reconnect codes; diagnostics with relay rejection; "what your peer sees" panel and IPv6 warning; version-pinned service worker, SRI, offline start. 188 KB gzip wasm. 33 native unit tests |
+| Next | 1. Owner: run `ONLY=app ./checks/run_all.sh` on the laptop, try two real devices (S3, S10 two-device, iPhone), then make the repo public and switch on Pages (§23.1a). 2. MVP-2. 3. In parallel, TOR-1 steps E3–E5 (gates G3, G4) |
 | Blocked on devices | S3, S6, S7, S9 (phones, real networks) |
 
 ---
@@ -107,11 +107,11 @@ Rust owns layers 3–5 and **all** state: rooms, peers, crypto, sequencing, memb
 Only a static host is required:
 
 ```
-<base>/index.html          (CSP in <meta>, see §17.3)
-<base>/boot.js             (loads WASM, registers the SW; nothing else)
-<base>/app_bg.wasm
-<base>/app.js              (wasm-bindgen glue)
-<base>/style.css
+<base>/index.html            (CSP and integrity hashes in <meta>, stamped by tools/stamp.py; §17.2, §17.3)
+<base>/app.js                (DOM glue; registers the SW; fetches the wasm with its pinned hash)
+<base>/app.css
+<base>/pkg/ephem.js          (wasm-bindgen glue)
+<base>/pkg/ephem_bg.wasm
 <base>/manifest.webmanifest
 <base>/sw.js
 <base>/icons/*
@@ -172,15 +172,15 @@ ephem/
 │   │   ├── transport.rs            # Transport = Direct(WebRTC) | Tor(embedded), mode guard (§28.5)
 │   │   └── io.rs                   # Input / Action enums, ActionSink (fixed capacity)
 │   └── wasm/                       # the ONLY crate touching the browser
-│       ├── lib.rs                  # #[wasm_bindgen] ChatApp facade
-│       ├── rtc.rs                  # web-sys RTCPeerConnection / RTCDataChannel adapter
-│       ├── stats.rs                # getStats → Diagnostics
-│       ├── qr.rs                   # qrcode (encode) + BarcodeDetector / rqrr (decode)
-│       ├── share.rs                # Web Share, clipboard, BroadcastChannel hand-off
-│       ├── keystore.rs             # file download/upload + IndexedDB slots (≤ 8) + Web Locks (§7.2)
+│       ├── lib.rs                  # #[wasm_bindgen] App facade, events to JS, identity save/load
+│       ├── rtc.rs                  # web-sys RTCPeerConnection / RTCDataChannel adapter, getStats path check
+│       ├── qr.rs                   # qrcode (encode) + rqrr (decode; BarcodeDetector is used from JS when present)
+│       ├── keystore.rs             # (MVP-2) IndexedDB slots (≤ 8); MVP-1 keeps key files and Web Locks in lib.rs / app.js
 │       └── tor/                    # embedded Tor (§28): arti runtime shim, Snowflake transport, IndexedDB dir cache
 │                                   # built as a separate lazily-loaded WASM module (tor_bg.wasm), used only by tor.html
-├── web/                            # static assets (§4.1)
+├── app/                            # static web app (§4.1): index.html, app.js, app.css, sw.js, manifest, icons, pkg/
+├── index.html, site.css            # landing page (§23.1a)
+├── tools/                          # stamp.py (integrity, §17.2), make_icons.py
 ├── tests/                          # native replay/fuzz of proto + core
 └── docs/spec/                      # this document
 ```
@@ -289,7 +289,7 @@ The app opens on a sign-in screen:
 
 - Key: Argon2id(passphrase, salt), 32 bytes. After sign-in the derived key stays in wasm memory, so the app can **re-save** after the contacts change without asking again. It is zeroized on sign-out. Defaults: m = 19 MiB (the OWASP minimum) and t = 4, which is about 100 ms in desktop WASM (spike S5b, where t = 2 took 50 ms).
 - **Save and load options:**
-  1. **Download** it as `p2pchat-<label>.p2pkey`, and load it back with a file picker. This is the reliable backup on every target.
+  1. **Download** it as `ephem-<label>.p2pkey`, and load it back with a file picker. This is the reliable backup on every target.
   2. **Copy** it as base64url text. It is about 170 characters with no contacts, and much longer with contacts, so the file is recommended then.
   3. **Remember on this device**: keep the same encrypted blob in an IndexedDB slot. The passphrase is still needed each time; it is never stored. **Limit:** Safari deletes storage written by scripts after 7 days without a visit, for sites used in a Safari tab (not for installed PWAs).
 - **Backups can go stale.** After contacts change, the remembered slot is updated automatically, but a downloaded file cannot be. The UI shows "Backup out of date — download again" until the user does.
@@ -634,7 +634,7 @@ Unknown `rtype` values are ignored if `rflags.bit0` (IGNORABLE) is set. Otherwis
 
 - Every code and frame carries `ver`.
 - If majors differ, the connection is closed with `E_PROTOCOL_MISMATCH`.
-- HELLO carries `ver_min..ver_max` and a capability bitset: bit0 group, bit1 resume, bit2 in-band restart, bit3 **sends read receipts**, bit4 **sends typing**, bit5 Tor, and so on. The session uses the intersection of the protocol bits. Bits 3 and 4 are the peer's privacy settings (§11.7).
+- HELLO carries `ver_min..ver_max` and a capability bitset: bit0 group, bit1 resume, bit2 in-band restart, bit3 **sends read receipts**, bit4 **sends typing**, bit5 Tor, bit8 **the sender scanned the peer's code in the app** (SAS policy, §10.4), and so on. The session uses the intersection of the protocol bits. Bits 3 and 4 are the peer's privacy settings (§11.7).
 
 ### 11.5 Backpressure
 
@@ -839,7 +839,8 @@ Wallet authentication is not in any current phase (§7.4). Identity comes only f
 
 ### 17.2 Integrity
 
-- `boot.js` loads `app.js` and `app_bg.wasm` with SRI hashes.
+- `index.html` is the root of trust, pinned by the service worker. `tools/stamp.py` (run by `./build.sh`) writes into it: SRI on `app.css` and `app.js`; an **import map with `integrity`** for every JS module (`app.js`, `pkg/ephem.js`), whose own SHA-256 is allowed in the CSP `script-src`; and the SHA-384 of `ephem_bg.wasm`, which `app.js` passes to `fetch(…, { integrity })`. A tampered wasm or `app.js` is refused (APP-E2E). Browsers without import-map integrity still check `app.js` and the wasm.
+- The build id (first 12 hex digits of SHA-256 over the stamped hashes) is the service-worker cache version and is shown in the app footer.
 - Builds are reproducible (pinned toolchain, `--remap-path-prefix`). The hash of each build is published in GitHub Releases and shown in the app's About screen.
 
 ### 17.3 CSP (set in a `<meta>` tag, because GitHub Pages cannot set headers)
@@ -1052,7 +1053,7 @@ Members     4 / 8  (links 5 / 6)
   | Path | Content |
   |---|---|
   | `/` | **Landing page** (static HTML, no scripts needed): **Ephem**: what the messenger is, how a chat starts (two codes, in person or by link), what is and is not protected (§21), supported browsers, and a prominent **Start** link to `/app/` |
-  | `/app/` | The PWA: `index.html`, `app.js` (DOM glue only), `app.css`, `pkg/ephem.js` + `pkg/ephem_bg.wasm` (built by `./build.sh` and committed); service worker and manifest come with M3 (§4.1) |
+  | `/app/` | The PWA: `index.html`, `app.js` (DOM glue only), `app.css`, `sw.js`, `manifest.webmanifest`, `icons/`, `pkg/ephem.js` + `pkg/ephem_bg.wasm` (built and stamped by `./build.sh`, committed) (§4.1) |
   | `/app/tor.html` | Tor-mode entry (§28.6), once TOR-2 ships |
   | `/checks/web/` | The checkpoint page (§24) |
   | `/docs/P2P-CHAT.md` | This document |
@@ -1113,7 +1114,7 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 |---|---|---|---|---|
 | S1 | Does the Appendix A template SDP connect, in every offerer × answerer browser pair? | ✅ **All tested pairs, both directions:** Chrome 153 ↔ Chrome, Chrome ↔ Firefox 142, Firefox ↔ Firefox, Safari 26.5 ↔ Chrome; Safari and iPhone Safari (iOS 18.7) in one tab. Raw-IP and mDNS candidates. The template's fixed `max-message-size:262144` is accepted by Firefox, which itself advertises 1 073 741 823 | 🤖 | §8 |
 | S2 | Real code sizes per browser | ✅ Chrome, Safari and iPhone: ufrag 4, pwd 24 → invite **153 B** (mDNS). **Firefox 142: ufrag 8, pwd 32 → invite 165 B** (§8.5 budget assumed this worst case). All: `actpass`/`active`, mid 0, sctp-port 5000. Raw SDP 584–738 B | 🤖 | §8.5 |
-| APP-E2E | Does the MVP-1 app work end to end in a real browser? | ✅ **Chromium (container), 18/18:** landing → app; invite 141 B (2 raw host candidates; no STUN reachable) → link pasted by Bob → answer → answer link opened in a **new tab** is handed to the inviting tab via `BroadcastChannel` (this is S7 on one device) → Noise KK → **identical SAS on both sides** → chat both ways incl. Unicode and a 4 096-byte message → ✓ delivered → leave ends the chat on the other side; invalid code rejected; **no CSP violations**. Native: 22 unit tests (proto, crypto, core incl. tamper/replay) | 🤖 (`ONLY=app`) | §8, §10, §11 |
+| APP-E2E | Does the MVP-1 app work end to end in a real browser? | ✅ **Chromium (container), 41/41** (`checks/e2e_app.mjs`, two browsers): landing → app; **identity** saved as key file, wrong passphrase refused, signed back in, same identity in a second tab refused (Web Lock); invite 141 B (2 raw host candidates; no STUN reachable), "what your peer sees" panel; Bob **scans the invite with a camera** (fake camera playing the real QR; rqrr in wasm, the iOS path); answer link opened in a **new tab** is handed to the inviting tab (S7 on one device); Noise KK, **identical SAS**; chat both ways (Unicode, 4 096 B), ✓ then ✓✓, typing, reply with quote, edit, delete for everyone, **self-destruct 5 s** removes the message on both sides; path diagnostics via getStats (no relay, addresses hidden by default); **simulated network loss → message queued 🕓 → reconnect codes (T3) → delivered and ✓**; leave; invalid code; **offline start from the service worker; a new build waits and activates only on consent; tampered wasm and tampered `app.js` refused (SRI)**; no CSP violations or page errors. Native: 33 unit tests (proto, crypto incl. key file, core incl. two sessions over paths, tamper, replay, resume binding; QR render → decode) | 🤖 (`ONLY=app`) | §7, §8, §10–§13, §17, §29 |
 | S3 | Path switch without signalling (T0) | ⏳ | ✋ two devices | §13 |
 | S4 | Does camera permission disable mDNS obfuscation? | ✅ **Chrome 153 and iPhone Safari: yes** (raw IP after permission; stays after the camera stops). **Firefox 142: no** (mDNS even with the camera live). Safari without permission: mDNS. So the invite builder's own filtering (§9.4) is mandatory: two of three engines leak the LAN IP after the QR scanner is used | 🤖 / iPhone page | §9.4 |
 | S5 | WASM sizes of the protocol crates | ✅ gzip (Linux and macOS agree within 1 %): Noise 38 KB; key-file crypto 131 KB; QR 33 KB; all three 176 KB; with openmls 291 KB. **The whole protocol stack builds with no C compiler** (verified with `CC=/bin/false`, and on macOS with Apple clang) once `snow` is used **without** its `std` feature, because `snow`'s `std` silently enables `ring` (C). Also: `hkdf::SimpleHkdf` for BLAKE2s | 🤖 | §22 |
@@ -1172,6 +1173,9 @@ The v0.1 points that were **confirmed** are kept throughout: principles P1–P9,
 | v0.6 | Argon2id t = 4 | §7.3 |
 | v0.7 | Transport cipher: snow for the handshake only; raw split keys + in-place ChaCha20-Poly1305 with the header as AAD (same wire as Noise) | §10.1 |
 | v0.7 | SAS emoji table = U+1F400..U+1F4FF; PING carries `hidden` | §10.4, §11.2 |
+| v0.7 | HELLO caps bit8 SCANNED drives the SAS policy (the core cannot otherwise know how the peer got our code); codes shorter than any valid code are `E_INVALID_INVITE`, not a version mismatch | §10.4, §11.4, §8.3 |
+| v0.7 | Integrity via stamped `index.html` (import-map integrity + CSP hash + wasm fetch integrity) instead of a separate `boot.js`; key files are named `ephem-<label>.p2pkey` | §17.2, §7.3 |
+| v0.7 | "Simulate network loss" in the diagnostics drops the path without GOODBYE, so users (and the e2e test) can exercise T3 | §13, §18 |
 
 ### 25.3 Open questions
 
