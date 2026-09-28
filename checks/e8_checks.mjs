@@ -13,8 +13,10 @@ const OUT = process.argv[2] || path.join(HERE, 'out', 'e8');
 fs.mkdirSync(OUT, { recursive: true });
 
 const APPS = [['Google Chrome', 'mac-chrome'], ['Safari', 'mac-safari'], ['Firefox', 'mac-firefox']];
+// E8_BROWSERS="Google Chrome,Firefox" limits which apps are opened.
+const WANT = (process.env.E8_BROWSERS || '').split(',').map((x) => x.trim()).filter(Boolean);
 const installed = process.platform === 'darwin'
-  ? APPS.filter(([app]) => cp.spawnSync('open', ['-Ra', app]).status === 0)
+  ? APPS.filter(([app]) => (!WANT.length || WANT.includes(app)) && cp.spawnSync('open', ['-Ra', app]).status === 0)
   : [];
 
 const cfg = await mk.baseConfig({ label: 'desktop', net: false, autorun: false, interactive: true, resultUrl: 'result' });
@@ -38,6 +40,7 @@ if (!installed.length) {
 } else {
   for (const [app, label] of installed) {
     cp.spawn('open', ['-a', app, `${target}?mode=e8&label=${label}`], { stdio: 'ignore' });
+    await new Promise((r) => setTimeout(r, 1500));
   }
   console.log(`Opened the E8 page in: ${installed.map(([a]) => a).join(', ')}.`);
 }

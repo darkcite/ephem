@@ -96,23 +96,31 @@
   });
 
   // E8: open DataChannel + 1 s timer; the user switches to ANOTHER TAB (not app) for >= 6 min.
-  let e8armed = false, e8hiddenAt = 0, e8hiddenMs = 0;
+  // A result needs ONE continuous hidden period of >= 6 min, or clear throttling (a gap >= 30 s).
+  // Short hides (e.g. another app window briefly covering this one) are ignored.
+  const E8_NEED_S = 360, E8_THROTTLED_MS = 30000;
+  let e8armed = false, e8hiddenAt = 0;
   async function e8() {
     $('e8').disabled = true;
     await C.e8Start();
     e8armed = true;
-    log('E8 armed: switch to ANOTHER TAB in this browser for at least 6 minutes (Chrome throttles hidden tabs after 5), then come back.');
+    log('E8 armed: switch to ANOTHER TAB in this browser for at least 6 minutes in one go (Chrome throttles hidden tabs after 5), then come back.');
   }
   document.addEventListener('visibilitychange', async () => {
     if (!e8armed) return;
     if (document.visibilityState === 'hidden') { e8hiddenAt = performance.now(); return; }
     if (!e8hiddenAt) return;
-    e8hiddenMs += performance.now() - e8hiddenAt; e8hiddenAt = 0;
+    const periodS = Math.round((performance.now() - e8hiddenAt) / 1000); e8hiddenAt = 0;
+    const r = { ...C.e8Result(), hiddenSeconds: periodS };
+    const throttled = r.maxGapMs >= E8_THROTTLED_MS;
+    if (!throttled && periodS < E8_NEED_S) {
+      log(`E8: hidden only ${periodS} s in one go (need ${E8_NEED_S} s); still armed, switch away again.`);
+      return;
+    }
     e8armed = false;
-    const r = { ...C.e8Result(), hiddenSeconds: Math.round(e8hiddenMs / 1000) };
-    const status = r.hiddenSeconds < 360 ? 'INCONCLUSIVE' : (r.maxGapMs < 5000 ? 'PASS' : 'FAIL');
-    add('E8', `${cfg.label}: timers in a hidden tab with an open DataChannel (${r.hiddenSeconds} s hidden)`, status,
-      { ...r, note: 'PASS: max gap < 5 s while hidden. FAIL: throttled (gaps up to ~60 s), which would break Tor/Snowflake keepalives in background tabs' });
+    const status = throttled ? 'FAIL' : (r.maxGapMs < 5000 ? 'PASS' : 'INCONCLUSIVE');
+    add('E8', `${cfg.label}: timers in a hidden tab with an open DataChannel (${periodS} s hidden)`, status,
+      { ...r, note: 'PASS: max gap < 5 s over >= 6 min hidden. FAIL: gap >= 30 s (throttled), which breaks Tor/Snowflake keepalives in background tabs' });
     $('e8').disabled = false;
     await send(false);
   });
