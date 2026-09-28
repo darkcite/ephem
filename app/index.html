@@ -13,7 +13,7 @@
 <body>
 <header class="bar">
   <a class="brand" href="../">Ephem</a>
-  <span id="me" class="pill" title="Your display handle for this session (not a proof of identity)">…</span>
+  <span id="me" class="pill" title="Your display handle (not a proof of identity)">…</span>
   <span id="status" class="pill status">starting</span>
 </header>
 
@@ -24,6 +24,7 @@
   <section id="v-start" class="view" hidden>
     <h1>Start a private chat</h1>
     <p class="lead">Two codes, one each way. Nothing is stored: when either of you leaves, the chat is gone.</p>
+
     <div class="card">
       <h2>1 · Invite someone</h2>
       <p>Creates an invite code. Show it as a QR code, or send the link.</p>
@@ -31,13 +32,44 @@
     </div>
     <div class="card">
       <h2>Got a code?</h2>
-      <p>Paste an invite link to answer it, or paste the answer to your own invite.</p>
+      <p>Scan it, paste an invite link to answer it, or paste the answer to your own invite.</p>
       <textarea id="t-code" rows="3" placeholder="https://…/app/#i=…" spellcheck="false" autocomplete="off"></textarea>
-      <button id="b-apply">Open code</button>
+      <div class="actions">
+        <button id="b-apply">Open code</button>
+        <button id="b-scan" class="scan">Scan QR code</button>
+      </div>
     </div>
+
+    <div class="card identity">
+      <h2>Your identity</h2>
+      <p id="id-desc"></p>
+      <div class="actions">
+        <button id="b-id-save">Save this identity…</button>
+        <button id="b-id-load">Use a saved identity…</button>
+        <button id="b-id-temp" hidden>Switch to a temporary identity</button>
+      </div>
+      <div id="id-save" class="sub" hidden>
+        <p class="note">Saving gives you the same identity every time, so peers can recognise you, and can link your sessions. The file is encrypted with your passphrase (Argon2id). The label is <strong>not</strong> secret.</p>
+        <label>Label <input id="i-label" maxlength="32" placeholder="e.g. Work" autocomplete="off"></label>
+        <label>Passphrase (12+ characters) <input id="i-pass" type="password" autocomplete="new-password"></label>
+        <label>Repeat passphrase <input id="i-pass2" type="password" autocomplete="new-password"></label>
+        <button id="b-id-do-save" class="primary">Encrypt and download</button>
+        <div id="id-saved" hidden>
+          <p class="note">Saved. Keep the file (or this text) safe: a lost file or passphrase cannot be recovered.</p>
+          <textarea id="t-keytext" rows="3" readonly spellcheck="false"></textarea>
+        </div>
+      </div>
+      <div id="id-load" class="sub" hidden>
+        <label>Key file <input id="i-file" type="file" accept=".p2pkey,application/octet-stream"></label>
+        <label>…or key text <textarea id="t-keyin" rows="2" spellcheck="false" autocomplete="off"></textarea></label>
+        <label>Passphrase <input id="i-pass-in" type="password" autocomplete="current-password"></label>
+        <button id="b-id-do-load" class="primary">Sign in</button>
+      </div>
+    </div>
+
     <details class="card">
-      <summary>Connection settings</summary>
-      <label>Candidates in my codes
+      <summary>Connection and privacy settings</summary>
+      <label>Addresses in my codes
         <select id="s-privacy">
           <option value="1" selected>Default: local name + public address (STUN)</option>
           <option value="0">LAN only: same network, no STUN</option>
@@ -45,7 +77,9 @@
         </select>
       </label>
       <label class="row"><input id="c-v6" type="checkbox"> Drop IPv6 addresses</label>
-      <label>Invite lifetime
+      <label class="row"><input id="c-read" type="checkbox" checked> Send read receipts (and see the peer's)</label>
+      <label class="row"><input id="c-typing" type="checkbox" checked> Send typing notifications (and see the peer's)</label>
+      <label>Code lifetime
         <select id="s-ttl">
           <option value="300" selected>5 minutes</option>
           <option value="900">15 minutes</option>
@@ -60,17 +94,28 @@
   <section id="v-code" class="view" hidden>
     <h1 id="code-title">Your invite</h1>
     <p id="code-help" class="lead"></p>
-    <div id="qr" class="qr" aria-label="QR code"></div>
-    <textarea id="t-link" rows="3" readonly spellcheck="false"></textarea>
-    <div class="actions">
-      <button id="b-copy" class="primary">Copy link</button>
-      <button id="b-share">Share…</button>
+    <div class="codebox">
+      <div class="qr" aria-label="QR code"></div>
+      <textarea class="link" rows="3" readonly spellcheck="false"></textarea>
+      <div class="actions">
+        <button class="primary copy">Copy link</button>
+        <button class="share">Share…</button>
+      </div>
+    </div>
+    <div id="exposure" class="card exposure" hidden>
+      <h2>What your peer will see</h2>
+      <p class="addrs"></p>
+      <p class="note">Your peer can see this IP address. If you use a VPN, it should be the VPN's address, not your home address.</p>
+      <p class="warn v6warn" hidden>Your peer can see two addresses: an IPv4 one and an IPv6 one. If you use a VPN that covers only IPv4, your IPv6 address is your real one. <button class="drop-v6">Drop IPv6 from my next codes</button></p>
     </div>
     <div id="answer-box" class="card" hidden>
       <h2>2 · Paste their answer</h2>
-      <p>When your peer opens the invite, the app shows them an answer. Paste it here, or open their answer link on this device.</p>
+      <p>When your peer opens the invite, the app shows them an answer. Scan or paste it here, or open their answer link on this device.</p>
       <textarea id="t-answer" rows="3" placeholder="https://…/app/#a=…" spellcheck="false" autocomplete="off"></textarea>
-      <button id="b-answer">Connect</button>
+      <div class="actions">
+        <button id="b-answer">Connect</button>
+        <button id="b-scan-answer" class="scan">Scan answer</button>
+      </div>
     </div>
     <p id="expiry" class="note"></p>
     <button id="b-cancel" class="ghost">Cancel</button>
@@ -84,7 +129,7 @@
         <span id="sas-digits" class="sas-digits"></span>
         <span id="sas-emoji" class="sas-emoji"></span>
       </div>
-      <p>Compare it with your peer on another channel, for example a call. If it differs, someone may be in the middle.</p>
+      <p id="sas-help">Compare it with your peer on another channel, for example a call. If it differs, someone may be in the middle.</p>
       <div class="actions">
         <button id="b-sas-ok" class="primary">Codes match</button>
         <button id="b-sas-bad" class="danger">They differ</button>
@@ -94,9 +139,50 @@
       <span id="peer">peer</span>
       <span id="verified" class="pill">unverified</span>
       <span id="peer-state" class="note"></span>
+      <label class="ttl" title="Self-destruct timer for new messages (both of you)">⏱
+        <select id="s-chat-ttl">
+          <option value="0">off</option>
+          <option value="5">5 s</option>
+          <option value="30">30 s</option>
+          <option value="60">1 min</option>
+          <option value="300">5 min</option>
+          <option value="3600">1 h</option>
+          <option value="86400">1 day</option>
+        </select>
+      </label>
+      <button id="b-info" class="ghost" title="Connection details">ⓘ</button>
       <button id="b-leave" class="ghost">Leave</button>
     </div>
+    <div id="diag" class="card diag" hidden>
+      <p><strong>Path:</strong> <span id="diag-path">measuring…</span></p>
+      <p><strong>What your peer sees:</strong> <span id="diag-exposure"></span></p>
+      <p class="note">Direct connection only. Messages exist only in these two tabs; pending messages exist only in this tab.</p>
+      <button id="b-drop" class="ghost">Simulate network loss</button>
+    </div>
+    <div id="resume" class="card resume" hidden>
+      <h2>Direct path lost</h2>
+      <p>Share a reconnect code with your peer (either of you can make one). Your messages and pending messages are kept for 10 minutes.</p>
+      <div class="actions">
+        <button id="b-resume" class="primary">Create reconnect code</button>
+        <button id="b-scan-resume" class="scan">Scan their code</button>
+      </div>
+      <div class="codebox" hidden>
+        <p class="note resume-help"></p>
+        <div class="qr" aria-label="QR code"></div>
+        <textarea class="link" rows="2" readonly spellcheck="false"></textarea>
+        <div class="actions">
+          <button class="primary copy">Copy link</button>
+          <button class="share">Share…</button>
+        </div>
+      </div>
+      <textarea id="t-resume" rows="2" placeholder="Paste their reconnect code or answer" spellcheck="false" autocomplete="off"></textarea>
+      <button id="b-resume-apply">Apply</button>
+    </div>
     <ol id="log" class="log" aria-live="polite"></ol>
+    <div id="composing" class="composing" hidden>
+      <span id="composing-text"></span>
+      <button id="b-composing-x" class="ghost" title="Cancel">✕</button>
+    </div>
     <form id="f-send" class="composer">
       <textarea id="t-msg" rows="1" maxlength="4096" placeholder="Message" autocomplete="off"></textarea>
       <button id="b-send" class="primary" type="submit">Send</button>
@@ -112,6 +198,12 @@
 
   <p id="error" class="warn" hidden></p>
 </main>
+
+<div id="scanner" class="scanner" hidden>
+  <video id="scan-video" playsinline muted></video>
+  <p>Point the camera at the QR code.</p>
+  <button id="b-scan-cancel">Cancel</button>
+</div>
 
 <footer class="foot">
   <p>Security depends on the codes reaching the right person and on the code this site serves. In direct mode your peer can see your IP address.</p>

@@ -1,23 +1,36 @@
-// Ephem UI glue. Rust (pkg/ephem_bg.wasm) owns every piece of state; this file only renders the
-// DOM and forwards input. Event contract: crates/wasm/src/lib.rs `ev` (re-entrancy rule: event
-// handlers never call into `app` synchronously).
+// Ephem UI glue. Rust (pkg/ephem_bg.wasm) owns every piece of protocol and chat state; this file
+// renders the DOM and forwards input. Event contract: crates/wasm/src/lib.rs `ev` / `meta`.
+// Re-entrancy rule: an ephemEvent handler never calls into `app` synchronously (use `later`).
 import init, { App, qr_svg_path } from './pkg/ephem.js';
 
-const EV = { CODE: 1, CONNECTED: 2, HELLO: 3, CHAT: 4, DELIVERED: 5, DEGRADED: 6, ALIVE: 7, PEER_HIDDEN: 8, CLOSED: 9, ERROR: 10, PROGRESS: 11 };
-const ST = { NONE: 0, GATHERING: 1, AWAITING: 2, CONNECTING: 3, CONNECTED: 4, CLOSED: 5 };
-
+const EV = { CODE: 1, CONNECTED: 2, HELLO: 3, CHAT: 4, DELIVERED: 5, DEGRADED: 6, ALIVE: 7, PEER_HIDDEN: 8, CLOSED: 9, ERROR: 10,
+  PROGRESS: 11, PATH: 12, SETTING: 13, EDITED: 14, DELETED: 15, EXPIRED: 16, READ: 17, TYPING: 18, SUSPENDED: 19 };
+const ST = { NONE: 0, GATHERING: 1, AWAITING: 2, CONNECTING: 3, CONNECTED: 4, CLOSED: 5, SUSPENDED: 6 };
+const FRAG = { 1: 'i', 2: 'a', 3: 'r', 4: 'q' };
+const TTL_LABEL = { 5: '5 seconds', 30: '30 seconds', 60: '1 minute', 300: '5 minutes', 3600: '1 hour', 86400: '1 day' };
+const TTL_SHORT = { 5: '5s', 30: '30s', 60: '1m', 300: '5m', 3600: '1h', 86400: '1d' };
+// ErrorCode values (§19) for negative return values.
+const ERR = { 0x01: 'E_INVALID_INVITE', 0x02: 'E_EXPIRED_INVITE', 0x03: 'E_INVITE_CONSUMED', 0x04: 'E_ANSWER_MISMATCH', 0x10: 'E_INVALID_ROOM',
+  0x20: 'E_AUTH_FAILED', 0x21: 'E_CRYPTO_FAILED', 0x22: 'E_SAS_REJECTED', 0x30: 'E_ICE_FAILED', 0x31: 'E_NO_DIRECT_PATH', 0x32: 'E_RELAY_REJECTED',
+  0x35: 'E_PEER_OFFLINE', 0x40: 'E_PROTOCOL_MISMATCH', 0x41: 'E_MESSAGE_TOO_LARGE', 0x42: 'E_BACKPRESSURE', 0x43: 'E_NOT_PERMITTED', 0x60: 'E_KEYFILE_INVALID' };
 const MESSAGES = {
-  E_INVALID_INVITE: 'This code is not a valid Ephem code. Copy the whole link again.',
-  E_EXPIRED_INVITE: 'This invite has expired. Ask for a new one.',
+  E_INVALID_INVITE: 'This is not a valid Ephem code. Copy the whole link again.',
+  E_EXPIRED_INVITE: 'This code has expired. Ask for a new one.',
   E_INVITE_CONSUMED: 'This invite was already answered. Each invite connects one person.',
-  E_ANSWER_MISMATCH: 'This answer does not belong to the invite open in this tab. Open it in the tab that created the invite.',
+  E_ANSWER_MISMATCH: 'This answer does not belong to the code open in this tab. Open it in the tab that created the code.',
+  E_INVALID_ROOM: 'This reconnect code belongs to a different chat.',
+  E_AUTH_FAILED: 'This reconnect code was made by someone else, not by your peer.',
   E_PROTOCOL_MISMATCH: 'Your peer uses an incompatible version of Ephem.',
   E_CRYPTO_FAILED: 'The encrypted handshake failed. The codes may have been altered.',
   E_SAS_REJECTED: 'You reported that the safety codes differ. The chat was closed: the exchange may have been intercepted.',
-  E_NO_DIRECT_PATH: 'No direct path between you and your peer. Ephem never uses a relay. Common causes: a VPN such as WARP, or strict NATs on both sides. Try another network (e.g. mobile data) or LAN-only on the same Wi-Fi.',
+  E_NO_DIRECT_PATH: 'No direct path between you and your peer. Ephem never uses a relay. Common causes: a VPN such as WARP, or strict NATs on both sides. Try another network (e.g. mobile data), or LAN only on the same Wi-Fi.',
   E_ICE_FAILED: 'The direct connection was lost.',
+  E_RELAY_REJECTED: 'The connection went through a relay, which Ephem does not allow. The chat was closed.',
   E_PEER_OFFLINE: 'Your peer left the chat. Nothing was stored.',
   E_MESSAGE_TOO_LARGE: 'Message too long (max 4096 bytes).',
+  E_BACKPRESSURE: 'Too many messages are waiting for your peer. Wait until they reconnect.',
+  E_NOT_PERMITTED: 'That is not possible right now.',
+  E_KEYFILE_INVALID: 'Wrong passphrase, or the key file is damaged.',
   E_BROWSER_UNSUPPORTED: 'This browser does not support WebRTC data channels.',
 };
 
@@ -25,48 +38,195 @@ const $ = (id) => document.getElementById(id);
 const dec = new TextDecoder();
 const enc = new TextEncoder();
 let wasm, app;
-let myRole = null;          // 'offerer' | 'answerer'
-let fromLink = false;       // at least one code arrived by link or paste → SAS prompted (§10.4)
-let expiresAt = 0;
-const pending = new Map();  // chat_seq → tick element
+let metaPtr = 0;               // event side-channel block (never moves: boxed at start)
+let chatOpen = false;          // a chat view is live (connected at least once)
+let codeExpires = 0;           // ms, for the countdown of the code on screen
+let composing = null;          // { mode: 'reply' | 'edit', mine, seq }
+let readSent = 0;
+let typingTimer = 0;
+let scanStop = null;
+const msgs = new Map();        // 'm:<seq>' (mine) / 't:<seq>' (theirs) → { li, body, tick, text, meta }
+const visibleTheirs = new Set();
 
-const bytes = (ptr, len) => new Uint8Array(wasm.memory.buffer, ptr, len);
-const text = (ptr, len) => dec.decode(bytes(ptr, len));
 const later = (fn) => queueMicrotask(fn);
+const mem = (ptr, len) => new Uint8Array(wasm.memory.buffer, ptr, len);
+const text = (ptr, len) => dec.decode(mem(ptr, len));
 const baseUrl = () => location.origin + location.pathname;
+const keyOf = (mine, seq) => `${mine ? 'm' : 't'}:${seq}`;
+const errName = (neg) => ERR[-neg] || `error 0x${(-neg).toString(16)}`;
+const b64u = (u8) => btoa(String.fromCharCode(...u8)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = (s) => {
+  s = s.trim().replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(s + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+};
 
+// ---- small view helpers --------------------------------------------------------------------
 function show(view) {
   for (const v of document.querySelectorAll('.view')) v.hidden = v.id !== view;
   $('error').hidden = true;
 }
 
 function status(label, cls = '') {
-  const s = $('status');
-  s.textContent = label;
-  s.className = 'pill status ' + cls;
+  $('status').textContent = label;
+  $('status').className = 'pill status ' + cls;
 }
 
 function error(name) {
-  const e = $('error');
-  e.textContent = MESSAGES[name] || name;
-  e.hidden = false;
+  $('error').textContent = MESSAGES[name] || name;
+  $('error').hidden = false;
 }
 
-function logLine(body, cls, seq) {
+function renderCodeBox(box, kind, code) {
+  const link = `${baseUrl()}#${FRAG[kind]}=${code}`;
+  box.querySelector('.qr').innerHTML = qr_svg_path(link);
+  box.querySelector('.link').value = link;
+  box.querySelector('.share').hidden = !navigator.share;
+  box.hidden = false;
+}
+
+function renderExposure() {
+  const lines = app.exposure().trim().split('\n').filter(Boolean);
+  const pretty = lines.map((l) => (l.startsWith('v6') ? 'IPv6 ' : 'IPv4 ') + l.slice(3));
+  const box = $('exposure');
+  box.querySelector('.addrs').textContent = pretty.length ? pretty.join('\n') : 'No public address in this code (LAN only, or STUN was unreachable).';
+  box.querySelector('.v6warn').hidden = !(lines.some((l) => l.startsWith('v4')) && lines.some((l) => l.startsWith('v6')));
+  box.hidden = false;
+  $('diag-exposure').textContent = pretty.length ? pretty.join(', ') : 'no public address';
+}
+
+// ---- messages ------------------------------------------------------------------------------
+function sysLine(t) {
   const li = document.createElement('li');
-  li.className = cls;
-  li.textContent = body;
-  if (cls === 'me') {
-    const t = document.createElement('span');
-    t.className = 'tick';
-    t.textContent = '·';
-    t.title = 'Sent';
-    li.append(t);
-    pending.set(seq, t);
+  li.className = 'sys';
+  li.textContent = t;
+  $('log').append(li);
+  $('log').scrollTop = $('log').scrollHeight;
+}
+
+function quoteText(mine, seq) {
+  const m = msgs.get(keyOf(mine, seq));
+  if (!m || m.deleted) return 'Message unavailable';
+  return (mine ? 'You: ' : 'Peer: ') + m.text.slice(0, 80);
+}
+
+function addMessage(mine, seq, body, ttl, reply) {
+  const li = document.createElement('li');
+  li.className = mine ? 'me' : 'them';
+  li.dataset.key = keyOf(mine, seq);
+  if (reply) {
+    const q = document.createElement('span');
+    q.className = 'quote';
+    q.dataset.ref = keyOf(reply.mine, reply.seq);
+    q.textContent = quoteText(reply.mine, reply.seq);
+    li.append(q);
   }
-  const log = $('log');
-  log.append(li);
-  log.scrollTop = log.scrollHeight;
+  const b = document.createElement('span');
+  b.className = 'body';
+  b.textContent = body;
+  li.append(b);
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.textContent = ttl ? `⏱ ${TTL_SHORT[ttl] || ttl + 's'}` : '';
+  li.append(meta);
+  let tick = null;
+  if (mine) {
+    tick = document.createElement('span');
+    tick.className = 'tick';
+    tick.textContent = '🕓';
+    tick.title = 'Pending';
+    li.append(tick);
+  }
+  const m = { li, body: b, tick, meta, text: body, mine, seq, deleted: false, level: 0 };
+  msgs.set(li.dataset.key, m);
+  $('log').append(li);
+  $('log').scrollTop = $('log').scrollHeight;
+  if (!mine) io.observe(li);
+  return m;
+}
+
+function setTick(upto, level) {
+  for (const m of msgs.values()) {
+    if (!m.mine || m.seq > upto || m.level >= level || m.deleted) continue;
+    m.level = level;
+    m.tick.textContent = level === 1 ? '✓' : '✓✓';
+    m.tick.title = level === 1 ? 'Delivered' : 'Read';
+    m.tick.classList.add('ok');
+  }
+}
+
+function refreshQuotes(key) {
+  for (const q of document.querySelectorAll(`.quote[data-ref="${key}"]`)) q.textContent = 'Message unavailable';
+}
+
+function markDeleted(key, label) {
+  const m = msgs.get(key);
+  if (!m) return;
+  m.deleted = true;
+  m.text = '';
+  m.li.classList.add('deleted');
+  m.body.textContent = label;
+  m.meta.textContent = '';
+  m.li.querySelector('.acts')?.remove();
+  refreshQuotes(key);
+}
+
+function removeMessage(key) {
+  const m = msgs.get(key);
+  if (!m) return;
+  io.unobserve(m.li);
+  m.li.remove();
+  msgs.delete(key);
+  refreshQuotes(key);
+}
+
+function toggleActions(m) {
+  const old = m.li.querySelector('.acts');
+  for (const a of document.querySelectorAll('.log .acts')) a.remove();
+  if (old || m.deleted) return;
+  const acts = document.createElement('div');
+  acts.className = 'acts';
+  const add = (label, fn) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.onclick = (e) => { e.stopPropagation(); acts.remove(); fn(); };
+    acts.append(b);
+  };
+  add('Reply', () => startComposing('reply', m));
+  if (m.mine) add('Edit', () => startComposing('edit', m));
+  add(m.mine ? 'Delete for everyone' : 'Delete for me', () => deleteMessage(m));
+  add('Copy', () => navigator.clipboard?.writeText(m.text).catch(() => {}));
+  m.li.append(acts);
+}
+
+function startComposing(mode, m) {
+  composing = { mode, mine: m.mine, seq: m.seq };
+  $('composing-text').textContent = mode === 'edit' ? 'Editing your message' : 'Reply to ' + quoteText(m.mine, m.seq);
+  $('composing').hidden = false;
+  if (mode === 'edit') $('t-msg').value = m.text;
+  $('t-msg').focus();
+}
+
+function stopComposing() {
+  composing = null;
+  $('composing').hidden = true;
+}
+
+function deleteMessage(m) {
+  const r = app.delete(m.mine, m.seq);
+  if (r < 0) return error(errName(r));
+  if (m.mine) markDeleted(m.li.dataset.key, 'You deleted this message');
+  else removeMessage(m.li.dataset.key);
+}
+
+// Read receipts: a message counts as read when it is on screen and the page is visible (§11.7).
+function flushRead() {
+  if (document.hidden || !visibleTheirs.size) return;
+  const max = Math.max(...visibleTheirs);
+  if (max > readSent) {
+    readSent = max;
+    app.mark_read(max);
+  }
 }
 
 // ---- events from Rust ----------------------------------------------------------------------
@@ -74,45 +234,89 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
   switch (kind) {
     case EV.CODE: {
       const code = text(ptr, len);
-      showCode(num === 1 ? 'invite' : 'answer', code);
+      codeExpires = num === 1 || num === 3 ? Date.now() + Number($('s-ttl').value) * 1000 : 0;
+      if (num <= 2) showCode(num, code);
+      else showResumeCode(num, code);
+      later(renderExposure);
       break;
     }
     case EV.PROGRESS:
       status(['', 'gathering', 'connecting', 'handshake'][num] || '');
       break;
     case EV.CONNECTED: {
-      const b = bytes(ptr, len);
-      const emoji = Array.from(b.subarray(0, 4), (x) => String.fromCodePoint(0x1f400 + x) + '️').join(' ');
+      const b = mem(ptr, len);
+      const resumed = new DataView(wasm.memory.buffer, metaPtr, 16).getUint8(0) === 1;
+      status('connected', 'ok');
+      codeExpires = 0;
+      if (resumed) {
+        $('resume').hidden = true;
+        sysLine('Reconnected directly. Pending messages are being delivered.');
+        break;
+      }
       const d = String(num).padStart(6, '0');
       $('sas-digits').textContent = d.slice(0, 3) + ' ' + d.slice(3);
-      $('sas-emoji').textContent = emoji;
+      $('sas-emoji').textContent = Array.from(b.subarray(0, 4), (x) => String.fromCodePoint(0x1f400 + x) + '️').join(' ');
       $('peer').textContent = dec.decode(b.subarray(4));
       $('sas').hidden = false;
-      $('sas').classList.toggle('optional', !fromLink);
+      $('sas').classList.remove('optional');
       $('verified').textContent = 'unverified';
       $('verified').className = 'pill';
       $('log').replaceChildren();
-      pending.clear();
-      logLine('Connected directly. Messages are end-to-end encrypted and exist only in these two tabs.', 'sys');
-      status('connected', 'ok');
+      msgs.clear();
+      visibleTheirs.clear();
+      readSent = 0;
+      stopComposing();
+      $('resume').hidden = true;
+      $('diag').hidden = true;
+      $('s-chat-ttl').value = '0';
+      chatOpen = true;
+      sysLine('Connected directly. Messages are end-to-end encrypted and exist only in these two tabs.');
       show('v-chat');
       later(() => $('t-msg').focus());
       break;
     }
     case EV.HELLO:
-      break;
-    case EV.CHAT:
-      logLine(text(ptr, len), 'them');
-      break;
-    case EV.DELIVERED:
-      for (const [seq, t] of pending) {
-        if (seq <= num) {
-          t.textContent = '✓';
-          t.title = 'Delivered';
-          t.classList.add('ok');
-          pending.delete(seq);
-        }
+      // Both codes scanned in person: the SAS is shown but not prompted (§10.4).
+      if (num === 1 && $('verified').textContent !== 'verified') {
+        $('sas').classList.add('optional');
+        $('verified').textContent = 'met in person';
       }
+      break;
+    case EV.CHAT: {
+      const meta = new DataView(wasm.memory.buffer, metaPtr, 16);
+      const ttl = meta.getUint32(0, true);
+      const reply = meta.getUint8(4) ? { mine: meta.getUint8(5) === 1, seq: meta.getFloat64(8, true) } : null;
+      addMessage(false, num, text(ptr, len), ttl, reply);
+      $('peer-state').textContent = '';
+      break;
+    }
+    case EV.DELIVERED:
+      setTick(num, 1);
+      break;
+    case EV.READ:
+      setTick(num, 2);
+      break;
+    case EV.SETTING:
+      $('s-chat-ttl').value = String(num);
+      sysLine(num ? `Your peer set messages to disappear after ${TTL_LABEL[num]}.` : 'Your peer turned off disappearing messages.');
+      break;
+    case EV.EDITED: {
+      const m = msgs.get(keyOf(false, num));
+      if (m && !m.deleted) {
+        m.text = text(ptr, len);
+        m.body.textContent = m.text;
+        m.meta.textContent = 'edited';
+      }
+      break;
+    }
+    case EV.DELETED:
+      markDeleted(keyOf(num > 0, Math.abs(num)), 'Message deleted');
+      break;
+    case EV.EXPIRED:
+      removeMessage(keyOf(num > 0, Math.abs(num)));
+      break;
+    case EV.TYPING:
+      $('peer-state').textContent = num ? 'typing…' : '';
       break;
     case EV.DEGRADED:
       status('no response', 'bad');
@@ -124,6 +328,18 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       break;
     case EV.PEER_HIDDEN:
       $('peer-state').textContent = num ? 'in background' : '';
+      break;
+    case EV.PATH:
+      $('diag-path').textContent = text(ptr, len);
+      break;
+    case EV.SUSPENDED:
+      status('disconnected', 'bad');
+      $('peer-state').textContent = '';
+      if (chatOpen) {
+        $('resume').hidden = false;
+        $('resume').querySelector('.codebox').hidden = true;
+        sysLine('Direct path lost. Share a reconnect code to continue.');
+      }
       break;
     case EV.CLOSED: {
       const name = text(ptr, len);
@@ -139,69 +355,90 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
 
 // ---- views ---------------------------------------------------------------------------------
 function showCode(kind, code) {
-  const link = `${baseUrl()}#${kind === 'invite' ? 'i' : 'a'}=${code}`;
-  $('code-title').textContent = kind === 'invite' ? 'Your invite' : 'Your answer';
-  $('code-help').textContent = kind === 'invite'
+  $('code-title').textContent = kind === 1 ? 'Your invite' : 'Your answer';
+  $('code-help').textContent = kind === 1
     ? 'Let your peer scan this QR code, or send them the link. It works once.'
     : 'Send this answer back to the person who invited you (QR or link). The chat opens as soon as they apply it.';
-  $('qr').innerHTML = qr_svg_path(link);
-  $('t-link').value = link;
-  $('answer-box').hidden = kind !== 'invite';
-  $('b-share').hidden = !navigator.share;
-  status(kind === 'invite' ? 'waiting for answer' : 'waiting for peer');
+  renderCodeBox(document.querySelector('#v-code .codebox'), kind, code);
+  $('answer-box').hidden = kind !== 1;
+  status(kind === 1 ? 'waiting for answer' : 'waiting for peer');
   show('v-code');
 }
 
+function showResumeCode(kind, code) {
+  const box = $('resume').querySelector('.codebox');
+  box.querySelector('.resume-help').textContent = kind === 3
+    ? 'Send this reconnect code to your peer. Then scan or paste their answer below.'
+    : 'Send this answer back to your peer. The chat reconnects as soon as they apply it.';
+  renderCodeBox(box, kind, code);
+  $('resume').hidden = false;
+  status(kind === 3 ? 'waiting for answer' : 'waiting for peer');
+}
+
 function ended(name) {
-  pending.clear();
-  const wasChat = !$('v-chat').hidden;
+  const wasChat = chatOpen;
+  chatOpen = false;
+  msgs.clear();
+  visibleTheirs.clear();
+  $('log').replaceChildren();
   $('note-title').textContent = wasChat ? 'Chat ended' : 'Could not connect';
   $('note-text').textContent = MESSAGES[name] || name;
+  $('b-again').hidden = false;
   show('v-note');
 }
 
 function reset() {
   later(() => app.close());
-  myRole = null;
-  fromLink = false;
+  chatOpen = false;
+  codeExpires = 0;
   $('t-code').value = '';
   $('t-answer').value = '';
+  $('exposure').hidden = true;
   status('ready');
+  renderIdentity();
   show('v-start');
 }
 
-// ---- actions -------------------------------------------------------------------------------
-const settings = () => [Number($('s-privacy').value), $('c-v6').checked];
-
-function createInvite() {
-  myRole = 'offerer';
-  const [privacy, dropV6] = settings();
-  const ttl = Number($('s-ttl').value);
-  expiresAt = Date.now() + ttl * 1000;
-  app.create_invite(privacy, dropV6, ttl);
+function renderIdentity() {
+  const label = app.identity_label();
+  const h = app.handle();
+  $('me').textContent = h;
+  $('id-desc').textContent = label
+    ? `Saved identity “${label}” (${h}). Peers see the same identity every time you use it.`
+    : `Temporary identity ${h}. It disappears when you close this tab.`;
+  $('b-id-temp').hidden = !label;
 }
 
-function applyCode(raw, viaLink) {
+// ---- actions -------------------------------------------------------------------------------
+function applyPrefs() {
+  app.set_prefs(Number($('s-privacy').value), $('c-v6').checked, $('c-read').checked, $('c-typing').checked);
+}
+
+function applyCode(raw, scanned) {
   const v = raw.trim();
   if (!v) return;
-  fromLink = fromLink || viaLink;
-  const [privacy, dropV6] = settings();
-  const isInvite = /(^|#)i=/.test(v) || (!/(^|#)a=/.test(v) && app.state() !== ST.AWAITING);
-  if (isInvite) myRole = 'answerer';
-  app.apply_code(v, privacy, dropV6);
+  applyPrefs();
+  app.apply_code(v, scanned);
 }
 
-async function copyLink() {
-  const link = $('t-link').value;
+async function copyLink(box) {
+  const link = box.querySelector('.link').value;
+  const btn = box.querySelector('.copy');
   try {
     await navigator.clipboard.writeText(link);
-    $('b-copy').textContent = 'Copied';
-    setTimeout(() => ($('b-copy').textContent = 'Copy link'), 1500);
+    btn.textContent = 'Copied';
+    setTimeout(() => (btn.textContent = 'Copy link'), 1500);
     // Best-effort clipboard clear after 60 s (§8.7).
     setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 60000);
   } catch {
-    $('t-link').select();
+    box.querySelector('.link').select();
   }
+}
+
+function writeText(msg) {
+  // Zero-copy on our side: UTF-8 goes straight into the wasm text slot (§11.6).
+  const { read, written } = enc.encodeInto(msg, mem(app.text_ptr(), app.text_cap()));
+  return read < msg.length ? -1 : written;
 }
 
 function send(ev) {
@@ -209,32 +446,151 @@ function send(ev) {
   const box = $('t-msg');
   const msg = box.value;
   if (!msg.trim()) return;
-  // Zero-copy on our side: UTF-8 is written straight into the wasm TX text slot (§11.6).
-  const view = bytes(app.text_ptr(), app.text_cap());
-  const { read, written } = enc.encodeInto(msg, view);
-  if (read < msg.length) return error('E_MESSAGE_TOO_LARGE');
-  const seq = app.send(written);
-  if (seq < 0) return error(codeName(-seq));
-  logLine(msg, 'me', seq);
+  const n = writeText(msg);
+  if (n < 0) return error('E_MESSAGE_TOO_LARGE');
+  if (composing?.mode === 'edit') {
+    const r = app.edit(composing.seq, n);
+    if (r < 0) return error(errName(r));
+    const m = msgs.get(keyOf(true, composing.seq));
+    if (m) {
+      m.text = msg;
+      m.body.textContent = msg;
+      m.meta.textContent = 'edited';
+    }
+  } else {
+    const reply = composing?.mode === 'reply' ? composing : null;
+    const seq = app.send(n, reply?.mine ?? false, reply?.seq ?? 0);
+    if (seq < 0) return error(errName(seq));
+    addMessage(true, seq, msg, app.chat_ttl(), reply && { mine: reply.mine, seq: reply.seq });
+  }
+  stopComposing();
   box.value = '';
   box.focus();
+  clearTimeout(typingTimer);
 }
 
-const CODE_NAMES = { 0x41: 'E_MESSAGE_TOO_LARGE', 0x35: 'E_PEER_OFFLINE', 0x40: 'E_PROTOCOL_MISMATCH', 0x21: 'E_CRYPTO_FAILED' };
-const codeName = (c) => CODE_NAMES[c] || `error 0x${c.toString(16)}`;
+function onTyping() {
+  if (!chatOpen) return;
+  app.typing(true);
+  clearTimeout(typingTimer);
+  typingTimer = setTimeout(() => app.typing(false), 4000);
+}
+
+function setChatTtl() {
+  const v = Number($('s-chat-ttl').value);
+  const r = app.set_ttl(v);
+  if (r < 0) {
+    $('s-chat-ttl').value = String(app.chat_ttl());
+    return error(errName(r));
+  }
+  sysLine(v ? `You set messages to disappear after ${TTL_LABEL[v]}.` : 'You turned off disappearing messages.');
+}
+
+// ---- identity (§7.2, §7.3) -----------------------------------------------------------------
+function download(bytes, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function saveIdentity() {
+  const label = $('i-label').value.trim();
+  const p1 = $('i-pass').value;
+  if ([...p1].length < 12) return error('The passphrase must be at least 12 characters.');
+  if (p1 !== $('i-pass2').value) return error('The passphrases differ.');
+  const pw = enc.encode(p1);
+  $('i-pass').value = $('i-pass2').value = '';
+  const blob = app.save_identity(label, pw); // pw is wiped by Rust
+  if (!blob.length) return;
+  download(blob, `ephem-${label.replace(/[^\w-]+/g, '_') || 'identity'}.p2pkey`);
+  $('t-keytext').value = b64u(blob);
+  $('id-saved').hidden = false;
+  renderIdentity();
+}
+
+async function loadIdentity() {
+  let bytes;
+  const f = $('i-file').files[0];
+  try {
+    bytes = f ? new Uint8Array(await f.arrayBuffer()) : unb64u($('t-keyin').value);
+  } catch {
+    return error('E_KEYFILE_INVALID');
+  }
+  const pw = enc.encode($('i-pass-in').value);
+  $('i-pass-in').value = '';
+  if (app.load_identity(bytes, pw) === 0) {
+    $('id-load').hidden = true;
+    $('i-file').value = '';
+    $('t-keyin').value = '';
+    renderIdentity();
+  }
+}
+
+// ---- QR scanner (§8.2): BarcodeDetector where available, else rqrr in wasm (iOS) -----------
+async function scan(onText) {
+  const video = $('scan-video');
+  $('scanner').hidden = false;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+  } catch {
+    $('scanner').hidden = true;
+    return error('The camera is not available. Paste the code instead.');
+  }
+  let active = true;
+  scanStop = () => {
+    active = false;
+    for (const t of stream.getTracks()) t.stop();
+    video.srcObject = null;
+    $('scanner').hidden = true;
+    scanStop = null;
+  };
+  video.srcObject = stream;
+  await video.play().catch(() => {});
+  const detector = 'BarcodeDetector' in globalThis ? new globalThis.BarcodeDetector({ formats: ['qr_code'] }) : null;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  while (active) {
+    await new Promise((r) => setTimeout(r, 200));
+    if (!active || !video.videoWidth) continue;
+    let found = '';
+    if (detector) {
+      found = (await detector.detect(video).catch(() => []))[0]?.rawValue || '';
+    } else {
+      const w = Math.min(video.videoWidth, 960);
+      const h = Math.round((video.videoHeight * w) / video.videoWidth);
+      canvas.width = w;
+      canvas.height = h;
+      ctx.drawImage(video, 0, 0, w, h);
+      const img = ctx.getImageData(0, 0, w, h);
+      // One documented copy (§11.6): camera frame → preallocated wasm scan buffer.
+      const ptr = app.scan_buf(img.data.length);
+      mem(ptr, img.data.length).set(img.data);
+      found = app.scan(w, h);
+    }
+    if (found && /#[iarq]=/.test(found)) {
+      scanStop();
+      onText(found);
+    }
+  }
+}
 
 // ---- codes arriving by link (§8.7) ---------------------------------------------------------
 const bc = 'BroadcastChannel' in globalThis ? new BroadcastChannel('p2pchat-codes') : null;
 
 function takeFragment() {
   const h = location.hash;
-  if (!/^#[ia]=/.test(h)) return null;
+  if (!/^#[iarq]=/.test(h)) return null;
   history.replaceState(null, '', location.pathname);
   return h;
 }
 
-function forwardAnswer(code) {
-  // An answer link opened in a new tab: hand it to the tab that owns the invite.
+// Answers and reconnect codes belong to the tab that holds the chat: hand them over.
+function forward(code) {
   return new Promise((resolve) => {
     if (!bc) return resolve(false);
     const t = setTimeout(() => resolve(false), 500);
@@ -251,26 +607,42 @@ function forwardAnswer(code) {
 if (bc) {
   bc.addEventListener('message', (e) => {
     const code = e.data?.code;
-    if (typeof code !== 'string' || !app || app.state() !== ST.AWAITING || !/^#a=/.test(code)) return;
+    if (typeof code !== 'string' || !app || !app.code_fits(code)) return;
     bc.postMessage({ ack: code });
-    applyCode(code, true);
+    applyCode(code, false);
   });
 }
 
 // ---- boot ----------------------------------------------------------------------------------
+const io = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    const seq = Number(e.target.dataset.key.slice(2));
+    if (e.isIntersecting) visibleTheirs.add(seq);
+    else visibleTheirs.delete(seq);
+  }
+  flushRead();
+}, { threshold: 0.6 });
+
 async function main() {
   const frag = takeFragment();
   wasm = await init();
   app = new App();
-  $('me').textContent = app.handle();
+  metaPtr = app.meta_ptr();
+  renderIdentity();
 
-  $('b-invite').onclick = createInvite;
-  $('b-apply').onclick = () => applyCode($('t-code').value, true);
-  $('b-answer').onclick = () => applyCode($('t-answer').value, true);
-  $('b-copy').onclick = copyLink;
-  $('b-share').onclick = () => navigator.share({ url: $('t-link').value }).catch(() => {});
+  const codeBoxes = document.querySelectorAll('.codebox');
+  for (const box of codeBoxes) {
+    box.querySelector('.copy').onclick = () => copyLink(box);
+    box.querySelector('.share').onclick = () => navigator.share({ url: box.querySelector('.link').value }).catch(() => {});
+  }
+  $('b-invite').onclick = () => { applyPrefs(); app.create_invite(Number($('s-ttl').value)); };
+  $('b-apply').onclick = () => applyCode($('t-code').value, false);
+  $('b-scan').onclick = () => scan((t) => applyCode(t, true));
+  $('b-answer').onclick = () => applyCode($('t-answer').value, false);
+  $('b-scan-answer').onclick = () => scan((t) => applyCode(t, true));
   $('b-cancel').onclick = reset;
   $('b-again').onclick = reset;
+  $('b-scan-cancel').onclick = () => scanStop?.();
   $('b-leave').onclick = () => {
     later(() => app.close());
     ended('E_PEER_OFFLINE');
@@ -285,37 +657,55 @@ async function main() {
     later(() => app.close());
     ended('E_SAS_REJECTED');
   };
+  $('b-info').onclick = () => { $('diag').hidden = !$('diag').hidden; if (!$('diag').hidden) renderExposure(); };
+  $('b-drop').onclick = () => app.drop_path();
+  $('b-resume').onclick = () => app.create_resume(Number($('s-ttl').value));
+  $('b-scan-resume').onclick = () => scan((t) => applyCode(t, true));
+  $('b-resume-apply').onclick = () => { applyCode($('t-resume').value, false); $('t-resume').value = ''; };
+  $('b-composing-x').onclick = () => { if (composing?.mode === 'edit') $('t-msg').value = ''; stopComposing(); };
+  $('s-chat-ttl').onchange = setChatTtl;
+  $('log').onclick = (e) => {
+    const li = e.target.closest('li[data-key]');
+    const m = li && msgs.get(li.dataset.key);
+    if (m) toggleActions(m);
+  };
+  for (const b of document.querySelectorAll('.drop-v6')) {
+    b.onclick = () => { $('c-v6').checked = true; applyPrefs(); b.closest('.v6warn').textContent = 'IPv6 will be left out of your next codes.'; };
+  }
+  $('b-id-save').onclick = () => { $('id-save').hidden = !$('id-save').hidden; $('id-load').hidden = true; $('id-saved').hidden = true; };
+  $('b-id-load').onclick = () => { $('id-load').hidden = !$('id-load').hidden; $('id-save').hidden = true; };
+  $('b-id-temp').onclick = () => { if (app.new_temporary_identity() === 0) renderIdentity(); else error('E_NOT_PERMITTED'); };
+  $('b-id-do-save').onclick = saveIdentity;
+  $('b-id-do-load').onclick = loadIdentity;
+  for (const id of ['s-privacy', 'c-v6', 'c-read', 'c-typing']) $(id).onchange = applyPrefs;
   $('f-send').onsubmit = send;
   $('t-msg').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) send(e);
+    else if (e.key === 'Escape') stopComposing();
   });
+  $('t-msg').addEventListener('input', onTyping);
+  document.addEventListener('visibilitychange', flushRead);
 
   setInterval(() => {
     app.tick(document.hidden);
-    if (!$('v-code').hidden && expiresAt && myRole === 'offerer') {
-      const s = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
-      $('expiry').textContent = `Invite expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-    } else {
-      $('expiry').textContent = '';
-    }
+    const s = codeExpires ? Math.max(0, Math.round((codeExpires - Date.now()) / 1000)) : -1;
+    $('expiry').textContent = s >= 0 && !$('v-code').hidden ? `Code expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : '';
   }, 1000);
   addEventListener('pagehide', () => app.close());
 
   status('ready');
   show('v-start');
-  if (frag?.startsWith('#a=')) {
-    if (await forwardAnswer(frag)) {
-      $('note-title').textContent = 'Answer delivered';
-      $('note-text').textContent = 'The answer was passed to your open Ephem tab. You can close this tab.';
-      show('v-note');
-      $('b-again').hidden = true;
-      return;
-    }
-    $('t-code').value = location.origin + location.pathname + frag;
-    error('Open this answer in the tab that created the invite, or paste it there.');
-  } else if (frag) {
-    applyCode(frag, true);
+  if (!frag) return;
+  if (frag.startsWith('#i=')) return applyCode(frag, false);
+  if (await forward(frag)) {
+    $('note-title').textContent = 'Code delivered';
+    $('note-text').textContent = 'The code was passed to your open Ephem tab. You can close this tab.';
+    $('b-again').hidden = true;
+    show('v-note');
+    return;
   }
+  $('t-code').value = baseUrl() + frag;
+  error('Open this code in the tab that holds the chat (or that created the invite), or paste it there.');
 }
 
 main().catch((e) => {

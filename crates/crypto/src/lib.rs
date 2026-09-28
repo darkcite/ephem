@@ -4,8 +4,10 @@
 //! - [`noise`]: Noise_KK handshake (snow, setup only) and the in-place transport cipher
 //!   (ChaCha20-Poly1305 over the raw split keys, frame header as AAD, nonce = frame `seq`).
 //! - [`sas`]: short authentication string from the handshake hash.
+//! - [`keyfile`]: encrypted identity key file (Argon2id + XChaCha20-Poly1305).
 
 pub mod identity;
+pub mod keyfile;
 pub mod noise;
 pub mod sas;
 

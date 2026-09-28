@@ -7,6 +7,8 @@ use crate::candidate::CandidateBin;
 pub const MAX_CANDIDATES: usize = 8;
 /// Largest encoded code: header + ids + key + expiry + creds (1+32, 1+32) + fp + 8 × 19.
 pub const MAX_CODE_LEN: usize = 4 + 16 + 16 + 32 + 4 + 33 + 33 + 32 + MAX_CANDIDATES * 19;
+/// Smallest valid code: an answer with minimal credentials and no candidates.
+pub const MIN_CODE_LEN: usize = 4 + 16 + 32 + (1 + 4) + (1 + 22) + 32;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -149,6 +151,10 @@ impl Code {
     /// trailing bytes are all rejected (`E_INVALID_INVITE` / `E_PROTOCOL_MISMATCH`).
     pub fn decode(src: &[u8]) -> Result<Self, crate::ErrorCode> {
         use crate::ErrorCode::{InvalidInvite, ProtocolMismatch};
+        // Too short to be any code: garbage, not a code from another version.
+        if !(MIN_CODE_LEN..=MAX_CODE_LEN).contains(&src.len()) {
+            return Err(InvalidInvite);
+        }
         let mut r = Rd::new(src);
         if r.u8().ok_or(InvalidInvite)? != VERSION {
             return Err(ProtocolMismatch);
@@ -236,5 +242,6 @@ mod tests {
         bad[2] = 0x80;
         assert!(Code::decode(&bad[..n]).is_err(), "reserved flag");
         assert!(Code::decode(&out[..n - 1]).is_err(), "truncated");
+        assert_eq!(Code::decode(&[0, 0, 0]), Err(crate::ErrorCode::InvalidInvite), "garbage is not a version mismatch");
     }
 }

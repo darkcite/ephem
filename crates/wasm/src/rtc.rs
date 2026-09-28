@@ -4,7 +4,7 @@
 //! in §11.6.
 
 use crate::{Inner, Shared, emit, emit_err, ev, now_ms, sink};
-use core::cell::Cell;
+use core::cell::{Cell, RefCell};
 use ephem_core::{Privacy, State};
 use ephem_proto::ErrorCode;
 use ephem_proto::b64url;
@@ -44,6 +44,10 @@ pub enum Step {
 
 pub(crate) struct Rtc {
     pc: RtcPeerConnection,
+    /// Last selected-pair description, to report only changes (§9.2: check on every change).
+    path: RefCell<String>,
+    /// Ticks until the next getStats check.
+    stats_in: Cell<u8>,
     dc: RtcDataChannel,
     _on_ice: Closure<dyn FnMut(RtcPeerConnectionIceEvent)>,
     _on_state: Closure<dyn FnMut()>,
@@ -72,7 +76,7 @@ impl Rtc {
 }
 
 /// Runs `f` on the live link of `generation`; stale callbacks are ignored.
-fn with_link(weak: &Weak<core::cell::RefCell<Inner>>, generation: u32, f: impl FnOnce(&mut Inner)) {
+fn with_link(weak: &Weak<RefCell<Inner>>, generation: u32, f: impl FnOnce(&mut Inner)) {
     let Some(inner) = weak.upgrade() else { return };
     let mut g = inner.borrow_mut();
     if g.generation == generation && g.sess.is_some() && g.rtc.is_some() {
@@ -80,14 +84,20 @@ fn with_link(weak: &Weak<core::cell::RefCell<Inner>>, generation: u32, f: impl F
     }
 }
 
-/// Ends the link with `e` unless it already ended.
-fn fail(g: &mut Inner, e: ErrorCode) {
-    let Inner { sess, rtc, .. } = g;
-    if let (Some(s), Some(r)) = (sess.as_mut(), rtc.as_ref())
-        && s.state() != State::Closed
-    {
-        s.close(now_ms(), &mut sink(r));
-        emit_err(ev::CLOSED, e);
+/// The path is gone: before the first connection the chat ends with `e`; afterwards it is
+/// suspended and waits for a reconnect code (§13 T3).
+fn lost(g: &mut Inner, e: ErrorCode) {
+    let Inner { sess, rtc, meta, .. } = g;
+    if let (Some(s), Some(r)) = (sess.as_mut(), rtc.as_ref()) {
+        s.path_lost(now_ms(), e, &mut sink(r, meta));
+    }
+}
+
+/// A protocol violation on the path ends the chat.
+fn abort(g: &mut Inner, e: ErrorCode) {
+    let Inner { sess, rtc, meta, .. } = g;
+    if let (Some(s), Some(r)) = (sess.as_mut(), rtc.as_ref()) {
+        s.abort(e, &mut sink(r, meta));
     }
 }
 
@@ -129,8 +139,8 @@ fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f6
     let on_state = Closure::<dyn FnMut()>::new(move || {
         if pc2.connection_state() == RtcPeerConnectionState::Failed {
             with_link(&w, generation, |g| {
-                let never_connected = g.sess.as_ref().is_some_and(|s| s.state() != State::Connected);
-                fail(g, if never_connected { ErrorCode::NoDirectPath } else { ErrorCode::IceFailed });
+                let connected = g.sess.as_ref().is_some_and(|s| s.state() == State::Connected);
+                lost(g, if connected { ErrorCode::IceFailed } else { ErrorCode::NoDirectPath });
             });
         }
     });
@@ -140,9 +150,9 @@ fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f6
     let on_open = Closure::<dyn FnMut()>::new(move || {
         with_link(&w, generation, |g| {
             emit(ev::PROGRESS, 3.0, &[]);
-            let Inner { sess, rtc, .. } = g;
+            let Inner { sess, rtc, meta, .. } = g;
             if let (Some(s), Some(r)) = (sess.as_mut(), rtc.as_ref()) {
-                s.on_open(now_ms(), &mut sink(r));
+                s.on_open(now_ms(), &mut sink(r, meta));
             }
         });
     });
@@ -155,24 +165,24 @@ fn build(inner: &Shared, generation: u32, privacy: Privacy, srflx_at: Rc<Cell<f6
         let len = view.length() as usize;
         with_link(&w, generation, |g| {
             if len > MAX_FRAME {
-                fail(g, ErrorCode::MessageTooLarge);
+                abort(g, ErrorCode::MessageTooLarge);
                 return;
             }
-            let Inner { sess, rtc, rx, .. } = g;
+            let Inner { sess, rtc, rx, meta, .. } = g;
             if let (Some(s), Some(r)) = (sess.as_mut(), rtc.as_ref()) {
                 // The single documented RX copy (§11.6): JS ArrayBuffer → preallocated wasm slot.
                 view.copy_to(&mut rx[..len]);
-                s.on_frame(now_ms(), &mut rx[..len], &mut sink(r));
+                s.on_frame(now_ms(), &mut rx[..len], &mut sink(r, meta));
             }
         });
     });
     dc.set_onmessage(Some(on_msg.as_ref().unchecked_ref()));
 
     let w = weak;
-    let on_close = Closure::<dyn FnMut()>::new(move || with_link(&w, generation, |g| fail(g, ErrorCode::PeerOffline)));
+    let on_close = Closure::<dyn FnMut()>::new(move || with_link(&w, generation, |g| lost(g, ErrorCode::IceFailed)));
     dc.set_onclose(Some(on_close.as_ref().unchecked_ref()));
 
-    Ok(Rtc { pc, dc, _on_ice: on_ice, _on_state: on_state, _on_open: on_open, _on_msg: on_msg, _on_close: on_close })
+    Ok(Rtc { pc, dc, path: RefCell::new(String::new()), stats_in: Cell::new(0), _on_ice: on_ice, _on_state: on_state, _on_open: on_open, _on_msg: on_msg, _on_close: on_close })
 }
 
 /// Creates the RTCPeerConnection for the current session and runs offer or answer negotiation.
@@ -192,7 +202,7 @@ pub(crate) fn start(inner: Shared, generation: u32, privacy: Privacy, step: Step
         if let Err(e) = negotiate(&inner, generation, &pc, &srflx_at, step).await {
             let mut g = inner.borrow_mut();
             if g.generation == generation {
-                fail(&mut g, e);
+                lost(&mut g, e);
             }
         }
     });
@@ -210,7 +220,7 @@ pub(crate) fn apply_answer(inner: Shared, generation: u32) {
         if let Err(e) = res.await {
             let mut g = inner.borrow_mut();
             if g.generation == generation {
-                fail(&mut g, e);
+                lost(&mut g, e);
             }
         }
     });
@@ -286,21 +296,109 @@ async fn negotiate(inner: &Shared, generation: u32, pc: &RtcPeerConnection, srfl
     gather(pc, srflx_at).await;
     let local_sdp = pc.local_description().map(|d| d.sdp()).ok_or(ErrorCode::IceFailed)?;
 
-    let (ptr, n) = {
+    let (ptr, n, kind) = {
         let mut g = inner.borrow_mut();
         if g.generation != generation {
             return Ok(());
         }
         let Inner { id, sess, scratch, .. } = &mut *g;
         let code = sess.as_mut().ok_or(ErrorCode::NotPermitted)?.build_code(id, &local_sdp)?;
+        let kind = code.get(1).copied().unwrap_or(0);
         let n = b64url::encode(code, &mut scratch[..]).map_err(|_| ErrorCode::InvalidInvite)?;
-        (scratch.as_ptr() as u32, n as u32)
+        (scratch.as_ptr() as u32, n as u32, kind)
     };
     // Emitted after the borrow ends; the scratch buffer is stable (boxed at start).
-    let kind = if step == Step::Offer { 1.0 } else { 2.0 };
-    crate::js_event(ev::CODE, kind, ptr, n);
+    crate::js_event(ev::CODE, kind as f64, ptr, n);
     if step == Step::Answer {
         emit(ev::PROGRESS, 2.0, &[]);
     }
     Ok(())
+}
+
+/// Seconds between getStats checks while connected.
+const STATS_EVERY_S: u8 = 5;
+
+/// §9.2 point 3 and §18: reads the selected candidate pair. A relay on either side closes the
+/// chat with `E_RELAY_REJECTED`; otherwise the pair is reported (PATH) when it changes.
+/// Diagnostics path: runs every few seconds, allocations here are acceptable.
+pub(crate) fn check_path(inner: Shared) {
+    let (pc, generation) = {
+        let g = inner.borrow();
+        let Some(r) = g.rtc.as_ref() else { return };
+        let left = r.stats_in.get();
+        if left > 0 {
+            r.stats_in.set(left - 1);
+            return;
+        }
+        r.stats_in.set(STATS_EVERY_S);
+        (r.pc.clone(), g.generation)
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        let Ok(report) = JsFuture::from(pc.get_stats()).await else { return };
+        let Some((text, relay)) = selected_pair(report.unchecked_ref()) else { return };
+        let mut g = inner.borrow_mut();
+        if g.generation != generation {
+            return;
+        }
+        if relay {
+            emit(ev::PATH, 1.0, text.as_bytes());
+            abort(&mut g, ErrorCode::RelayRejected);
+            return;
+        }
+        let changed = g.rtc.as_ref().is_some_and(|r| {
+            let mut last = r.path.borrow_mut();
+            let c = *last != text;
+            if c {
+                last.clone_from(&text);
+            }
+            c
+        });
+        drop(g);
+        if changed {
+            emit(ev::PATH, 0.0, text.as_bytes());
+        }
+    });
+}
+
+fn field(o: &JsValue, k: &str) -> Option<JsValue> {
+    js_sys::Reflect::get(o, &JsValue::from_str(k)).ok().filter(|v| !v.is_undefined() && !v.is_null())
+}
+
+fn text_field(o: &JsValue, k: &str) -> String {
+    field(o, k).and_then(|v| v.as_string()).unwrap_or_default()
+}
+
+/// `(description, relay_seen)` of the selected candidate pair.
+fn selected_pair(report: &js_sys::Map) -> Option<(String, bool)> {
+    let mut pair: Option<JsValue> = None;
+    let mut selected_id: Option<String> = None;
+    report.for_each(&mut |v, _| {
+        match text_field(&v, "type").as_str() {
+            // Chrome, Safari: the transport names the selected pair.
+            "transport" => selected_id = selected_id.take().or_else(|| field(&v, "selectedCandidatePairId").and_then(|x| x.as_string())),
+            // Firefox marks the pair itself.
+            "candidate-pair" if field(&v, "selected").and_then(|x| x.as_bool()) == Some(true) => pair = Some(v),
+            _ => {}
+        }
+    });
+    let pair = match (pair, selected_id) {
+        (Some(p), _) => p,
+        (None, Some(id)) => report.get(&JsValue::from_str(&id)),
+        (None, None) => return None,
+    };
+    if pair.is_undefined() {
+        return None;
+    }
+    let local = report.get(&field(&pair, "localCandidateId")?);
+    let remote = report.get(&field(&pair, "remoteCandidateId")?);
+    let desc = |c: &JsValue| {
+        let addr = field(c, "address").or_else(|| field(c, "ip")).and_then(|x| x.as_string()).unwrap_or_else(|| "?".into());
+        let port = field(c, "port").and_then(|x| x.as_f64()).unwrap_or(0.0);
+        (text_field(c, "candidateType"), addr, port)
+    };
+    let (lt, la, lp) = desc(&local);
+    let (rt, ra, rp) = desc(&remote);
+    let proto = text_field(&local, "protocol");
+    let relay = lt == "relay" || rt == "relay";
+    Some((format!("you {lt} {la}:{lp} ↔ peer {rt} {ra}:{rp} ({proto})"), relay))
 }

@@ -14,3 +14,9 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Argon2id (19 MiB, t = 4) is unbearably slow unoptimized; keep native tests fast.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
