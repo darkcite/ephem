@@ -6,8 +6,8 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
-<meta name="description" content="Ephem: a private, serverless chat that runs in your browser. Messages go directly between you and your peer and disappear when you leave.">
-<title>Ephem — ephemeral peer-to-peer chat</title>
+<meta name="description" content="Ephem: private, serverless chats and public channels that run in your browser. Direct or through Tor; messages disappear when you leave.">
+<title>Ephem — ephemeral peer-to-peer chat and channels</title>
 <link rel="stylesheet" href="site.css">
 <link rel="icon" href="app/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="app/icons/apple-touch-icon.png">
@@ -16,9 +16,9 @@
 <header class="hero">
   <p class="mark">Ephem</p>
   <h1>A chat that exists only while you are both here.</h1>
-  <p class="sub">Direct, end-to-end encrypted conversations between two browsers. No account, no server, no history.</p>
-  <a class="start" href="app/">Start a chat</a>
-  <p class="small">Free and open source. Runs entirely in your browser (WebAssembly).</p>
+  <p class="sub">End-to-end encrypted chats and rooms between browsers, directly or through Tor, and public channels only you can post to. No account, no server, no history.</p>
+  <a class="start" href="app/">Open Ephem</a>
+  <p class="small">Free and open source. Runs entirely in your browser (WebAssembly). <a href="app/tor.html">Tor mode</a> hides your IP address.</p>
 </header>
 
 <main>
@@ -26,46 +26,46 @@
     <h2>How a chat starts</h2>
     <ol class="steps">
       <li><strong>You create an invite.</strong> Show it as a QR code, or send the link through any messenger.</li>
-      <li><strong>Your peer opens it and gets an answer code.</strong> They show or send it back to you.</li>
-      <li><strong>You apply the answer.</strong> The two browsers connect directly and agree on keys. Both screens show the same safety code.</li>
+      <li><strong>Your peer opens it.</strong> In direct mode they send an answer code back; in Tor mode no answer is needed, their browser reaches yours through Tor.</li>
+      <li><strong>You are connected.</strong> Both screens show the same safety code: compare it when you did not meet in person.</li>
     </ol>
-    <p>Two codes are always needed, one each way: that is how browsers find a direct path to each other without a server in the middle. In person, this is two QR scans.</p>
+    <p>Saved contacts reconnect without a new code in Tor mode, and a contact card (QR or link) lets someone add you without chatting first. One tab holds up to 16 chats and rooms at once, in a list like any messenger's.</p>
   </section>
 
   <section class="grid">
     <div>
       <h2>What Ephem does</h2>
       <ul>
-        <li>Messages are encrypted in transit (DTLS) and end-to-end at the application layer (Noise).</li>
-        <li>Chat traffic travels directly between peers; the app uses no relay and rejects relay paths.</li>
-        <li>There is no server-side or app-side chat history. Close the tab and the chat is gone.</li>
-        <li>Your identity is a key, independent of your network connection.</li>
-        <li>Authenticity depends on how you exchanged codes. Compare the safety code when you did not meet in person.</li>
+        <li>Chats and rooms of up to 16 people, end-to-end encrypted (Noise), with replies, edits, reactions, read receipts and self-destructing messages.</li>
+        <li>Direct mode: browser to browser, never through a relay. Tor mode: onion service to onion service, so nobody sees anyone's IP address.</li>
+        <li>No chat history anywhere: close the tab and your chats are gone. Only your identity and contacts can be kept, and only in a key file encrypted with your passphrase.</li>
+        <li>Public channels: you post, anyone with the link reads. A channel is served from your tab through Tor and verified by every reader; followers can mirror it.</li>
+        <li>Where the usual way into Tor is blocked, paste your own Snowflake bridge lines.</li>
       </ul>
     </div>
     <div>
       <h2>What it does not do</h2>
       <ul>
-        <li>In direct mode your peer can see your IP address, and so can the STUN servers used to find a path (Google, Cloudflare). A VPN can hide it; a built-in Tor mode is planned.</li>
-        <li>It cannot connect every pair of networks. If there is no direct path, it says so instead of silently using a relay.</li>
-        <li>It cannot deliver to someone who is offline, and it cannot stop a peer from copying what you send.</li>
-        <li>It cannot protect you from a compromised device, browser or extension.</li>
-        <li>You trust the code this site serves. Security is never stronger than that and than the channel you used for the codes.</li>
+        <li>In direct mode your peer can see your IP address, and so can the STUN servers used to find a path (Google, Cloudflare). Use Tor mode, or a VPN, to hide it.</li>
+        <li>It cannot deliver to someone who is offline: messages travel only while both tabs are open, and a channel is online only while its owner or a mirror has it open.</li>
+        <li>It cannot connect every pair of networks directly; then it says so instead of silently using a relay. Tor mode is slower (0.5–2 s per message), text only.</li>
+        <li>It cannot stop a peer from copying what you send, and channel posts are public and permanent: followers may keep copies.</li>
+        <li>It cannot protect you from a compromised device, browser or extension, and you trust the code this site serves.</li>
       </ul>
     </div>
   </section>
 
   <section>
     <h2>Browsers</h2>
-    <p>Current desktop Chrome, Edge, Firefox and Safari, and Safari on iPhone and iPad (also as an app added to the Home Screen). Android Chrome should work but is not a primary target yet.</p>
+    <p>Current desktop Chrome, Edge, Firefox and Safari, and Safari on iPhone and iPad (also as an app added to the Home Screen). Owning a channel needs a desktop browser (the tab serves it). Android Chrome should work but is not a primary target yet.</p>
   </section>
 
   <section>
     <h2>Under the hood</h2>
-    <p>Rust compiled to WebAssembly owns all protocol state. WebRTC DataChannel for transport, public STUN only for address discovery, Noise KK (X25519, ChaCha20-Poly1305, BLAKE2s) pinned to the exchanged codes, a 6-digit + emoji safety code. The full design, including its limits, is in the <a href="https://github.com/darkcite/ephem/blob/main/docs/P2P-CHAT.md">specification</a>.</p>
+    <p>Rust compiled to WebAssembly owns all protocol state. Direct mode: WebRTC DataChannel, public STUN only for address discovery, Noise KK pinned to the exchanged codes. Tor mode: the Tor client (arti) runs inside the page and reaches Tor through Snowflake; chats use Noise IK over onion services. Channels are plain IPFS data (CIDs, DAG-CBOR, CAR, signed IPNS records), served over an onion service from the owner's tab. The full design, including its limits, is in the <a href="https://github.com/darkcite/ephem/blob/main/docs/P2P-CHAT.md">specification</a>.</p>
   </section>
 
-  <p class="cta"><a class="start" href="app/">Start a chat</a></p>
+  <p class="cta"><a class="start" href="app/">Open Ephem</a></p>
 </main>
 
 <footer>

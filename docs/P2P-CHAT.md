@@ -6,8 +6,8 @@
 |---|---|
 | Product | **Ephem** |
 | Document | The **single** project document. It replaces the earlier SPEC, REVIEW, plans and spike notes (all merged here on 2026-09-28) |
-| Spec level | v1.1 (see the decision log, §25) |
-| Status | MVP-1…MVP-3, **Tor mode (TOR-1…TOR-4, also on the real Tor network and laptop ↔ iPhone)**, **contact cards** and **public channels (CH-1…CH-5, offline Tor lab)** built and tested end to end (§24.2). Open: iOS memory under Tor (G4), live runs of channels and cards, C-P5 on each browser |
+| Spec level | v1.2 (see the decision log, §25) |
+| Status | MVP-1…MVP-3, **Tor mode (TOR-1…TOR-4, also on the real Tor network and laptop ↔ iPhone)**, **contact cards**, **public channels (CH-1…CH-5)**, **Tor bridge lines (BR-1…BR-3)** and **one app with Chats, Following and My channels, up to 16 chats per tab (UI-1…UI-6)** built and tested end to end (§24.2, Appendix F). Open: iOS memory under Tor (G4), live runs of v1.2, C-P5 on each browser |
 | Deployment | GitHub Pages, project site `https://<owner>.github.io/ephem/` |
 | Runtime | Browser PWA. **Only our WASM app is built: no native programs (P10)** |
 | Implementation | Rust (edition 2024) → `wasm32-unknown-unknown` |
@@ -29,9 +29,9 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 | I | §1–§3 | Summary, principles, layers |
 | II | §4–§22, §26–§29 | Normative specification: infrastructure, architecture, identity, rendezvous, WebRTC, crypto, wire protocol, state machines, groups, PWA, security, Tor mode, IP privacy, public channels |
 | III | §23–§25 | **Plan**: phases, gates, checkpoints with results, decision log |
-| IV | Appendices A–F | SDP template, end-to-end flows, embedded-Tor engineering, public-channel design, features considered and rejected, **v1.2 proposal (bridges, three-tab app)** |
+| IV | Appendices A–F | SDP template, end-to-end flows, embedded-Tor engineering, public-channel design, features considered and rejected, **v1.2: Tor bridges and the three-tab app (proposal and as built)** |
 
-## Status at a glance (2026-09-28)
+## Status at a glance (2026-09-29)
 
 | Area | State |
 |---|---|
@@ -41,8 +41,9 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 | Built (MVP-2) | **MVP-2 feature-complete, 18/18 end-to-end checks** (APP-E2E-MVP2, §24.2): up to 8 remembered identities (IndexedDB) with sign-in from the list; nicknames; contacts in the key file (verified by SAS, SAS skipped next time, impersonation warning, backup-out-of-date notice); reactions; identity transfer to another device over P2P; in-band ICE restart T1 (perfect negotiation, triggered by a stuck path, a network change or by hand); full diagnostics. 40 native unit tests |
 | Built (MVP-3) | **Rooms, 18/18 end-to-end checks with four browsers** (APP-E2E-ROOM, §24.2): owner-controlled rooms of up to 16 with member and **observer** roles; the owner-signed room state (Ed25519) verified by every member; introductions through the owner with **sealed** signalling (the owner forwards what it cannot read); full mesh; one sequence number per sender on every link; sender labels, replies across members, delivery "✓ k/N"; owner moderation and room timer; removal, leaving, disposal; **T2** (lost member links come back by themselves through the owner). 225 KB gzip wasm. 46 native unit tests |
 | Built (Tor) | **Tor mode, in the offline lab** (`checks/tor-lab/`: private Tor network + the real Go Snowflake broker, proxy and server): Snowflake client in Rust (Turbotunnel, KCP, smux; 10 MB interop with the Go server, fuzzed); arti in the page over Snowflake; **onion service hosted from a tab**; `app/tor.html` with the Tor build of the app. **1:1 chat over Tor 18/18** (APP-E2E-TOR: one-way TOR_INVITE, Noise IK, same SAS, chat, receipts, stream loss → redial, contacts connect with no code) and **rooms over Tor 9/9** (APP-E2E-TOR-ROOM: owner + 2 members, introductions onion to onion, redial). Bootstrap 5.8 s in the lab; Tor build 2.08 MB gzip |
-| Built (cards, channels) | **Contact cards** (§7.5): QR/`#k=` card, add from a card, reset, first Tor chat through a card with the host's accept prompt (APP-E2E-CARDS 8/8, APP-E2E-TOR-CARDS 6/6 ×4). **Public channels** (§27, App. D): `crates/channel` (CIDv1, strict DAG-CBOR, CAR, IPNS V2; the js-ipns reference validator accepts our records), `channel.html` + its own build (owner, onion gateway from the tab, reader over Tor or a public gateway, mirrors, IPNS publish through a Tor exit): APP-E2E-TOR-CHANNEL 14/14 in the lab, C-P3 1 000 posts read in 0.4 s |
-| Next | 1. Owner's live runs: `ONLY=tor ./checks/run_all.sh` now includes cards and channels; iPhone memory under Tor (G4); C-P5 (OPFS quota) per browser. 2. Then merge to `main`, public repo and Pages (§23.1a: once everything planned is implemented, owner decision 2026-09-29). 3. Device runs of the room flow (S9). Camera/QR work after the merge (owner decision) |
+| Built (cards, channels) | **Contact cards** (§7.5): QR/`#k=` card, add from a card (in Contacts, or any code field), reset, first Tor chat through a card with the host's accept prompt (APP-E2E-CARDS 9/9, APP-E2E-TOR-CARDS 6/6 ×4). **Public channels** (§27, App. D): `crates/channel` (CIDv1, strict DAG-CBOR, CAR, IPNS V2; the js-ipns reference validator accepts our records); owner, onion gateway from the tab, reader over Tor or a public gateway, mirrors, IPNS publish through a Tor exit: APP-E2E-TOR-CHANNEL 19/19 in the lab, C-P3 1 000 posts read in 0.4 s |
+| Built (v1.2, Appendix F) | **Tor bridge lines** (F.2): Snowflake lines in the Tor Browser format, every unusable line refused with its reason, kept in the key file, `#b=` share links (APP-E2E-TOR-BRIDGES 9/9). **Several chats per tab** (F.3.2): up to 16 chats and rooms, one onion for all (APP-E2E-MULTI 12/12, APP-E2E-TOR-MULTI 6/6). **One app, three tabs** (F.3): Chats, Following, My channels; channels share the chats' Tor client and identity; the direct page loads the Tor build only for its channel tabs. Direct build 232 KB gzip, Tor build (chats + channels) 2.16 MB |
+| Next | 1. Owner's live runs: `ONLY=tor ./checks/run_all.sh` includes cards, channels, bridges and several chats; iPhone memory under Tor (G4); C-P5 (OPFS quota) per browser. 2. Then merge to `main`, public repo and Pages (§23.1a: once everything planned is implemented, owner decision 2026-09-29). 3. Device runs of the room flow (S9). Camera/QR work after the merge (owner decision) |
 | Blocked on devices | S3, S6, S7, S9 (phones, real networks) |
 
 ---
@@ -176,18 +177,18 @@ ephem/
 │   │   ├── transport.rs            # Transport = Direct(WebRTC) | Tor(embedded), mode guard (§28.5)
 │   │   └── io.rs                   # Input / Action enums, ActionSink (fixed capacity)
 │   ├── wasm/                       # the ONLY crate touching the browser
-│   │   ├── lib.rs                  # #[wasm_bindgen] App facade, events to JS, identity save/load
+│   │   ├── lib.rs                  # #[wasm_bindgen] App facade, events to JS, identity save/load, up to 16 chats per tab (App. F.3.2)
 │   │   ├── rtc.rs                  # web-sys RTCPeerConnection / RTCDataChannel adapter, getStats path check
 │   │   ├── qr.rs                   # qrcode (encode) + rqrr (decode; BarcodeDetector is used from JS when present)
 │   │   ├── room.rs                 # rooms: owner-signed state, introductions, T2 (§14)
 │   │   ├── tor.rs                  # Tor build only (feature `tor`): chat links over Tor streams, onion service (§28)
 │   │   └── (key files, contacts, transfer in lib.rs; IndexedDB slots ≤ 8 in app/slots.js: it stores only the encrypted key file)
 │   ├── channel/                    # public channels, sans-IO: CIDv1, DAG-CBOR, CAR, IPNS V2, signed blocks, gateway (§27)
-│   ├── channel-web/                # channel.html's wasm: owner, onion gateway, reader, mirrors (Tor inside)
+│   ├── channel-web/                # channels in the browser: owner, onion gateway, reader, mirrors (part of the Tor build)
 │   ├── snowflake/                  # sans-IO Snowflake client: Turbotunnel, encapsulation, KCP, smux (§28.3)
-│   └── tor/                        # arti in the page: runtime shim, Snowflake carrier, bridge-as-TCP, TLS (§28.3)
+│   └── tor/                        # arti in the page: runtime shim, Snowflake carrier, bridge-as-TCP, TLS, bridge lines (§28.3, App. F.2)
 ├── vendor/                         # four arti 0.46 crates with small wasm-only patches (vendor/README.md)
-├── app/                            # static web app (§4.1): index.html, app.js, app.css, sw.js, manifest, icons, pkg/
+├── app/                            # static web app (§4.1): index.html (+ generated tor.html), app.js, channels.js, bridges.js, slots.js, ui.js, app.css, sw.js, manifest, icons, pkg/
 ├── index.html, site.css            # landing page (§23.1a)
 ├── tools/                          # stamp.py (integrity, §17.2), make_icons.py
 ├── tests/                          # native replay/fuzz of proto + core
@@ -294,6 +295,8 @@ The app opens on a sign-in screen:
 | 0x02 | — | Reserved (was the companion token in v0.5) |
 | 0x03 | — | Reserved (was a Kubo RPC token in v0.5; the app never talks to Kubo, P10) |
 | 0x04 | CARD | `card_secret [u8; 16]`, `expires_at u32` (0 = never): the secret in your current contact card (§7.5) |
+| 0x05 | TOR_BRIDGES | UTF-8 Snowflake bridge lines (Appendix F.2), optionally led by the comment line `# ephem: also use the Tor Project Snowflake` |
+| 0x06 | FOLLOWS | UTF-8 JSON, the channels followed (Appendix F.3.3, decision D2): `[{"n": IPNS name, "o": [onions], "s": highest record sequence seen, "t": title, "seen": newest post seq read, "m": mirrored}]` |
 | other | — | Kept unchanged on re-save, so newer app versions can add sections |
 
 - Key: Argon2id(passphrase, salt), 32 bytes. After sign-in the derived key stays in wasm memory, so the app can **re-save** after the contacts change without asking again. It is zeroized on sign-out. Defaults: m = 19 MiB (the OWASP minimum) and t = 4, which is about 100 ms in desktop WASM (spike S5b, where t = 2 took 50 ms).
@@ -876,11 +879,11 @@ Wallet authentication is not in any current phase (§7.4). Identity comes only f
 
 ```
 default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self';
-img-src 'self' data: blob:; connect-src 'self'; worker-src 'self';
+img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self';
 manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'
 ```
 
-- `connect-src 'self'` stops `fetch` or XHR from sending data anywhere. Tor sessions run on a separate page, `tor.html`, with its own CSP (§28.6).
+- `connect-src 'self' https:` (v1.2, decision D5): a page fetches only a Snowflake broker (Tor mode, and the direct page's channel tabs, which load the Tor build) and, on request, a public IPFS gateway; the broker may be the user's own (bridge lines, Appendix F.2). WebRTC, which carries chats and Snowflake proxies, is outside `connect-src` anyway (below), so a stricter list protected little; `script-src` stays hash-pinned with no inline scripts, which is the real barrier.
 - **Limit:** browsers do not reliably enforce the CSP `webrtc` directive, so peer connections cannot be restricted by CSP.
 
 ### 17.4 Mobile lifecycle
@@ -956,6 +959,7 @@ Members     4 / 8  (links 5 / 6)
 | 0x0041 | E_MESSAGE_TOO_LARGE | |
 | 0x0042 | E_BACKPRESSURE | Send queue or pending ring is full |
 | 0x0043 | E_NOT_PERMITTED | The action is not allowed for this role or sender (an observer sending, editing someone else's message) |
+| 0x0044 | E_TOO_MANY_CHATS | The tab already holds 16 chats and rooms (Appendix F.3.2) |
 | 0x0050 | E_BROWSER_UNSUPPORTED | No `RTCPeerConnection`, WASM or `crypto.getRandomValues` |
 | 0x0060 | E_KEYFILE_INVALID | Wrong passphrase, or a damaged or unsupported key file |
 
@@ -1071,7 +1075,9 @@ Members     4 / 8  (links 5 / 6)
 | **TOR-2** | Tor mode for 1:1: transport guard, TOR_INVITE (one-way), Noise IK, stream framing, "VIA TOR" UI | TOR-1. **Built (lab)** |
 | **TOR-3** | Contacts reconnect through stable onion addresses (no QR); card-based Tor dial | TOR-2, CARDS. **Built** |
 | **TOR-4** | Rooms over Tor | TOR-3, MVP-3. **Built (lab)** |
-| **CH-1…CH-5** | Public channels with a Tor-only owner, hosted from the owner's tab (Appendix D) | TOR-1, E8. **Built (lab)**: APP-E2E-TOR-CHANNEL 14/14 |
+| **CH-1…CH-5** | Public channels with a Tor-only owner, hosted from the owner's tab (Appendix D) | TOR-1, E8. **Built (lab)**: APP-E2E-TOR-CHANNEL 19/19 |
+| **BR-1…BR-3** | Tor bridge lines (Appendix F.2) | TOR-1. **Built (lab)**: APP-E2E-TOR-BRIDGES 9/9 |
+| **UI-1…UI-6** | Several chats per tab; one app with Chats, Following and My channels (Appendix F.3) | CH-5. **Built**: APP-E2E-MULTI 12/12, APP-E2E-TOR-MULTI 6/6 (lab) |
 | **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16 | — |
 
 ### 23.1a Release and site layout
@@ -1082,9 +1088,9 @@ Members     4 / 8  (links 5 / 6)
   | Path | Content |
   |---|---|
   | `/` | **Landing page** (static HTML, no scripts needed): **Ephem**: what the messenger is, how a chat starts (two codes, in person or by link), what is and is not protected (§21), supported browsers, and a prominent **Start** link to `/app/` |
-  | `/app/` | The PWA: `index.html`, `app.js` (DOM glue only), `app.css`, `sw.js`, `manifest.webmanifest`, `icons/`, `pkg/ephem.js` + `pkg/ephem_bg.wasm` (built and stamped by `./build.sh`, committed) (§4.1) |
-  | `/app/tor.html` | Tor-mode entry (§28.2, §28.6): generated from `index.html` by `tools/stamp.py`, loads `pkg/ephem_tor.js` + `pkg/ephem_tor_bg.wasm` |
-  | `/app/channel.html` | Public channels (§27): owner and reader page, `channel.js` + `pkg/ephem_channel_bg.wasm`; readers open `channel.html#c=<name>&o=<onion>[,<mirror>…]` |
+  | `/app/` | The PWA: `index.html`, `app.js` (chats and the shell), `channels.js` (Following, My channels), `bridges.js`, `slots.js`, `ui.js`, `app.css`, `sw.js`, `manifest.webmanifest`, `icons/`, `pkg/ephem.js` + `pkg/ephem_bg.wasm` (built and stamped by `./build.sh`, committed) (§4.1); the channel tabs load the Tor build on first use |
+  | `/app/tor.html` | Tor-mode entry (§28.2, §28.6): generated from `index.html` by `tools/stamp.py`, loads `pkg/ephem_tor.js` + `pkg/ephem_tor_bg.wasm` (chats and channels). Channel links: `tor.html#c=<name>&o=<onion>[,<mirror>…]` |
+  | `/app/channel.html` | Old channel links (v1.1): a redirect into the app (`redirect.js`) |
   | `/checks/web/` | The checkpoint page (§24) |
   | `/docs/P2P-CHAT.md` | This document |
 
@@ -1186,12 +1192,15 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 | E7 | Fuzzing and review of our Tor-side parsers | ✅ `crates/snowflake/tests/fuzz.rs`: encapsulation, KCP, smux and the whole session take random and mutated server traffic (bit flips, inserts, drops, splices, extreme length fields) without panics, failing only with their typed errors; deterministic seeds, `FUZZ_ITERS` for longer runs. TOR_INVITE decoding is strict (exact length). Review items: §28.4 accept rules, transport guard (§28.5) | 🤖 | Sign-off |
 | APP-E2E-TOR | Does 1:1 chat work over Tor, end to end? | ✅ **Lab, Chromium, 19/19** (`checks/tor-lab/e2e_tor_app.mjs`, two browsers each with its own arti; every rendezvous first tries a dead broker, exercising the fallback): mode routing (`#t=` → `tor.html`, `#i=` → direct page); Alice's onion up; **one 104-byte TOR_INVITE, no answer**; Bob dials, Noise IK, **same SAS**; messages both ways (50–120 ms in the lab), ✓; **stream lost on either side → the dialler redials, queued message delivered**; both save each other as contacts → later **Bob connects with no code** (after Alice signed out and in: her onion service follows the identity); **warm start**: the directory snapshot is in IndexedDB and a reload loads it; no CSP violations | 🤖 lab | §28 |
 | APP-E2E-TOR-LIVE | The same 1:1 test on the real Tor network | ✅ **Third run: 5 proxy switches in the whole run** (58 before the stall-rule fix). ✅ **18/18 twice**; second run (after the bridge and stall fixes): cold 47 s, warm 7.6 s, redials 2.4 s, contact reconnect 2.6 s, snapshot 21.7 MB gzip. ✅ Laptop ↔ iPhone 1:1 and rooms over Tor by hand. First run (2026-09-28, owner's MacBook, installed Chrome, `LIVE=1`): real broker, Snowflake bridge and Tor network; Bob reached Alice's onion (55 s, after one timed-out attempt retried with a fresh descriptor), same SAS, messages ~0.8 s each way, both redials, contact reconnect 12.7 s, **warm start 7.4 s**. Cold bootstrap slow (see G3); real directory snapshot 40 MB as JSON, now stored gzip-compressed | 🤖 `ONLY=tor` | §28 |
-| APP-E2E-CARDS | Do contact cards work (direct mode)? | ✅ **Chromium, 8/8** (`checks/e2e_cards.mjs`): card only for saved identities; QR + `#k=` link (30 days); a temporary identity cannot add; Bob adds Alice from the card (unverified, his own name for her); they chat by invite and answer, Bob sees his contact's name, the SAS is still asked, then ✔; reset makes a new card and flags the backup | 🤖 | §7.5 |
+| APP-E2E-CARDS | Do contact cards work (direct mode)? | ✅ **Chromium, 9/9** (`checks/e2e_cards.mjs`): card only for saved identities; QR + `#k=` link (30 days); a temporary identity cannot add; the Contacts field refuses what is not a card, then adds from a card; Bob adds Alice from the card (unverified, his own name for her); they chat by invite and answer, Bob sees his contact's name, the SAS is still asked, then ✔; reset makes a new card and flags the backup | 🤖 | §7.5 |
 | APP-E2E-TOR-CARDS | Do cards open a first Tor chat? | ✅ **Lab, 6/6** (`checks/tor-lab/e2e_tor_cards.mjs`): Bob and Carol add Alice from her card; Bob's Connect carries the card's secret; Alice is asked (0.9 s) and sees no chat before accepting; accepted → contacts, messages both ways; after Alice resets her card Carol's old card opens nothing; Bob reconnects as a plain contact with no prompt | 🤖 lab | §28.4 |
 | APP-E2E-TOR-ROOM | Do rooms work over Tor? | ✅ **Lab, Chromium, 9/9** (`checks/tor-lab/e2e_tor_room.mjs`, three browsers): owner invites B and C with TOR_INVITEs (no answer box); **B and C are introduced by the owner and connect onion to onion**; no IP-exposure prompt; a member's message reaches everyone; a member's links dropped → redialled, queued message delivered | 🤖 lab | §28.7 |
 | E8 | Does a hidden desktop tab with an open DataChannel keep its timers? | ✅ **Chrome 153: yes** (604 s hidden, max gap 2.0 s). ✅ **Firefox 142: yes** (611 s hidden, max gap 1.5 s). ❌ **Safari 26.5: no**, confirmed twice (198 s hidden → 103 s gap; 604 s hidden → **150 s gap**). **Consequences:** (1) Tor mode and channel hosting (§27, §28) stay reachable from a background tab in Chrome and Firefox, but **not in Safari**, where the UI says "keep this tab visible" and recommends Chrome or Firefox for channel owners; (2) app-level PING timing tolerates throttled peers (§12) | 🤖 (E8=1) / E8REAL=1 | §12, §27, §28.3 |
 | C-P1 | Gateways: trustless CAR with CORS | ✅ `trustless-gateway.link`: CAR served to Chrome, Safari and iPhone (119 874 B), CORS `*`. **Resolved:** `ipfs.io` and `dweb.link` answer trustless requests with a **301 redirect to `trustless-gateway.link` that has no CORS header**, so browsers refuse it. They are aliases, not independent gateways. **Default list: `trustless-gateway.link` only** (one operator: availability risk, §D.6.3) | 🤖 | App. D |
-| APP-E2E-TOR-CHANNEL | Do public channels work end to end? | ✅ **Lab, 14/14** (`checks/tor-lab/e2e_tor_channel.mjs`, four browsers): owner signs in on `channel.html` with a remembered identity; warnings must be acknowledged; creates a channel, 3 posts, 1 deleted; online on its own onion (~5 s); a reader verifies it over Tor (newest first, deleted shown); the reader mirrors it on a second onion; the owner signs the mirror list, the reader gets version 6; **C-P3**: 1 000 more posts, read in 0.4 s; **IPNS record published through a Tor exit** (HTTPS PUT to a stand-in routing server with its own CA, body = the record); the owner's store survives a reload; backup exports; Kubo instructions and downloads; **without Tor**, read through a (stand-in) public gateway after the IP warning; **owner offline: a new reader gets it from the mirror** (6–23 s); no CSP violations | 🤖 lab | §27, App. D |
+| APP-E2E-TOR-CHANNEL | Do public channels work end to end? | ✅ **Lab, 19/19** (`checks/tor-lab/e2e_tor_channel.mjs`, five browsers, v1.2 app): in Tor mode the owner's **My channels** uses the chat identity (no second sign-in, D3); warnings must be acknowledged; a channel, 3 posts, 1 deleted, online on its own onion (~5 s); **a second channel, both online at once** (UI-5); a reader verifies it over Tor (newest first, deleted shown) and **follows** it; a new post arrives when the Following tab refreshes; the second channel reads too; the reader mirrors the first on a second onion; the owner signs the mirror list, the reader gets version 7; **C-P3**: 1 000 more posts, read in 0.4 s; **IPNS record published through a Tor exit** (HTTPS PUT to a stand-in routing server with its own CA, body = the record); after a reload both channels come back from the store and go online again; backup exports; Kubo instructions and downloads; **without Tor**, read through a (stand-in) public gateway after the IP warning; **a direct-mode page loads the Tor build only when its Following tab is used** (no request before), then reads the channel (UI-3); **owner offline: a new reader gets it from the mirror**; no CSP violations | 🤖 lab | §27, App. D, F.3 |
+| APP-E2E-TOR-BRIDGES | Do the user's own bridge lines work? | ✅ **Lab, 9/9** (`checks/tor-lab/e2e_tor_bridges.mjs`): a `#b=` link on the direct page opens Tor mode; with “my own bridges” chosen Tor waits for them; an obfs4 line is refused with its reason and Tor does not start; the lab Snowflake pasted as bridge lines starts Tor (onion hosted in ~6 s); “Share my bridges” gives a `#b=` link with the lines; the lines move into the key file on save, a reload waits and the sign-in starts Tor with them; a `#b=` link fills another user's setting without applying it; a chat runs through the pasted bridges | 🤖 lab | App. F.2 |
+| APP-E2E-MULTI | Several chats in one tab (direct)? | ✅ **Chromium, 12/12** (`checks/e2e_multi.mjs`): Alice holds chats with Bob and Carol at once; each keeps its own messages, receipts and draft; a message in the background chat raises its unread count (row and tab), cleared on opening; Bob leaving ends only his chat; tabs, tab panels and the live log carry ARIA roles; a 390 px phone window shows the list first, a pane full screen with Back, no horizontal scrolling | 🤖 | App. F.3 |
+| APP-E2E-TOR-MULTI | Several chats over one onion? | ✅ **Lab, 6/6** (`checks/tor-lab/e2e_tor_multi.mjs`): two Tor invites of one onion reach their own chats; a redial in Bob's chat leaves Carol's untouched; a contact dials while Alice is in another chat: a new chat appears in her list (Bob's stays on screen) and opens on a tap | 🤖 lab | App. F.3.2 |
 | CH-INTEROP | Are our channel formats what IPFS software expects? | ✅ **6/6** (`checks/channel_interop.mjs`): the name is a libp2p-key CIDv1 (`k51…`); **the js-ipns reference validator accepts our records** (V1 + V2 fields); the record points at the CAR's root; every block hashes to its CID and decodes as strict DAG-CBOR in `cborg` | 🤖 | App. D |
 | C-P2, C-P3 | Two onions in one tab; 1 000 posts | ✅ (App. D.10) | 🤖 lab | App. D |
 | C-P5 | OPFS quota and eviction with `persist()` | ⏳ per browser, on devices | ✋ | App. D |
@@ -1249,6 +1258,7 @@ The v0.1 points that were **confirmed** are kept throughout: principles P1–P9,
 | v1.0 | After the first live run: **both Snowflake bridges** (snowflake-01 `2B28…`, snowflake-02 `8838…`, placeholder addresses 192.0.2.3/192.0.2.4, one warm-proxy pool of 2 each); a proxy is replaced after **4 s without data while ours is unacknowledged** (20 s when idle), before arti's 10 s directory read timeout; directory snapshots are gzip-compressed JSON (the real directory is ~40 MB of text) | §28.3, App. C.5 |
 | v1.0 | After the second live run: a new Snowflake proxy **resends everything in flight at once** and restarts KCP's backoff and dead-link count (`Kcp::new_path`); without it a backed-off timer left the new proxy silent, the 4 s stall rule replaced it too, and proxies churned every few seconds. Dial attempts time out after 30 s (live dials take 2–13 s) | App. C.5 |
 | v1.0 | Tor links: **45 s without anything from the peer = lost** (peers PING every 15 s when idle); the dialler redials on fresh circuits at once. The Snowflake stall rule is timed from our send, not from the last byte received (the old rule replaced healthy idle proxies at every keep-alive: 58 switches in one live run) | §28.5, App. C.5 |
+| v1.2 | Owner approved Appendix F with D1–D6 as recommended (2026-09-29): no chat history (P7 unchanged); the follow list in the key file (TLV 0x06); channels owned by the chat identity by default; one chat mode per tab; `connect-src https:`; 16 chats per tab. As built: several chats by *loading* one chat at a time in the adapter (a few swapped words) rather than threading a chat index through every path; owned channels are found in the store, so no key-file list of them (TLV 0x07 was not needed); the `#b=` link carries the lines as base64url text (no binary kind); the channel code is part of the Tor build and the separate channel build is gone | App. F |
 | v1.1 | **Contact cards:** the card's secret travels in the Noise IK payload where a contact dial sends a zero `invite_id`; a contact added from a card keeps the secret (entry flag bit3) only until its first connection; the host shows no chat content before its user accepts. **Channels:** own page and build; IPNS `sequence` = revision (grows on every change); HTTP/1.1 on onion port 80; a reader accepts a response once `Content-Length` bytes arrived (arti ends streams with reason MISC); stable per-browser mirror onions; one channel per identity for now | §7.5, §28.4, §27, App. D |
 | v1.0 | Streams naming nothing of ours are dropped unanswered (no `E_NOT_A_CONTACT` is sent: nothing is told to an unknown dialler) | §28.4 |
 | v0.7 | "Simulate network loss" in the diagnostics drops the path without GOODBYE, so users (and the e2e test) can exercise T3; in a room (v0.9) it drops the member's links to other members, exercising T2 | §13, §18 |
@@ -1282,7 +1292,8 @@ None.
   - The channel's keys and onion address are derived one-way and are **not linked** to the owner's chat identity. The owner is known only if they say so in the channel.
 - **Content format:** IPFS-native (CIDs, dag-cbor, CAR, IPNS V2 records), verified in Rust. Followers may mirror a channel over their own onion, or, accepting that their own IP becomes visible, to public IPFS. That is what lets readers without Tor read it through public gateways.
 - Details and phases: Appendix D.
-- **As built (v1.1):** `app/channel.html` + `channel.js` with its own wasm (`pkg/ephem_channel_bg.wasm`, crate `channel-web`: `crates/channel` + the embedded Tor client; 2.05 MB gzip), its own CSP (Snowflake broker and CDN, `trustless-gateway.link` for readers without Tor) and no chat code. One channel per identity (index 0). Details under each part of Appendix D ("As built").
+- **As built (v1.1):** `app/channel.html` + `channel.js` with its own wasm and CSP, one channel per identity. Details under each part of Appendix D ("As built").
+- **As built (v1.2, Appendix F.3.3):** channels are two tabs of the app, **Following** and **My channels** (`app/channels.js`). The channel code (`crates/channel-web`) is part of the Tor build, so in Tor mode chats and channels share one Tor client (a shared `TorSlot`) and the chat identity owns the channels (`App::bind_channels`; channel keys stay derived and unlinkable in public; a separate identity on request). The direct page loads the Tor build only when a channel tab is first used, with its own Tor client and a one-time passphrase to own channels. An identity owns up to 16 channels (indices 0–15), found by their stored files, each online on its own onion while the tab is open; serving is idempotent per channel and always serves its latest version. The follow list lives in the key file (TLV 0x06) and is refreshed when the tab opens and every 10 minutes, four channels at a time, with new-post counts. `channel.html` only redirects old links (`#c=…`) into the app.
 
 ## 28. Tor mode (a second, separate transport, built into the WASM app)
 
@@ -1364,13 +1375,13 @@ The virtual port is fixed. There are no ICE candidates, fingerprints or answer.
 
 ```
 default-src 'none'; script-src 'self' 'wasm-unsafe-eval' '<import-map hash>'; style-src 'self';
-img-src 'self' data: blob:; connect-src 'self' https://snowflake-broker.torproject.net https://1098762253.rsc.cdn77.org;
+img-src 'self' data: blob:; connect-src 'self' https:;
 worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'
 ```
 
 - Written by `tools/stamp.py`, as for `index.html` (§17.2).
 
-- Only the broker (directly or through its CDN URL) can be reached with `fetch`. Snowflake's WebRTC is not governed by CSP (§17.3 limit).
+- `fetch` reaches only a Snowflake broker: the Tor Project's (directly or through its CDN URL) or the user's own from their bridge lines (Appendix F.2), hence `https:` (v1.2, decision D5; before, the two brokers were listed). Snowflake's WebRTC is not governed by CSP (§17.3 limit).
 - **Everything else goes through Tor**, including the channel owner's IPNS publishing (§27, which uses a Tor exit).
 
 ### 28.7 Contacts reconnect without a QR, and rooms over Tor
@@ -1762,7 +1773,7 @@ https://<owner>.github.io/ephem/channel.html#c=<ipns-name>&o=<channel-onion>[&m=
 | ID | Question | Status |
 |---|---|---|
 | C-P1 | Gateways serve CAR and IPNS records with CORS | ✅ `trustless-gateway.link` (live: Chrome, Safari, iPhone). `ipfs.io`/`dweb.link` only redirect there without CORS |
-| C-P2 | A tab hosting 2 onion services at once (the chat onion and one channel onion) | ✅ by design and API: chat and channels are separate pages; a channel tab runs its channel's and its mirrors' onions side by side (`Tor::launch`), exercised with one of each per tab in APP-E2E-TOR-CHANNEL |
+| C-P2 | A tab hosting several onion services at once (the chat onion and channel onions) | ✅ v1.2: one Tor-mode tab runs its chat onion, two channel onions and mirror onions side by side (`Tor::launch`), exercised in APP-E2E-TOR-CHANNEL |
 | C-P3 | Time to load a channel with 1 000 posts over an onion | ✅ **Lab: 0.4 s** to fetch, verify and render 1 003 posts (CAR 120 KB); the owner builds 1 000 posts in 1.1–1.3 s |
 | C-P4 | Republishing a signed IPNS record without the key | ✅ Live: browser `PUT` to `delegated-ipfs.dev`, read back byte-identical from `trustless-gateway.link` |
 | C-P5 | OPFS quota and eviction with `persist()` on each browser | ⏳ |
@@ -1799,9 +1810,9 @@ https://<owner>.github.io/ephem/channel.html#c=<ipns-name>&o=<channel-onion>[&m=
 | Channel comments | Write access for readers | Breaks read-only; "message the owner" through a normal invite instead |
 
 
-## Appendix F: Proposal (v1.2 draft): Tor bridges, and one app with Chats, Following and My channels
+## Appendix F: v1.2: Tor bridges, and one app with Chats, Following and My channels
 
-**Status: proposal, not approved.** Nothing here is built. The owner decides on the open points in F.4 before any work starts. The merge of v1.1 to `main` (§23.1a) does not wait for this.
+**Status: approved by the owner with D1–D6 as recommended (2026-09-29), and built** (F.5: as built, and what differs from this proposal). F.1–F.4 are the proposal as approved.
 
 ### F.1 Where we start from
 
@@ -1958,3 +1969,20 @@ A counter on each tab shows the unread total, from this tab's RAM and the follow
 | D4 | Direct and Tor chats in one tab | (a) **one mode per tab for chats** (channels always Tor); (b) mixed, chosen per chat | **(a)**. "This tab never shows your IP" stays a one-line promise; mixed mode makes a leak a mis-click away |
 | D5 | CSP for custom brokers | F.2.4 options 1–3 | **Option 1** (`https:` on the Tor pages) |
 | D6 | Concurrent chats per tab | 8 / **16** / 32 | **16**. Memory and UI stay sane; a room already counts as one chat |
+
+### F.5 As built (2026-09-29)
+
+| Part | As built | Proof |
+|---|---|---|
+| BR-1 | `crates/tor::bridge::parse`: lines → brokers, bridges (up to 4, at placeholder addresses 192.0.2.3–6) and STUN, each the union in order; `snowflake` only; obfs4, meek, WebTunnel, conjure and plain bridges refused with their reason; `front=`/`utls`/`ampcache=`/TURN noted and ignored; `http://` only to loopback (the lab) | unit tests from Tor Browser's lines; mutation fuzz, 10⁶ runs clean |
+| BR-2 | Settings → Tor connection (automatic, or my own bridges + optional fallback); TLV 0x05 (RAM for a temporary identity, moved into the key file when it is saved); a per-browser flag makes the next start wait for sign-in; `#b=` links fill the setting only; the built-in setup is itself bridge lines (`bridges.js`) | APP-E2E-TOR-BRIDGES 9/9 |
+| BR-3 | `connect-src 'self' https:` on every app page (D5) | all suites: no CSP violation |
+| BR-4 | AMP cache rendezvous: not done (spike; `ampcache=` lines are refused unless they also have a `url=` broker) | — |
+| UI-1 | Adapter: one chat loaded in `Inner`, up to 15 parked (shells preallocated, empty chats recycled); every entry point loads its chat first (`focus`, or `find` by link id); events carry the chat id (meta byte 17); an incoming Tor stream is offered to every chat, a contact or card dial gets a new chat; `E_TOO_MANY_CHATS` | native tests (park, load, recycle, 16-chat limit); every earlier suite unchanged |
+| UI-2 | Shell: tabs and lists beside the pane (≥ 900 px), or the list then the pane with Back and a bottom tab bar (phones); one clone of the chat views per chat, only the one on screen attached; unread counts per chat and on the tab; opt-in notifications without message text; an incoming chat takes the screen only from the home or an ended chat | APP-E2E-MULTI 12/12, APP-E2E-TOR-MULTI 6/6 |
+| UI-3 | The channel code is part of the Tor build; one Tor client per Tor page; the direct page loads the Tor build (SRI-pinned) only for its channel tabs; `channel.html` redirects | APP-E2E-TOR-CHANNEL 19/19 (network check included) |
+| UI-4 | Following: follow list (TLV 0x06), refresh on tab open and every 10 min (4 at a time), new-post counts, mirrors resumed after a reload | APP-E2E-TOR-CHANNEL |
+| UI-5 | My channels: up to 16 per identity, found in the store, each online on its own onion | APP-E2E-TOR-CHANNEL (two at once) |
+| UI-6 | Identicon avatars (a colour and a letter from the name, not an identity), keyboard shortcuts (Alt+1/2/3 tabs, Alt+↑/↓ chats, Escape back on phones), empty states. **Not done:** moving every UI string into one table for translation (error messages already are) | visual check; APP-E2E-MULTI (ARIA) |
+
+**Open:** live runs of bridges, several chats and the channel tabs on the real Tor network and on the iPhone; BR-4; the string table for translation.
