@@ -34,7 +34,7 @@ const lab = LIVE ? null : labConfig();
 export function serveTor() {
   if (LIVE) return serve();
   const origins = `${DEAD_BROKER} ${new URL(lab.labBroker).origin}`;
-  return serve((p, read) => (p.endsWith('/tor.html') ? read().replace('https://snowflake-broker.torproject.net', origins) : null));
+  return serve((p, read) => (/\/(tor|channel)\.html$/.test(p) ? read().replace('https://snowflake-broker.torproject.net', origins) : null));
 }
 
 /** Prepares a browser context for tor.html (the lab settings, unless LIVE). */

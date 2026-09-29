@@ -1,0 +1,20 @@
+[package]
+name = "ephem-channel-web"
+description = "Ephem public channels in the browser (channel.html): owner, onion gateway, reader, mirrors; embedded Tor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ephem-channel = { path = "../channel" }
+ephem-crypto = { path = "../crypto" }
+ephem-tor = { path = "../tor", default-features = false }
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+futures = "0.3"
+tracing = "0.1"
+zeroize = "1"

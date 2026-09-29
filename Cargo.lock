@@ -1187,6 +1187,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ephem-channel-web"
+version = "0.1.0"
+dependencies = [
+ "ephem-channel",
+ "ephem-crypto",
+ "ephem-tor",
+ "futures",
+ "js-sys",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "zeroize",
+]
+
+[[package]]
 name = "ephem-core"
 version = "0.1.0"
 dependencies = [

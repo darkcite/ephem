@@ -333,6 +333,7 @@ fn reader(inner: Shared, lid: u32, mut r: DataReader, mut buf: Vec<u8>) {
 
 /// One frame to the session of path `lid`. False if that path no longer exists.
 fn deliver(inner: &Shared, lid: u32, frame: &[u8]) -> bool {
+    let card_used;
     {
         let mut g = inner.borrow_mut();
         let Some(i) = g.find(lid) else { return false };
@@ -343,9 +344,32 @@ fn deliver(inner: &Shared, lid: u32, frame: &[u8]) -> bool {
         rx[..frame.len()].copy_from_slice(frame);
         let mut out = Out { rtc: rtc.as_ref(), tor: tor.as_ref(), meta, inbox, peer, link: *id, member: *member };
         sess.on_frame(now, &mut rx[..frame.len()], &mut |e| on_event(&mut out, e));
+        card_used = forget_card_secret(&mut g, i);
+    }
+    if card_used {
+        emit(ev::CARD, 2.0, &[]);
     }
     room::drain(inner);
     true
+}
+
+/// A contact added from a card has connected (§7.5): later dials are plain contact dials, so
+/// its card's secret is dropped (the card may have been reset since). True if the key file
+/// changed (ev::CARD 2: the page saves it).
+fn forget_card_secret(g: &mut Inner, i: usize) -> bool {
+    let Inner { links, saved, .. } = g;
+    let l = &links[i];
+    if !(l.sess.contact() && l.sess.role() == Role::Answerer && l.sess.ever_connected()) {
+        return false;
+    }
+    let peer = l.sess.remote();
+    match saved.as_mut() {
+        Some(sv) if sv.contacts.get(&peer).is_some_and(|c| c.flags & cflags::FROM_CARD != 0) => {
+            sv.contacts.card_used(&peer);
+            true
+        }
+        _ => false,
+    }
 }
 
 /// The stream of path `lid` ended: the chat is suspended; the dialer dials again.
@@ -364,29 +388,9 @@ fn lost(inner: &Shared, lid: u32) {
     }
 }
 
-/// Every second: connected Tor links that went silent are lost (see [`SILENT_MS`]); a contact
-/// added from a card that has connected no longer needs the card's secret (ev::CARD 2: the
-/// key file changed).
+/// Every second: connected Tor links that went silent are lost (see [`SILENT_MS`]).
 pub(crate) fn tick(inner: &Shared) {
     let now = now_ms();
-    let used = {
-        let mut g = inner.borrow_mut();
-        let Inner { links, saved, .. } = &mut *g;
-        let mut used = false;
-        if let Some(sv) = saved.as_mut() {
-            for l in links.iter().filter(|l| l.sess.contact() && l.sess.role() == Role::Answerer && l.sess.ever_connected()) {
-                let peer = l.sess.remote();
-                if sv.contacts.get(&peer).is_some_and(|c| c.flags & cflags::FROM_CARD != 0) {
-                    sv.contacts.card_used(&peer);
-                    used = true;
-                }
-            }
-        }
-        used
-    };
-    if used {
-        emit(ev::CARD, 2.0, &[]);
-    }
     let silent: Vec<u32> = {
         let g = inner.borrow();
         g.links.iter().filter(|l| l.tor.is_some() && l.sess.state() == State::Connected && l.sess.rx_idle_ms(now) > SILENT_MS).map(|l| l.id).collect()

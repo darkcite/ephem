@@ -64,9 +64,8 @@ pub struct Tor {
     client: Arc<TorClient<Runtime>>,
     /// One pool of warm Snowflake proxies per bridge.
     pools: Vec<WarmPool>,
-    /// The running onion service (kept alive) and its accepted, not yet taken, streams.
-    services: RefCell<Vec<Arc<RunningOnionService>>>,
-    incoming: Rc<RefCell<VecDeque<DataStream>>>,
+    /// The chat's onion service (replaced when the identity changes).
+    chat: RefCell<Option<Rc<Service>>>,
 }
 
 impl Tor {
@@ -83,7 +82,7 @@ impl Tor {
         let rt: Runtime = CompoundRuntime::new(WebTask::default(), WebTask::default(), RealCoarseTimeProvider::new(), net.clone(), net.clone(), TorTls::default(), net);
         let cfg = config::build(&fps, network_toml, "/ephem")?;
         let client = TorClient::with_runtime(rt).config(cfg).create_unbootstrapped().map_err(|e| e.to_string())?;
-        Ok(Tor { client, pools, services: RefCell::default(), incoming: Rc::default() })
+        Ok(Tor { client, pools, chat: RefCell::default() })
     }
 
     /// Directory ready (the bridge descriptor may still follow; connects retry until it is
@@ -144,11 +143,11 @@ impl Tor {
         self.client.connect_with_prefs((host, port), &prefs).await.map_err(|e| e.to_string())
     }
 
-    /// Hosts an onion service whose identity is the Ed25519 key `secret` (Ephem derives it from
-    /// the identity seed, §7.1). Returns `"<56 chars>.onion"`. Every stream to any port is
-    /// accepted; take them with [`Self::accept`]. It replaces the service hosted before (the
-    /// tab's identity changed); `nickname` must differ from that one's.
-    pub fn host(&self, nickname: &str, secret: &[u8; 32]) -> Result<String, String> {
+    /// Launches an onion service whose identity is the Ed25519 key `secret` (Ephem derives it
+    /// from the identity seed, §7.1, or a channel's, §D.3). Every stream to any port is
+    /// accepted and queued on the returned [`Service`]; the service stays up while that value
+    /// lives. Several services can run side by side (C-P2); nicknames must differ.
+    pub fn launch(&self, nickname: &str, secret: &[u8; 32]) -> Result<Service, String> {
         let kp = ed25519::Keypair::from_bytes(secret);
         let hsid: HsId = tor_hscrypto::pk::HsIdKey::from(*ed25519::ExpandedKeypair::from(&kp).public()).id();
         let cfg = OnionServiceConfigBuilder::default()
@@ -160,22 +159,57 @@ impl Tor {
             .launch_onion_service_with_hsid(cfg, HsIdKeypair::from(ed25519::ExpandedKeypair::from(&kp)))
             .map_err(|e| e.to_string())?
             .ok_or("onion services are disabled")?;
-        // Dropping the previous service shuts it down (and ends its stream of requests).
-        *self.services.borrow_mut() = vec![svc];
-        let incoming = self.incoming.clone();
+        let incoming: Rc<RefCell<VecDeque<DataStream>>> = Rc::default();
+        let queue = incoming.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let mut streams = tor_hsservice::handle_rend_requests(rend);
             while let Some(req) = streams.next().await {
                 match req.accept(tor_cell::relaycell::msg::Connected::new_empty()).await {
-                    Ok(s) => incoming.borrow_mut().push_back(s),
+                    Ok(s) => queue.borrow_mut().push_back(s),
                     Err(e) => tracing::info!("onion: stream not accepted: {e}"),
                 }
             }
         });
-        Ok(safelog::DisplayRedacted::display_unredacted(&hsid).to_string())
+        Ok(Service { onion: safelog::DisplayRedacted::display_unredacted(&hsid).to_string(), incoming, _running: svc })
     }
 
-    /// The next incoming stream of the hosted onion services.
+    /// The chat's onion service (§28.4): like [`Self::launch`], but it replaces the service
+    /// hosted before (the tab's identity changed). Returns `"<56 chars>.onion"`; take its
+    /// streams with [`Self::accept`].
+    pub fn host(&self, nickname: &str, secret: &[u8; 32]) -> Result<String, String> {
+        let s = self.launch(nickname, secret)?;
+        let onion = s.onion.clone();
+        // Dropping the previous service shuts it down (and ends its stream of requests).
+        *self.chat.borrow_mut() = Some(Rc::new(s));
+        Ok(onion)
+    }
+
+    /// The next incoming stream of the chat's onion service.
+    pub async fn accept(&self) -> DataStream {
+        loop {
+            let svc = self.chat.borrow().clone();
+            if let Some(s) = svc {
+                return s.accept().await;
+            }
+            rt::sleep_ms(50).await;
+        }
+    }
+}
+
+/// A running onion service and its accepted, not yet taken, streams.
+pub struct Service {
+    onion: String,
+    incoming: Rc<RefCell<VecDeque<DataStream>>>,
+    _running: Arc<RunningOnionService>,
+}
+
+impl Service {
+    /// `"<56 chars>.onion"`.
+    pub fn onion(&self) -> &str {
+        &self.onion
+    }
+
+    /// The next incoming stream.
     pub async fn accept(&self) -> DataStream {
         loop {
             if let Some(s) = self.incoming.borrow_mut().pop_front() {

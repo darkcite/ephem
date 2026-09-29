@@ -1,395 +1,109 @@
-export class App {
+export class ChannelApp {
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
         this.__wbg_ptr = 0;
-        AppFinalization.unregister(this);
+        ChannelAppFinalization.unregister(this);
         return ptr;
     }
     free() {
         const ptr = this.__destroy_into_raw();
-        wasm.__wbg_app_free(ptr, 0);
+        wasm.__wbg_channelapp_free(ptr, 0);
     }
     /**
-     * Adds the owner of a card as an unverified contact named `nick` (§7.5). Save the key file
-     * afterwards.
-     * @param {string} text
-     * @param {string} nick
-     * @returns {number}
+     * The open channel's whole CAR (store, export, Kubo import).
+     * @returns {Uint8Array}
      */
-    add_card(text, nick) {
-        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(nick, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.app_add_card(this.__wbg_ptr, ptr0, len0, ptr1, len1);
-        return ret >>> 0;
-    }
-    /**
-     * Applies a code: a full link, `#i=` / `#a=` / `#r=` / `#q=`, or bare base64url.
-     * `scanned` = it came from the in-app camera (SAS policy, §10.4).
-     * Returns 0 or an error code (also emitted as ERROR).
-     * @param {string} text
-     * @param {boolean} scanned
-     * @returns {number}
-     */
-    apply_code(text, scanned) {
-        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.app_apply_code(this.__wbg_ptr, ptr0, len0, scanned);
-        return ret >>> 0;
-    }
-    /**
-     * Expiry of our current card (Unix seconds; 0 = never or no card).
-     * @returns {number}
-     */
-    card_expires() {
-        const ret = wasm.app_card_expires(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * The suggested nickname of a card (`#k=` link or text), or `None` if it is not a card.
-     * @param {string} text
-     * @returns {string | undefined}
-     */
-    card_nick(text) {
+    car() {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.app_card_nick(retptr, this.__wbg_ptr, ptr0, len0);
+            wasm.channelapp_car(retptr, this.__wbg_ptr);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            let v2;
-            if (r0 !== 0) {
-                v2 = getStringFromWasm0(r0, r1);
-                wasm.__wbindgen_export5(r0, r1 * 1, 1);
-            }
-            return v2;
+            var v1 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export5(r0, r1 * 1, 1);
+            return v1;
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
     }
     /**
-     * The chat's self-destruct timer in seconds (0 = off).
-     * @returns {number}
-     */
-    chat_ttl() {
-        const ret = wasm.app_chat_ttl(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * Leaves the chat or room (a member first tells the owner; GOODBYE on every link), wipes
-     * session keys and messages.
-     */
-    close() {
-        wasm.app_close(this.__wbg_ptr);
-    }
-    /**
-     * Whether this tab can use the code (for the tab hand-off, §8.7): an answer to one of our
-     * open invites, or a reconnect code for one of our links. Never has side effects.
-     * @param {string} text
-     * @returns {boolean}
-     */
-    code_fits(text) {
-        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.app_code_fits(this.__wbg_ptr, ptr0, len0);
-        return ret !== 0;
-    }
-    /**
-     * `kind | flags << 8` of a code without applying it (0 if it is not a valid code), so the UI
-     * can ask before answering an identity-transfer or room invite.
-     * @param {string} text
-     * @returns {number}
-     */
-    code_info(text) {
-        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.app_code_info(this.__wbg_ptr, ptr0, len0);
-        return ret >>> 0;
-    }
-    /**
-     * The user confirmed the SAS of the 1:1 chat or of the link to the room owner (§10.4):
-     * marks a contact verified; on an identity transfer (§7.6) it releases the key file
-     * (sender) or tells the sender (receiver).
-     * @returns {number}
-     */
-    confirm_sas() {
-        const ret = wasm.app_confirm_sas(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * Dials a contact's onion (§28.7): the chat opens when the contact's Tor tab accepts.
-     * @param {string} peer_hex
-     * @returns {number}
-     */
-    contact_connect(peer_hex) {
-        const ptr0 = passStringToWasm0(peer_hex, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.app_contact_connect(this.__wbg_ptr, ptr0, len0);
-        return ret >>> 0;
-    }
-    /**
-     * One line per contact: `peer_id_hex \t flags \t nickname \t handle`.
+     * The IPNS name of channel `index` of the signed-in identity (`k51…`).
+     * @param {number} index
      * @returns {string}
      */
-    contacts() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_contacts(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
-     * Alice: new 1:1 chat and invite. Emits CODE(1).
-     * @param {number} ttl_s
-     */
-    create_invite(ttl_s) {
-        wasm.app_create_invite(this.__wbg_ptr, ttl_s);
-    }
-    /**
-     * T3: a reconnect code for the 1:1 chat or for the link to the room owner (§13). Emits CODE(3).
-     * @param {number} ttl_s
-     * @returns {number}
-     */
-    create_resume(ttl_s) {
-        const ret = wasm.app_create_resume(this.__wbg_ptr, ttl_s);
-        return ret >>> 0;
-    }
-    /**
-     * Creates a room owned by us (everything else is closed). Invite members next.
-     */
-    create_room() {
-        wasm.app_create_room(this.__wbg_ptr);
-    }
-    /**
-     * New device (§7.6): an invite asking another device for its identity. Emits CODE(1).
-     * @param {number} ttl_s
-     */
-    create_transfer_invite(ttl_s) {
-        wasm.app_create_transfer_invite(this.__wbg_ptr, ttl_s);
-    }
-    /**
-     * Deletes a message: ours for everyone; someone else's for me only, or for everyone by the
-     * room owner (moderation). Returns 0 or -error code.
-     * @param {number} sender
-     * @param {number} seq
-     * @returns {number}
-     */
-    delete(sender, seq) {
-        const ret = wasm.app_delete(this.__wbg_ptr, sender, seq);
-        return ret;
-    }
-    /**
-     * Diagnostics (§18) of the 1:1 chat or of the link to the room owner (else the first link).
-     * @returns {string}
-     */
-    diag() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_diag(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
-     * Drops network paths without leaving, as a network change would. Diagnostics ("Simulate
-     * network loss"): the 1:1 chat's path (both sides then go through T3), or in a room the
-     * member's direct links to the other members (they come back by T2 through the owner).
-     */
-    drop_path() {
-        wasm.app_drop_path(this.__wbg_ptr);
-    }
-    /**
-     * Edits our message `seq` with `len` bytes at `text_ptr()`. Returns 0 or -error code.
-     * @param {number} seq
-     * @param {number} len
-     * @returns {number}
-     */
-    edit(seq, len) {
-        const ret = wasm.app_edit(this.__wbg_ptr, seq, len);
-        return ret;
-    }
-    /**
-     * Our public addresses as the peers see them (srflx candidates of our codes), one per
-     * line as `v4 1.2.3.4` / `v6 2001:db8::1` (§29.2 "what your peer sees").
-     * @returns {string}
-     */
-    exposure() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_exposure(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
-     * Display handle (`anon_xxxxxx`), not authentication.
-     * @returns {string}
-     */
-    handle() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_handle(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
-     * Label of the saved identity in use, or empty for a temporary identity.
-     * @returns {string}
-     */
-    identity_label() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_identity_label(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
-     * If the 1:1 peer calls itself by a verified contact's nickname with a different key, that
-     * contact's nickname ("This is not the Alice you verified", §7.5); otherwise empty.
-     * @param {string} nick
-     * @returns {string}
-     */
-    impersonates(nick) {
+    channel_name(index) {
         let deferred2_0;
         let deferred2_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(nick, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.app_impersonates(retptr, this.__wbg_ptr, ptr0, len0);
+            wasm.channelapp_channel_name(retptr, this.__wbg_ptr, index);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred2_0 = r0;
-            deferred2_1 = r1;
-            return getStringFromWasm0(r0, r1);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr1 = r0;
+            var len1 = r1;
+            if (r3) {
+                ptr1 = 0; len1 = 0;
+                throw takeObject(r2);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export5(deferred2_0, deferred2_1, 1);
         }
     }
     /**
-     * @returns {boolean}
+     * A new channel `index` (§D.3: use a separate identity for channels). Replaces nothing
+     * stored: the page refuses when this channel already exists in its store.
+     * @param {number} index
+     * @param {string} title
+     * @param {string} about
      */
-    in_room() {
-        const ret = wasm.app_in_room(this.__wbg_ptr);
-        return ret !== 0;
-    }
-    /**
-     * Whether the 1:1 chat is an identity transfer (§7.6).
-     * @returns {boolean}
-     */
-    is_transfer() {
-        const ret = wasm.app_is_transfer(this.__wbg_ptr);
-        return ret !== 0;
-    }
-    /**
-     * Signs in with a key file. Only while no chat is open. Returns 0 or an error code.
-     * @param {Uint8Array} blob
-     * @param {Uint8Array} pass
-     * @returns {number}
-     */
-    load_identity(blob, pass) {
-        const ptr0 = passArray8ToWasm0(blob, wasm.__wbindgen_export);
-        const len0 = WASM_VECTOR_LEN;
-        var ptr1 = passArray8ToWasm0(pass, wasm.__wbindgen_export);
-        var len1 = WASM_VECTOR_LEN;
-        const ret = wasm.app_load_identity(this.__wbg_ptr, ptr0, len0, ptr1, len1, addHeapObject(pass));
-        return ret >>> 0;
-    }
-    /**
-     * Web Lock name for the current identity (§7.2: one identity per tab).
-     * @returns {string}
-     */
-    lock_name() {
-        let deferred1_0;
-        let deferred1_1;
+    create(index, title, about) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_lock_name(retptr, this.__wbg_ptr);
+            const ptr0 = passStringToWasm0(title, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(about, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.channelapp_create(retptr, this.__wbg_ptr, index, ptr0, len0, ptr1, len1);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
+            if (r1) {
+                throw takeObject(r0);
+            }
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
         }
     }
     /**
-     * The user has seen the 1:1 peer's messages up to `seq`.
      * @param {number} seq
      */
-    mark_read(seq) {
-        wasm.app_mark_read(this.__wbg_ptr, seq);
+    delete(seq) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.channelapp_delete(retptr, this.__wbg_ptr, seq);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
-     * Event side-channel block (layout in [`meta`]).
-     * @returns {number}
-     */
-    meta_ptr() {
-        const ret = wasm.app_meta_ptr(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * Our contact card as base64url (empty for a temporary identity). A card is created on
-     * first use, and again when `reset` or when the current one expired; `ttl_days` = 0 makes
-     * a new card that never expires. Save the key file afterwards (the secret is in it).
-     * @param {boolean} reset
-     * @param {number} ttl_days
      * @returns {string}
      */
-    my_card(reset, ttl_days) {
+    label() {
         let deferred1_0;
         let deferred1_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_my_card(retptr, this.__wbg_ptr, reset, ttl_days);
+            wasm.channelapp_label(retptr, this.__wbg_ptr);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             deferred1_0 = r0;
@@ -401,141 +115,127 @@ export class App {
         }
     }
     /**
-     * Our member index (1:1: our PeerIdx), for message identities `(sender, seq)`.
-     * @returns {number}
+     * Mirrors a verified channel (§D.7.1) on this tab's onion for it. `seed` (32 bytes, kept
+     * by the page per channel) makes the mirror's address stable across visits, so the owner
+     * can sign it into the mirror list. Mirroring the same channel again (a newer version)
+     * updates what is served, on the same address. Returns `<56 chars>.onion`.
+     * @param {Reading} reading
+     * @param {Uint8Array} seed
+     * @returns {string}
      */
-    my_idx() {
-        const ret = wasm.app_my_idx(this.__wbg_ptr);
-        return ret;
+    mirror(reading, seed) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            _assertClass(reading, Reading);
+            const ptr0 = passArray8ToWasm0(seed, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.channelapp_mirror(retptr, this.__wbg_ptr, reading.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr2 = r0;
+            var len2 = r1;
+            if (r3) {
+                ptr2 = 0; len2 = 0;
+                throw takeObject(r2);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export5(deferred3_0, deferred3_1, 1);
+        }
     }
-    /**
-     * Our role: 0 owner, 1 member, 2 observer (1:1: member).
-     * @returns {number}
-     */
-    my_role() {
-        const ret = wasm.app_my_role(this.__wbg_ptr);
-        return ret;
-    }
-    /**
-     * Starts with a fresh temporary identity (§7.2 default).
-     */
     constructor() {
-        const ret = wasm.app_new();
+        const ret = wasm.channelapp_new();
         this.__wbg_ptr = ret;
-        AppFinalization.register(this, this.__wbg_ptr, this);
+        ChannelAppFinalization.register(this, this.__wbg_ptr, this);
         return this;
     }
     /**
-     * Replaces the identity with a new temporary one (sign out). Only while no chat is open.
-     * @returns {number}
+     * Reopens channel `index` from its stored CAR and record (the page's store, or an
+     * imported backup). A record older than 7 days is re-signed (§D.5.3).
+     * @param {number} index
+     * @param {Uint8Array} car_bytes
+     * @param {Uint8Array} record
      */
-    new_temporary_identity() {
-        const ret = wasm.app_new_temporary_identity(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * Our nickname, sent to peers in HELLO and kept in the key file (§7.3).
-     * @returns {string}
-     */
-    nick() {
-        let deferred1_0;
-        let deferred1_1;
+    open(index, car_bytes, record) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_nick(retptr, this.__wbg_ptr);
+            const ptr0 = passArray8ToWasm0(car_bytes, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(record, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.channelapp_open(retptr, this.__wbg_ptr, index, ptr0, len0, ptr1, len1);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
+            if (r1) {
+                throw takeObject(r0);
+            }
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
         }
     }
     /**
-     * Our `.onion` address (empty until the service is up).
-     * @returns {string}
+     * Publishes a post (≤ 4 KiB); `reply` = the `seq` it answers, or 0.
+     * @param {string} body
+     * @param {number} reply
      */
-    onion() {
-        let deferred1_0;
-        let deferred1_1;
+    post(body, reply) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_onion(retptr, this.__wbg_ptr);
+            const ptr0 = passStringToWasm0(body, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.channelapp_post(retptr, this.__wbg_ptr, ptr0, len0, reply);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
+            if (r1) {
+                throw takeObject(r0);
+            }
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
         }
     }
     /**
-     * The 1:1 peer as a contact: `flags \t nickname`, or empty if not a contact.
-     * @returns {string}
+     * Reads channel `name` over Tor from the first onion (comma-separated: owner, mirrors) that
+     * serves a valid state; `min_seq` is the reader's high-water mark (§D.8). Resolves to the
+     * JSON view plus the raw record and CAR (for a mirror or a local copy).
+     * @param {string} name
+     * @param {string} onions
+     * @param {number} min_seq
+     * @returns {Promise<any>}
      */
-    peer_contact() {
-        let deferred1_0;
-        let deferred1_1;
+    read(name, onions, min_seq) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_peer_contact(retptr, this.__wbg_ptr);
+            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(onions, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.channelapp_read(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, min_seq);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
         }
     }
     /**
-     * Reacts to `(sender, seq)` with the emoji written at `text_ptr()` (`len` = 0 removes our
-     * reaction). Returns 0 or -error code.
-     * @param {number} sender
-     * @param {number} seq
-     * @param {number} len
-     * @returns {number}
-     */
-    react(sender, seq, len) {
-        const ret = wasm.app_react(this.__wbg_ptr, sender, seq, len);
-        return ret;
-    }
-    /**
-     * @param {string} peer_hex
-     * @returns {number}
-     */
-    remove_contact(peer_hex) {
-        const ptr0 = passStringToWasm0(peer_hex, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.app_remove_contact(this.__wbg_ptr, ptr0, len0);
-        return ret >>> 0;
-    }
-    /**
-     * @param {string} peer_hex
-     * @param {string} nick
-     * @returns {number}
-     */
-    rename_contact(peer_hex, nick) {
-        const ptr0 = passStringToWasm0(peer_hex, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(nick, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.app_rename_contact(this.__wbg_ptr, ptr0, len0, ptr1, len1);
-        return ret >>> 0;
-    }
-    /**
-     * Re-encrypts the saved identity with the key kept in memory (fresh nonce).
+     * The open channel's current signed record.
      * @returns {Uint8Array}
      */
-    resave_identity() {
+    record() {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_resave_identity(retptr, this.__wbg_ptr);
+            wasm.channelapp_record(retptr, this.__wbg_ptr);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var v1 = getArrayU8FromWasm0(r0, r1).slice();
@@ -546,229 +246,82 @@ export class App {
         }
     }
     /**
-     * In-band ICE restart (§13 T1) of every connected link: diagnostics button, or the network
-     * changed (`online`, `navigator.connection` change).
-     */
-    restart_ice() {
-        wasm.app_restart_ice(this.__wbg_ptr);
-    }
-    /**
-     * Member: the user accepted that every member will see its IP address (§29.2):
-     * start the links to the other members.
-     */
-    room_connect() {
-        wasm.app_room_connect(this.__wbg_ptr);
-    }
-    /**
-     * `my_idx \t my_role \t owner(0/1) \t version \t confirmed(0/1)`, or empty outside a room.
+     * Serves the open channel on its own onion address (§D.2); returns `<56 chars>.onion`.
      * @returns {string}
      */
-    room_info() {
-        let deferred1_0;
-        let deferred1_1;
+    serve() {
+        let deferred2_0;
+        let deferred2_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_room_info(retptr, this.__wbg_ptr);
+            wasm.channelapp_serve(retptr, this.__wbg_ptr);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr1 = r0;
+            var len1 = r1;
+            if (r3) {
+                ptr1 = 0; len1 = 0;
+                throw takeObject(r2);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
+            wasm.__wbindgen_export5(deferred2_0, deferred2_1, 1);
         }
     }
     /**
-     * Owner: an invite for one more member (or read-only observer). Emits CODE(1).
-     * @param {boolean} observer
-     * @param {number} ttl_s
-     * @returns {number}
+     * Signs the mirror list (comma-separated onion addresses) into the manifest (§D.7.1).
+     * @param {string} csv
      */
-    room_invite(observer, ttl_s) {
-        const ret = wasm.app_room_invite(this.__wbg_ptr, observer, ttl_s);
-        return ret >>> 0;
-    }
-    /**
-     * One line per member: `idx \t role(0 owner,1 member,2 observer) \t handle \t link \t nick`,
-     * where link is `me`, `connected`, `connecting`, `suspended` or `none`.
-     * @returns {string}
-     */
-    room_members() {
-        let deferred1_0;
-        let deferred1_1;
+    set_mirrors(csv) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_room_members(retptr, this.__wbg_ptr);
+            const ptr0 = passStringToWasm0(csv, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.channelapp_set_mirrors(retptr, this.__wbg_ptr, ptr0, len0);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
+            if (r1) {
+                throw takeObject(r0);
+            }
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
         }
     }
     /**
-     * Owner: removes a member (it gets a state without itself, then GOODBYE).
-     * @param {number} member
-     * @returns {number}
-     */
-    room_remove(member) {
-        const ret = wasm.app_room_remove(this.__wbg_ptr, member);
-        return ret >>> 0;
-    }
-    /**
-     * Saves the peer of the 1:1 chat as a contact (verified if the SAS was confirmed).
-     * @param {string} nick
-     * @returns {number}
-     */
-    save_contact(nick) {
-        const ptr0 = passStringToWasm0(nick, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.app_save_contact(this.__wbg_ptr, ptr0, len0);
-        return ret >>> 0;
-    }
-    /**
-     * Encrypts the current identity into a key file. `pass` (UTF-8) is wiped on return.
-     * Returns the file bytes, or an empty array on error (ERROR event emitted).
-     * @param {string} label
+     * Opens a key file (the passphrase buffer is wiped). Only the seed is kept: channel keys
+     * are derived from it and nothing of the chat identity is used (§D.3).
+     * @param {Uint8Array} blob
      * @param {Uint8Array} pass
-     * @returns {Uint8Array}
      */
-    save_identity(label, pass) {
+    sign_in(blob, pass) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(label, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const ptr0 = passArray8ToWasm0(blob, wasm.__wbindgen_export);
             const len0 = WASM_VECTOR_LEN;
             var ptr1 = passArray8ToWasm0(pass, wasm.__wbindgen_export);
             var len1 = WASM_VECTOR_LEN;
-            wasm.app_save_identity(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, addHeapObject(pass));
+            wasm.channelapp_sign_in(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, addHeapObject(pass));
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var v3 = getArrayU8FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export5(r0, r1 * 1, 1);
-            return v3;
+            if (r1) {
+                throw takeObject(r0);
+            }
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
     }
     /**
-     * Camera frame buffer for [`scan_rgba`]: at least `len` bytes (allocated once, grown only
-     * if a larger camera frame appears).
-     * @param {number} len
-     * @returns {number}
-     */
-    scan_buf(len) {
-        const ret = wasm.app_scan_buf(this.__wbg_ptr, len);
-        return ret >>> 0;
-    }
-    /**
-     * Decodes a QR code from the RGBA frame in the scan buffer; empty string if none.
-     * @param {number} width
-     * @param {number} height
-     * @returns {string}
-     */
-    scan(width, height) {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_scan(retptr, this.__wbg_ptr, width, height);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
-     * Sends `len` bytes previously written at `text_ptr()`. `reply_seq` = 0 for no reply,
-     * otherwise the quoted message `(reply_sender, reply_seq)`. Returns chat_seq or -error code.
-     * @param {number} len
-     * @param {number} reply_sender
-     * @param {number} reply_seq
-     * @returns {number}
-     */
-    send(len, reply_sender, reply_seq) {
-        const ret = wasm.app_send(this.__wbg_ptr, len, reply_sender, reply_seq);
-        return ret;
-    }
-    /**
-     * Sets our nickname (≤ 32 bytes); applies from the next chat. Re-save a saved identity after.
-     * @param {string} nick
-     * @returns {number}
-     */
-    set_nick(nick) {
-        const ptr0 = passStringToWasm0(nick, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.app_set_nick(this.__wbg_ptr, ptr0, len0);
-        return ret >>> 0;
-    }
-    /**
-     * `privacy`: 0 LAN-only, 1 default, 2 max connectivity. Applies to the next code.
-     * @param {number} privacy
-     * @param {boolean} drop_ipv6
-     * @param {boolean} read_receipts
-     * @param {boolean} typing
-     */
-    set_prefs(privacy, drop_ipv6, read_receipts, typing) {
-        wasm.app_set_prefs(this.__wbg_ptr, privacy, drop_ipv6, read_receipts, typing);
-    }
-    /**
-     * Sets the chat's self-destruct timer (1:1: either person; room: the owner).
-     * Returns the notice's chat_seq or -error code.
-     * @param {number} ttl_s
-     * @returns {number}
-     */
-    set_ttl(ttl_s) {
-        const ret = wasm.app_set_ttl(this.__wbg_ptr, ttl_s);
-        return ret;
-    }
-    /**
-     * 1:1 chat or link to the room owner: 0 none, 1 gathering, 2 awaiting answer,
-     * 3 connecting, 4 connected, 5 closed, 6 suspended. A room owner: 4.
-     * @returns {number}
-     */
-    state() {
-        const ret = wasm.app_state(this.__wbg_ptr);
-        return ret;
-    }
-    /**
-     * @returns {number}
-     */
-    text_cap() {
-        const ret = wasm.app_text_cap(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * Where JS writes outgoing UTF-8 (`TextEncoder.encodeInto`), `MAX_TEXT` bytes.
-     * @returns {number}
-     */
-    text_ptr() {
-        const ret = wasm.app_text_ptr(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * Timer (JS calls it every second). `hidden` = `document.hidden`, carried in PING.
-     * @param {boolean} hidden
-     */
-    tick(hidden) {
-        wasm.app_tick(this.__wbg_ptr, hidden);
-    }
-    /**
-     * The Tor directory as a gzip snapshot for IndexedDB (public data; empty until
-     * downloaded). Copied out to JS once per save (every 30 min).
      * @returns {Uint8Array}
      */
     tor_cache() {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_tor_cache(retptr, this.__wbg_ptr);
+            wasm.channelapp_tor_cache(retptr, this.__wbg_ptr);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var v1 = getArrayU8FromWasm0(r0, r1).slice();
@@ -779,47 +332,52 @@ export class App {
         }
     }
     /**
-     * arti logs to the console at `level` (`"info"`, `"debug"`, …; diagnostics only).
      * @param {string} level
      */
     tor_log(level) {
         const ptr0 = passStringToWasm0(level, wasm.__wbindgen_export, wasm.__wbindgen_export2);
         const len0 = WASM_VECTOR_LEN;
-        wasm.app_tor_log(this.__wbg_ptr, ptr0, len0);
+        wasm.channelapp_tor_log(this.__wbg_ptr, ptr0, len0);
     }
     /**
-     * Starts arti over Snowflake, then hosts our onion service (key from the identity seed).
-     * Progress arrives as TOR events. `broker`: comma-separated broker URLs, tried in order;
-     * `fingerprint`: comma-separated Snowflake bridges (one or two);
-     * `ice`: comma-separated `stun:` URLs; `nat`: the broker's
-     * NAT hint (empty = "unknown"); `network_toml`: empty for the real Tor network; `cache`:
-     * the directory snapshot of `tor_cache` from an earlier session (warm start), or empty.
+     * As the chat's Tor mode (`tor.html`): Snowflake broker(s), bridge fingerprint(s), STUN,
+     * NAT hint, lab network (empty = real Tor), directory snapshot for a warm start.
      * @param {string} broker
      * @param {string} fingerprint
      * @param {string} ice
      * @param {string} nat
      * @param {string} network_toml
      * @param {Uint8Array} cache
-     * @returns {number}
+     * @returns {Promise<any>}
      */
     tor_start(broker, fingerprint, ice, nat, network_toml, cache) {
-        const ptr0 = passStringToWasm0(broker, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(fingerprint, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passStringToWasm0(ice, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len2 = WASM_VECTOR_LEN;
-        const ptr3 = passStringToWasm0(nat, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len3 = WASM_VECTOR_LEN;
-        const ptr4 = passStringToWasm0(network_toml, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len4 = WASM_VECTOR_LEN;
-        const ptr5 = passArray8ToWasm0(cache, wasm.__wbindgen_export);
-        const len5 = WASM_VECTOR_LEN;
-        const ret = wasm.app_tor_start(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
-        return ret >>> 0;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(broker, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(fingerprint, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(ice, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passStringToWasm0(nat, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len3 = WASM_VECTOR_LEN;
+            const ptr4 = passStringToWasm0(network_toml, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len4 = WASM_VECTOR_LEN;
+            const ptr5 = passArray8ToWasm0(cache, wasm.__wbindgen_export);
+            const len5 = WASM_VECTOR_LEN;
+            wasm.channelapp_tor_start(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
-     * Bootstrap status line (empty before `tor_start`).
      * @returns {string}
      */
     tor_status() {
@@ -827,7 +385,7 @@ export class App {
         let deferred1_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.app_tor_status(retptr, this.__wbg_ptr);
+            wasm.channelapp_tor_status(retptr, this.__wbg_ptr);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             deferred1_0 = r0;
@@ -839,45 +397,140 @@ export class App {
         }
     }
     /**
-     * @param {boolean} active
+     * Verifies a record and a CAR fetched by the page (a public gateway, an imported file).
+     * @param {string} name
+     * @param {Uint8Array} record
+     * @param {Uint8Array} car_bytes
+     * @param {number} min_seq
+     * @returns {Reading}
      */
-    typing(active) {
-        wasm.app_typing(this.__wbg_ptr, active);
+    verify(name, record, car_bytes, min_seq) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(record, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passArray8ToWasm0(car_bytes, wasm.__wbindgen_export);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.channelapp_verify(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, min_seq);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return Reading.__wrap(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * The open channel as JSON (see [`json::view`]).
+     * @returns {string}
+     */
+    view() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.channelapp_view(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
+        }
     }
 }
-if (Symbol.dispose) App.prototype[Symbol.dispose] = App.prototype.free;
+if (Symbol.dispose) ChannelApp.prototype[Symbol.dispose] = ChannelApp.prototype.free;
 
 /**
- * SVG (quiet zone 4, black on white) for `text`, or an empty string if it does not fit.
- * @param {string} text
- * @returns {string}
+ * A verified channel as handed to the page: the JSON view, and the bytes it came from.
  */
-export function qr_svg_path(text) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        wasm.qr_svg_path(retptr, ptr0, len0);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        deferred2_0 = r0;
-        deferred2_1 = r1;
-        return getStringFromWasm0(r0, r1);
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export5(deferred2_0, deferred2_1, 1);
+export class Reading {
+    static __wrap(ptr) {
+        const obj = Object.create(Reading.prototype);
+        obj.__wbg_ptr = ptr;
+        ReadingFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        ReadingFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_reading_free(ptr, 0);
+    }
+    /**
+     * @returns {Uint8Array}
+     */
+    car() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.reading_car(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export5(r0, r1 * 1, 1);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    get json() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.reading_json(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {Uint8Array}
+     */
+    record() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.reading_record(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export5(r0, r1 * 1, 1);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @returns {number}
+     */
+    get sequence() {
+        const ret = wasm.reading_sequence(this.__wbg_ptr);
+        return ret;
     }
 }
+if (Symbol.dispose) Reading.prototype[Symbol.dispose] = Reading.prototype.free;
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
-        __wbg___wbindgen_boolean_get_5b446f51afd21013: function(arg0) {
-            const v = getObject(arg0);
-            const ret = typeof(v) === 'boolean' ? v : undefined;
-            return isLikeNone(ret) ? 0xFFFFFF : ret ? 1 : 0;
-        },
         __wbg___wbindgen_copy_to_typed_array_88899a52af046901: function(arg0, arg1, arg2) {
             new Uint8Array(getObject(arg2).buffer, getObject(arg2).byteOffset, getObject(arg2).byteLength).set(getArrayU8FromWasm0(arg0, arg1));
         },
@@ -890,10 +543,6 @@ function __wbg_get_imports() {
         },
         __wbg___wbindgen_is_function_1f9d30630b8b1d3d: function(arg0) {
             const ret = typeof(getObject(arg0)) === 'function';
-            return ret;
-        },
-        __wbg___wbindgen_is_null_e343b7d08827ba72: function(arg0) {
-            const ret = getObject(arg0) === null;
             return ret;
         },
         __wbg___wbindgen_is_object_3c45d4f2dde4e749: function(arg0) {
@@ -909,12 +558,6 @@ function __wbg_get_imports() {
             const ret = getObject(arg0) === undefined;
             return ret;
         },
-        __wbg___wbindgen_number_get_2e0e7dee9f701a71: function(arg0, arg1) {
-            const obj = getObject(arg1);
-            const ret = typeof(obj) === 'number' ? obj : undefined;
-            getDataViewMemory0().setFloat64(arg0 + 8 * 1, isLikeNone(ret) ? 0 : ret, true);
-            getDataViewMemory0().setInt32(arg0 + 4 * 0, !isLikeNone(ret), true);
-        },
         __wbg___wbindgen_string_get_0380ccaa2f57f0d9: function(arg0, arg1) {
             const obj = getObject(arg1);
             const ret = typeof(obj) === 'string' ? obj : undefined;
@@ -929,10 +572,6 @@ function __wbg_get_imports() {
         __wbg__wbg_cb_unref_dcc1a90847f04c41: function(arg0) {
             getObject(arg0)._wbg_cb_unref();
         },
-        __wbg_bufferedAmount_ffae037ee3ccb36c: function(arg0) {
-            const ret = getObject(arg0).bufferedAmount;
-            return ret;
-        },
         __wbg_call_187d372bd5fdd4aa: function() { return handleError(function (arg0, arg1, arg2) {
             const ret = getObject(arg0).call(getObject(arg1), getObject(arg2));
             return addHeapObject(ret);
@@ -946,24 +585,12 @@ function __wbg_get_imports() {
         __wbg_close_de72eca08cf70e9c: function(arg0) {
             getObject(arg0).close();
         },
-        __wbg_connectionState_ab1e320e4aaa25d6: function(arg0) {
-            const ret = getObject(arg0).connectionState;
-            return (__wbindgen_enum_RtcPeerConnectionState.indexOf(ret) + 1 || 7) - 1;
-        },
-        __wbg_createAnswer_4565390027b78031: function(arg0) {
-            const ret = getObject(arg0).createAnswer();
-            return addHeapObject(ret);
-        },
         __wbg_createDataChannel_83caaab3b3db15e4: function(arg0, arg1, arg2, arg3) {
             const ret = getObject(arg0).createDataChannel(getStringFromWasm0(arg1, arg2), getObject(arg3));
             return addHeapObject(ret);
         },
         __wbg_createOffer_419e0ee0d8a14451: function(arg0) {
             const ret = getObject(arg0).createOffer();
-            return addHeapObject(ret);
-        },
-        __wbg_createOffer_d36fbce190f0f3b8: function(arg0, arg1) {
-            const ret = getObject(arg0).createOffer(getObject(arg1));
             return addHeapObject(ret);
         },
         __wbg_crypto_38df2bab126b63dc: function(arg0) {
@@ -974,29 +601,9 @@ function __wbg_get_imports() {
             const ret = getObject(arg0).data;
             return addHeapObject(ret);
         },
-        __wbg_ephemEvent_3455b5add6d359df: function(arg0, arg1, arg2, arg3) {
-            ephemEvent(arg0 >>> 0, arg1, arg2 >>> 0, arg3 >>> 0);
-        },
         __wbg_fetch_b322877f1ed6457d: function(arg0, arg1, arg2, arg3) {
             const ret = getObject(arg0).fetch(getStringFromWasm0(arg1, arg2), getObject(arg3));
             return addHeapObject(ret);
-        },
-        __wbg_forEach_7ad975c8e42636ed: function(arg0, arg1, arg2) {
-            try {
-                var state0 = {a: arg1, b: arg2};
-                var cb0 = (arg0, arg1) => {
-                    const a = state0.a;
-                    state0.a = 0;
-                    try {
-                        return __wasm_bindgen_func_elem_5891(a, state0.b, arg0, arg1);
-                    } finally {
-                        state0.a = a;
-                    }
-                };
-                getObject(arg0).forEach(cb0);
-            } finally {
-                state0.a = 0;
-            }
         },
         __wbg_getRandomValues_436a51d0629d84e1: function() { return handleError(function (arg0, arg1) {
             globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
@@ -1007,22 +614,10 @@ function __wbg_get_imports() {
         __wbg_getRandomValues_c44a50d8cfdaebeb: function() { return handleError(function (arg0, arg1) {
             getObject(arg0).getRandomValues(getObject(arg1));
         }, arguments); },
-        __wbg_getStats_9838d727eec9406e: function(arg0) {
-            const ret = getObject(arg0).getStats();
-            return addHeapObject(ret);
-        },
         __wbg_get_31af05bd4842a84f: function() { return handleError(function (arg0, arg1) {
             const ret = Reflect.get(getObject(arg0), getObject(arg1));
             return addHeapObject(ret);
         }, arguments); },
-        __wbg_get_464ae6d03ecb8ac7: function(arg0, arg1) {
-            const ret = getObject(arg0).get(getObject(arg1));
-            return addHeapObject(ret);
-        },
-        __wbg_iceConnectionState_dbc63bbbe69109ce: function(arg0) {
-            const ret = getObject(arg0).iceConnectionState;
-            return (__wbindgen_enum_RtcIceConnectionState.indexOf(ret) + 1 || 8) - 1;
-        },
         __wbg_iceGatheringState_f6f601e00490767f: function(arg0) {
             const ret = getObject(arg0).iceGatheringState;
             return (__wbindgen_enum_RtcIceGatheringState.indexOf(ret) + 1 || 4) - 1;
@@ -1066,14 +661,22 @@ function __wbg_get_imports() {
             const ret = new Uint8Array(getObject(arg0));
             return addHeapObject(ret);
         },
-        __wbg_new_5502aad30c185fc8: function(arg0, arg1) {
+        __wbg_new_617a8cdb8bb1130e: function() {
+            const ret = new Object();
+            return addHeapObject(ret);
+        },
+        __wbg_new_ee2291f50781bf1d: function() {
+            const ret = new Array();
+            return addHeapObject(ret);
+        },
+        __wbg_new_typed_b01cb72a8af741a3: function(arg0, arg1) {
             try {
                 var state0 = {a: arg0, b: arg1};
                 var cb0 = (arg0, arg1) => {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_5891_66(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_5706(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -1083,14 +686,6 @@ function __wbg_get_imports() {
             } finally {
                 state0.a = 0;
             }
-        },
-        __wbg_new_617a8cdb8bb1130e: function() {
-            const ret = new Object();
-            return addHeapObject(ret);
-        },
-        __wbg_new_ee2291f50781bf1d: function() {
-            const ret = new Array();
-            return addHeapObject(ret);
         },
         __wbg_new_with_configuration_c6d3ab433d0adb73: function() { return handleError(function (arg0) {
             const ret = new RTCPeerConnection(getObject(arg0));
@@ -1145,6 +740,10 @@ function __wbg_get_imports() {
         __wbg_randomFillSync_6c25eac9869eb53c: function() { return handleError(function (arg0, arg1) {
             getObject(arg0).randomFillSync(takeObject(arg1));
         }, arguments); },
+        __wbg_reading_new: function(arg0) {
+            const ret = Reading.__wrap(arg0);
+            return addHeapObject(ret);
+        },
         __wbg_readyState_418637f3ca14e818: function(arg0) {
             const ret = getObject(arg0).readyState;
             return (__wbindgen_enum_RtcDataChannelState.indexOf(ret) + 1 || 5) - 1;
@@ -1189,32 +788,14 @@ function __wbg_get_imports() {
         __wbg_set_body_1fb0f1008bfc7df6: function(arg0, arg1) {
             getObject(arg0).body = getObject(arg1);
         },
-        __wbg_set_ice_restart_39a9f11be52c8df3: function(arg0, arg1) {
-            getObject(arg0).iceRestart = arg1 !== 0;
-        },
         __wbg_set_ice_servers_0e993347b54c4c75: function(arg0, arg1) {
             getObject(arg0).iceServers = getObject(arg1);
         },
         __wbg_set_method_dcb32343247ec427: function(arg0, arg1, arg2) {
             getObject(arg0).method = getStringFromWasm0(arg1, arg2);
         },
-        __wbg_set_onclose_bb8c0565a5c25837: function(arg0, arg1) {
-            getObject(arg0).onclose = getObject(arg1);
-        },
-        __wbg_set_onconnectionstatechange_9c3cc97053cc8cc7: function(arg0, arg1) {
-            getObject(arg0).onconnectionstatechange = getObject(arg1);
-        },
-        __wbg_set_onicecandidate_d5e1ae20949a49ef: function(arg0, arg1) {
-            getObject(arg0).onicecandidate = getObject(arg1);
-        },
-        __wbg_set_oniceconnectionstatechange_2b99e504c1f51e83: function(arg0, arg1) {
-            getObject(arg0).oniceconnectionstatechange = getObject(arg1);
-        },
         __wbg_set_onmessage_b1a84cbc1fe48890: function(arg0, arg1) {
             getObject(arg0).onmessage = getObject(arg1);
-        },
-        __wbg_set_onopen_6cc40bb77c7d158d: function(arg0, arg1) {
-            getObject(arg0).onopen = getObject(arg1);
         },
         __wbg_set_ordered_c53f7b89fc9fb3b8: function(arg0, arg1) {
             getObject(arg0).ordered = arg1 !== 0;
@@ -1270,17 +851,17 @@ function __wbg_get_imports() {
         },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 839, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_5856);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_5670);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 652, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_4058);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 653, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_3841);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000003: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 351, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_2163);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 337, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_1947);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000004: function(arg0, arg1) {
@@ -1303,30 +884,26 @@ function __wbg_get_imports() {
     };
     return {
         __proto__: null,
-        "./ephem_tor_bg.js": import0,
+        "./ephem_channel_bg.js": import0,
     };
 }
 
-function __wasm_bindgen_func_elem_2163(arg0, arg1) {
-    wasm.__wasm_bindgen_func_elem_2163(arg0, arg1);
+function __wasm_bindgen_func_elem_1947(arg0, arg1) {
+    wasm.__wasm_bindgen_func_elem_1947(arg0, arg1);
 }
 
-function __wasm_bindgen_func_elem_4058(arg0, arg1, arg2) {
-    wasm.__wasm_bindgen_func_elem_4058(arg0, arg1, addHeapObject(arg2));
+function __wasm_bindgen_func_elem_3841(arg0, arg1, arg2) {
+    wasm.__wasm_bindgen_func_elem_3841(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_5891(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_5891(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_5706(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_5706(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_5891_66(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_5891_66(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
-}
-
-function __wasm_bindgen_func_elem_5856(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_5670(arg0, arg1, arg2) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        wasm.__wasm_bindgen_func_elem_5856(retptr, arg0, arg1, addHeapObject(arg2));
+        wasm.__wasm_bindgen_func_elem_5670(retptr, arg0, arg1, addHeapObject(arg2));
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         if (r1) {
@@ -1344,19 +921,16 @@ const __wbindgen_enum_RtcDataChannelState = ["connecting", "open", "closing", "c
 const __wbindgen_enum_RtcDataChannelType = ["arraybuffer", "blob"];
 
 
-const __wbindgen_enum_RtcIceConnectionState = ["new", "checking", "connected", "completed", "failed", "disconnected", "closed"];
-
-
 const __wbindgen_enum_RtcIceGatheringState = ["new", "gathering", "complete"];
 
 
-const __wbindgen_enum_RtcPeerConnectionState = ["closed", "failed", "disconnected", "new", "connecting", "connected"];
-
-
 const __wbindgen_enum_RtcSdpType = ["offer", "pranswer", "answer", "rollback"];
-const AppFinalization = (typeof FinalizationRegistry === 'undefined')
+const ChannelAppFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_app_free(ptr, 1));
+    : new FinalizationRegistry(ptr => wasm.__wbg_channelapp_free(ptr, 1));
+const ReadingFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_reading_free(ptr, 1));
 
 function addHeapObject(obj) {
     if (heap_next === heap.length) heap.push(heap.length + 1);
@@ -1365,6 +939,12 @@ function addHeapObject(obj) {
 
     heap[idx] = obj;
     return idx;
+}
+
+function _assertClass(instance, klass) {
+    if (!(instance instanceof klass)) {
+        throw new Error(`expected instance of ${klass.name}`);
+    }
 }
 
 const CLOSURE_DTORS = (typeof FinalizationRegistry === 'undefined')
@@ -1675,7 +1255,7 @@ async function __wbg_init(module_or_path) {
     }
 
     if (module_or_path === undefined) {
-        module_or_path = new URL('ephem_tor_bg.wasm', import.meta.url);
+        module_or_path = new URL('ephem_channel_bg.wasm', import.meta.url);
     }
     const imports = __wbg_get_imports();
 

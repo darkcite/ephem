@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en" data-mode="tor">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- stamp:begin (tools/stamp.py) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-MnM14wg2G4O8t8v+FaqAlg6fjFdkd/34Ld67xOxR0Ss='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://snowflake-broker.torproject.net https://1098762253.rsc.cdn77.org; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="9d4b5caac5b3">
+<meta name="ephem-wasm" content="sha384-+lSuHtsYBRE3ifn1Y7zMW47YAvqF6ulo8LjrTQmXnLwHIJtbTYhVykqmeFK+HrwT">
+<link rel="stylesheet" href="app.css" integrity="sha384-q0zNj9Ym9VNmbe0X0QjM4R34aODVuBcNq8iN7I7/30higKLLQPhRLKfzzsgtgVQG">
+<script type="importmap">{"imports":{},"integrity":{"./channel.js":"sha384-RQmbw3diP4gyecXQkXgB3WbmVITHuTheJg8KNY/DDOD/moZVh87kLsOgc3pQL9tl","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem_channel.js":"sha384-lI+ibKhD+cV31vNv2hW1Q4W8tu/Jw8egIFDGvRdUspAOFeNv1+v5SDmccfMt61pf"}}</script>
+<script type="module" src="channel.js" integrity="sha384-RQmbw3diP4gyecXQkXgB3WbmVITHuTheJg8KNY/DDOD/moZVh87kLsOgc3pQL9tl"></script>
+<!-- stamp:end -->
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#171a21">
+<title>Ephem · Channels</title>
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="./">Ephem</a>
+  <span class="pill">channels</span>
+  <span id="status" class="pill status">starting</span>
+</header>
+
+<main>
+  <noscript><p class="warn">Channels need JavaScript and WebAssembly.</p></noscript>
+
+  <!-- Reader: channel.html#c=<ipns-name>&o=<onion>[,<mirror onion>…] -->
+  <section id="v-read" class="view" hidden>
+    <h1 id="r-title">Channel</h1>
+    <p id="r-about" class="lead"></p>
+    <p id="r-source" class="note"></p>
+    <div class="actions">
+      <button id="b-refresh">Refresh</button>
+      <button id="b-mirror">Mirror this channel</button>
+      <button id="b-kubo" class="ghost">For IPFS (Kubo)…</button>
+    </div>
+    <div id="mirror-note" class="card" hidden>
+      <p id="mirror-text"></p>
+    </div>
+    <div id="kubo" class="card" hidden>
+      <h2>Mirror to public IPFS (optional)</h2>
+      <p class="warn">Your IP address will be visible as a host of this channel. The owner's stays hidden.</p>
+      <p>Download the channel and its signed record, then run, with your own Kubo node:</p>
+      <pre id="kubo-cmds" class="note"></pre>
+      <div class="actions">
+        <button id="b-dl-car">Download channel.car</button>
+        <button id="b-dl-record">Download record</button>
+      </div>
+    </div>
+    <ol id="r-posts" class="log posts"></ol>
+  </section>
+
+  <!-- Owner -->
+  <section id="v-own" class="view" hidden>
+    <h1>Your channels</h1>
+    <p class="lead">A public channel: only you post, anyone with the link reads. It is served from this tab through Tor, so your IP address stays hidden; it is online while this tab (or a follower's mirror) is open. Desktop only.</p>
+    <div id="signin" class="card">
+      <h2>Sign in</h2>
+      <p class="note">A channel's keys come from a saved identity. Use a <strong>separate identity</strong> just for channels: anyone who gets this key file can link the channel to your chats.</p>
+      <ul id="slots" class="slots"></ul>
+      <label>…or key file <input id="i-file" type="file" accept=".p2pkey,application/octet-stream"></label>
+      <label>Passphrase <input id="i-pass" type="password" autocomplete="current-password"></label>
+      <button id="b-signin" class="primary">Sign in</button>
+    </div>
+    <div id="ch-new" class="card" hidden>
+      <h2>Create a channel</h2>
+      <label>Title <input id="i-title" maxlength="128" autocomplete="off"></label>
+      <label>About <textarea id="i-about" rows="3" maxlength="1024"></textarea></label>
+      <ul class="note warn-list">
+        <li>Everything you post is <strong>public and permanent</strong>: followers may keep copies, even of posts you delete later.</li>
+        <li>Your writing style and posting times can identify you.</li>
+        <li>The channel has no owner field; you are known only if you say so.</li>
+      </ul>
+      <label class="row"><input id="c-understood" type="checkbox"> I understand</label>
+      <button id="b-create" class="primary">Create channel</button>
+      <label>…or restore from a backup (channel.car + record) <input id="i-import" type="file" multiple accept=".car,.bin"></label>
+    </div>
+    <div id="ch-open" hidden>
+      <div class="card">
+        <h2 id="o-title"></h2>
+        <p id="o-about" class="note"></p>
+        <p id="o-serving" class="note">Not online yet.</p>
+        <textarea id="o-link" class="link" rows="2" readonly spellcheck="false"></textarea>
+        <div class="actions">
+          <button id="b-copy" class="primary">Copy link</button>
+          <button id="b-export">Export backup</button>
+        </div>
+        <label>Mirrors you vouch for (onion addresses, comma-separated) <input id="i-mirrors" autocomplete="off" spellcheck="false"></label>
+        <button id="b-mirrors">Sign mirror list</button>
+      </div>
+      <form id="f-post" class="card">
+        <label>New post (up to 4 KiB)<textarea id="t-post" rows="3" maxlength="4096"></textarea></label>
+        <div class="actions"><button id="b-post" class="primary" type="submit">Post</button></div>
+      </form>
+      <ol id="o-posts" class="log posts"></ol>
+    </div>
+  </section>
+
+  <p id="error" class="warn" hidden></p>
+</main>
+
+<footer class="foot">
+  <p>Channels are IPFS-native (CIDs, dag-cbor, CAR, IPNS) and verified in your browser. <span id="build"></span></p>
+</footer>
+</body>
+</html>

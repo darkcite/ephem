@@ -24,6 +24,9 @@ MODULES = ["app.js", "slots.js", "pkg/ephem.js"]
 TOR_MODULES = ["app.js", "slots.js", "pkg/ephem_tor.js"]
 HASHED = ["app.css", "app.js", "slots.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest"]
 TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm"]
+# Public channels (§27): their own page, script and build; cached on first use like Tor mode.
+CHANNEL_MODULES = ["channel.js", "slots.js", "pkg/ephem_channel.js"]
+CHANNEL_FILES = ["channel.html", "channel.js", "pkg/ephem_channel.js", "pkg/ephem_channel_bg.wasm"]
 PRECACHE = ["./", "index.html"] + HASHED + [
     "icons/icon.svg",
     "icons/icon-192.png",
@@ -76,7 +79,8 @@ def write(rel, text):
 
 def main():
     tor_pkg = [f for f in TOR_FILES if f.startswith("pkg/")]
-    hashes = {rel: sri(read(rel)) for rel in HASHED + tor_pkg}
+    channel_files = [f for f in CHANNEL_FILES if f != "channel.html"]
+    hashes = {rel: sri(read(rel)) for rel in HASHED + tor_pkg + channel_files}
     with open(os.path.join(APP, "index.html"), encoding="utf-8") as f:
         index = f.read()
     tor = restamp(index, stamp_block(hashes, TOR_MODULES, "pkg/ephem_tor_bg.wasm", TOR_CONNECT))
@@ -86,18 +90,24 @@ def main():
         raise SystemExit("app/index.html: <html lang=\"en\"> not found")
     # Every file feeds the build id (icons and the Tor build too), so any change makes a new SW
     # version. tor.html is derived from the others (and would contain the id itself).
-    cached = [f for f in PRECACHE if f not in ("./", "index.html")] + tor_pkg
+    cached = [f for f in PRECACHE if f not in ("./", "index.html")] + tor_pkg + channel_files
     build = hashlib.sha256("".join(sri(read(r)) for r in cached).encode()).hexdigest()[:12]
     meta = f'<meta name="ephem-build" content="{build}">'
     write("index.html", restamp(index, stamp_block(hashes, MODULES, "pkg/ephem_bg.wasm", "")).replace("{build}", meta, 1))
     write("tor.html", tor.replace("{build}", meta, 1))
+    # channel.html is its own source; only its stamp block is written. Its script is channel.js.
+    with open(os.path.join(APP, "channel.html"), encoding="utf-8") as f:
+        channel = f.read()
+    block = stamp_block(hashes, CHANNEL_MODULES, "pkg/ephem_channel_bg.wasm", TOR_CONNECT).replace("{build}", meta, 1)
+    block = block.replace('src="app.js" integrity="' + hashes["app.js"] + '"', 'src="channel.js" integrity="' + hashes["channel.js"] + '"')
+    write("channel.html", restamp(channel, block))
 
     path = os.path.join(APP, "sw.js")
     with open(path, encoding="utf-8") as f:
         sw = f.read()
     sw = re.sub(r"^const VERSION = .*;$", f"const VERSION = '{build}';", sw, count=1, flags=re.M)
     sw = re.sub(r"^const FILES = .*;$", "const FILES = " + json.dumps(PRECACHE) + ";", sw, count=1, flags=re.M)
-    sw = re.sub(r"^const TOR_FILES = .*;$", "const TOR_FILES = " + json.dumps(TOR_FILES) + ";", sw, count=1, flags=re.M)
+    sw = re.sub(r"^const TOR_FILES = .*;$", "const TOR_FILES = " + json.dumps(TOR_FILES + CHANNEL_FILES) + ";", sw, count=1, flags=re.M)
     with open(path, "w", encoding="utf-8") as f:
         f.write(sw)
     print(f"build {build}")

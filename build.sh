@@ -25,5 +25,12 @@ for variant in ephem:"" ephem_tor:"--features tor"; do
     wasm-opt -Os --enable-bulk-memory --enable-nontrapping-float-to-int -o "app/pkg/${name}_bg.wasm" "app/pkg/${name}_bg.wasm"
   fi
 done
+# Public channels (channel.html, §27): their own crate and build, with the embedded Tor client.
+cargo build --release --locked --target wasm32-unknown-unknown -p ephem-channel-web
+wasm-bindgen --target web --no-typescript --out-dir app/pkg --out-name ephem_channel \
+  target/wasm32-unknown-unknown/release/ephem_channel_web.wasm
+if command -v wasm-opt >/dev/null; then
+  wasm-opt -Os --enable-bulk-memory --enable-nontrapping-float-to-int -o app/pkg/ephem_channel_bg.wasm app/pkg/ephem_channel_bg.wasm
+fi
 python3 tools/stamp.py
 ls -l app/pkg

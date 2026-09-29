@@ -141,12 +141,16 @@ impl Post {
 
 /// The owner's channel: its key, manifest and posts. Every change is followed by
 /// [`Channel::build`] (blocks) and [`Channel::record`] (the signed IPNS record).
+#[derive(Clone)]
 pub struct Channel {
     key: SigningKey,
     pub manifest: Manifest,
     pub posts: Vec<Post>,
     /// The IPNS sequence of the last record (grows on every change).
     pub revision: u64,
+    /// Signed posts by `seq`, reused by [`Self::build`] while the post is unchanged: a post is
+    /// signed once, not on every rebuild (a channel of 1 000 posts rebuilds in milliseconds).
+    signed: HashMap<u64, (Post, Value)>,
 }
 
 /// A verified channel as a reader sees it.
@@ -168,7 +172,7 @@ impl Channel {
         }
         let key = SigningKey::from_bytes(sign_seed);
         let pk = key.verifying_key().to_bytes();
-        Ok(Self { key, manifest: Manifest { title: title.into(), about: about.into(), pk, created, mirrors: Vec::new() }, posts: Vec::new(), revision: 0 })
+        Ok(Self { key, manifest: Manifest { title: title.into(), about: about.into(), pk, created, mirrors: Vec::new() }, posts: Vec::new(), revision: 0, signed: HashMap::new() })
     }
 
     /// The channel's IPNS name.
@@ -213,14 +217,20 @@ impl Channel {
     }
 
     /// All blocks of the current state and the root CID (the root block comes last).
-    pub fn build(&self, now_s: u64) -> (Cid, Vec<Block>) {
+    pub fn build(&mut self, now_s: u64) -> (Cid, Vec<Block>) {
+        for p in &self.posts {
+            if self.signed.get(&p.seq).is_none_or(|(q, _)| q != p) {
+                let v = self.sign(POST_SIG, p.unsigned());
+                self.signed.insert(p.seq, (p.clone(), v));
+            }
+        }
         let mut blocks = Vec::with_capacity(3 + self.posts.len() / PAGE_POSTS);
         let manifest = self.sign(MANIFEST_SIG, self.manifest.unsigned()).encode();
         let mcid = Cid::of(DAG_CBOR, &manifest);
         blocks.push((mcid.clone(), manifest));
         let mut prev = Value::Null;
         for chunk in self.posts.chunks(PAGE_POSTS) {
-            let posts = chunk.iter().map(|p| self.sign(POST_SIG, p.unsigned())).collect();
+            let posts = chunk.iter().map(|p| self.signed[&p.seq].1.clone()).collect();
             let page = cbor::map(vec![("posts", Value::Array(posts)), ("prev", prev)]).encode();
             let cid = Cid::of(DAG_CBOR, &page);
             blocks.push((cid.clone(), page));
@@ -250,7 +260,7 @@ impl Channel {
     pub fn load(sign_seed: &[u8; 32], root: &Cid, blocks: &[Block], revision: u64) -> Result<Self, ChannelError> {
         let key = SigningKey::from_bytes(sign_seed);
         let (manifest, posts, _) = read_dag(&key.verifying_key(), root, blocks)?;
-        Ok(Self { key, manifest, posts, revision })
+        Ok(Self { key, manifest, posts, revision, signed: HashMap::new() })
     }
 }
 
