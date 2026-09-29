@@ -21,6 +21,7 @@
 #                  (needs `brew install cloudflared`; works while the repo is private). S6_SECONDS=120
 #   SAFARI=1       also run the checks in your real Safari (macOS; opens a Safari tab, results collected automatically)
 #   NET=0          skip live-network checks (Snowflake, STUN, IPFS)
+#   SOAK=30        also leave a Tor chat idle for 30 minutes and probe it every 5 (tor section)
 #   E8=1           also run the 7-minute hidden-tab test (opens a visible Chrome window)
 #   SKIP_ARTI=1    skip the arti wasm32 build (it takes 5–15 minutes the first time)
 #
@@ -187,12 +188,20 @@ if [ -f /tmp/ephlab/lab.env ]; then
     E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/$t.mjs" 2>&1 | tee "$OUT/lab-$t.log"
     { echo "### Lab: $t"; echo '```'; cat "$OUT/lab-$t.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
   done
+  if [ -n "${SOAK:-}" ]; then
+    SOAK_MIN="$SOAK" E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/soak_tor.mjs" 2>&1 | grep -vE '^  (alice|bob) \|' | tee "$OUT/lab-soak.log"
+    { echo "### Lab: soak, $SOAK min"; echo '```'; cat "$OUT/lab-soak.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
+  fi
 fi
 if [ "${NET:-1}" != 0 ]; then
   for t in e2e_tor_app e2e_tor_room e2e_tor_cards e2e_tor_channel e2e_tor_multi; do
     LIVE=1 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/$t.mjs" 2>&1 | tee "$OUT/live-$t.log"
     { echo "### Live Tor network: $t"; echo '```'; cat "$OUT/live-$t.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
   done
+  if [ -n "${SOAK:-}" ]; then
+    LIVE=1 SOAK_MIN="$SOAK" E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/soak_tor.mjs" 2>&1 | grep -vE '^  (alice|bob) \|' | tee "$OUT/live-soak.log"
+    { echo "### Live Tor network: soak, $SOAK min"; echo '```'; cat "$OUT/live-soak.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
+  fi
 fi
 fi
 
