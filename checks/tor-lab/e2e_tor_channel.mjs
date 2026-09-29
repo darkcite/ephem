@@ -16,7 +16,7 @@
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network.
 import * as fs from 'node:fs';
 import { check, finish, launch, PASS, problems, toSettings, watch } from '../e2e_lib.mjs';
-import { LIVE, T, dumpLogs, record, routingStandIn, serveTor, torBrowserGet, torContext, unexpected } from './tor_env.mjs';
+import { REAL, T, dumpLogs, record, routingStandIn, serveTor, torBrowserGet, torContext, unexpected } from './tor_env.mjs';
 
 // A stand-in public IPFS gateway (§D.6.2) for the no-Tor reader: it serves what a follower's
 // Kubo mirror would (the CAR and record the reader downloads with "For IPFS (Kubo)").
@@ -91,7 +91,7 @@ try {
 
   // Without Ephem: the onion's root is a plain page for Tor Browser (no scripts), fetched here
   // through the lab's C Tor client.
-  if (!LIVE) {
+  if (!REAL) {
     const onion = link.match(/&o=([a-z2-7]{56}\.onion)/)[1];
     const page = await torBrowserGet(onion, '/');
     check('Tor Browser: the owner\'s onion serves the channel as a plain page (no scripts)',
@@ -143,7 +143,7 @@ try {
   await r.waitForSelector('#mirror-note:not([hidden])', { timeout: 60_000 });
   const mirror = (await r.textContent('#mirror-text')).match(/[a-z2-7]{56}\.onion/)[0];
   check('the reader mirrors it on a second onion of its tab', !!mirror, mirror);
-  if (!LIVE) {
+  if (!REAL) {
     const mp = await torBrowserGet(mirror, '/');
     check('Tor Browser: the mirror serves the page too, saying it is a mirror', mp.status === 200 && mp.body.includes('Served by a mirror') && mp.body.includes('fourth post'));
   }
@@ -157,7 +157,7 @@ try {
 
   // C-P3 and IPNS publishing drive the page through the lab hook and the lab's stand-in
   // routing host: lab only.
-  if (!LIVE) {
+  if (!REAL) {
     // ---- C-P3: a channel of 1 000 posts over an onion ----
     const t3 = Date.now();
     await o.evaluate(() => { for (let i = 1; i <= 1000; i++) globalThis.ephemChannel.post(0, `bulk post ${i}`, 0); });
@@ -204,8 +204,8 @@ try {
   gw.car = fs.readFileSync(await dc.path());
   gw.record = fs.readFileSync(await dr.path());
   check('Kubo mirror instructions and downloads', /ipfs dag import channel\.car/.test(await r.textContent('#kubo-cmds')) && gw.car.length > 1000);
-  // The gateway stand-in is the lab's (LIVE would need a real IPFS mirror of this channel).
-  if (!LIVE) {
+  // The gateway stand-in is the lab's (the real network would need a real IPFS mirror of this channel).
+  if (!REAL) {
     const g = await page('gateway-reader', { gateway: `${base.replace('/app', '')}/gw` });
     await g.goto(link.replace(/&o=.*$/, ''));
     await g.waitForSelector('#gateway-warn:not([hidden])', { timeout: 30_000 });

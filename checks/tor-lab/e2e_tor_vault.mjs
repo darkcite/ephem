@@ -11,16 +11,19 @@
 //   channel's blocks, so once B's lease has run out C continues the channel without its older
 //   posts: the sequence continues, the view says what is missing, and a new post is served.
 //
-// Needs `checks/tor-lab/lab.sh up` and `./build.sh`. Lab only (the stand-in routing host).
+// Needs `checks/tor-lab/lab.sh up` and `./build.sh`: the lab's stand-in routing host. With
+// RELAY=1 (`lab.sh relay`): the real Tor network and the real delegated-ipfs.dev, reached from a
+// Tor exit by the pages; the test reads the record back directly (NODE_USE_ENV_PROXY=1 behind a
+// proxy).
 import * as fs from 'node:fs';
 import { check, finish, launch, PASS, problems, toSettings, watch } from '../e2e_lib.mjs';
-import { T, dumpLogs, record, routingStandIn, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
+import { REAL, T, dumpLogs, record, routingStandIn, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 const LEASE_S = 30;
 const srv = await serveTor();
 const base = `http://127.0.0.1:${srv.address().port}/app`;
 const { server: routing, cfg, routed } = await routingStandIn();
-const lab = { routing: cfg, leaseS: LEASE_S, restoreMs: 40_000 };
+const lab = { ...(REAL ? {} : { routing: cfg }), leaseS: LEASE_S, restoreMs: REAL ? 90_000 : 40_000 };
 const browsers = [];
 
 async function device(who) {
@@ -71,8 +74,12 @@ try {
   await A.p.waitForFunction(() => { const v = globalThis.ephemChannel.vault(); return v && JSON.parse(v).channels.some((c) => c.count === 1); }, null, { timeout: 60_000 });
   const vA = JSON.parse(await A.p.evaluate(() => globalThis.ephemChannel.vault()));
   check('A publishes the vault through a Tor exit: the channel, with A\'s lease', vA.channels[0].title === 'Multi' && vA.until * 1000 > Date.now(), `vault sequence ${vA.seq}, ${routed.filter((q) => q.method === 'PUT').length} PUTs`);
-  const vaultPut = routed.find((q) => q.method === 'PUT');
-  check('the vault record is opaque: no title or post text in it', !vaultPut.body.includes(Buffer.from('Multi')) && vaultPut.body.length <= 10240, `${vaultPut.body.length} bytes`);
+  // The record as the routing service holds it (the stand-in, or delegated-ipfs.dev itself).
+  const vaultName = await A.p.evaluate(() => globalThis.ephemChannel.vault_name());
+  const held = REAL
+    ? Buffer.from(await (await fetch(`https://delegated-ipfs.dev/routing/v1/ipns/${vaultName}`, { headers: { Accept: 'application/vnd.ipfs.ipns-record' } })).arrayBuffer())
+    : routed.find((q) => q.method === 'PUT' && q.url.endsWith(vaultName)).body;
+  check('the vault record is opaque: no title or post text in it', held.length > 0 && !held.includes(Buffer.from('Multi')) && held.length <= 10240, `${held.length} bytes${REAL ? ', read back from delegated-ipfs.dev' : ''}`);
 
   // ---- device B: signs in; the channel belongs to the other device's lease ----
   const B = await device('B');

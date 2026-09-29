@@ -7,10 +7,10 @@
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`. Lab only (LIVE has no bridges of ours).
 import { check, finish, launch, PASS, problems, toHome, toSettings, watch, openCode } from '../e2e_lib.mjs';
-import { LIVE, dumpLogs, labBridges, record, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
+import { REAL, dumpLogs, labBridges, record, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
-if (LIVE) {
-  console.log('e2e_tor_bridges: lab only, skipped with LIVE=1');
+if (REAL) {
+  console.log('e2e_tor_bridges: lab only, skipped on the real network (LIVE/RELAY)');
   process.exit(0);
 }
 

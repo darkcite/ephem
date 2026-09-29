@@ -12,6 +12,8 @@
 //
 //   node checks/vault_spike.mjs                V-P1 only
 //   HOURS=72 node checks/vault_spike.mjs       V-P1, then V-P2 for 72 h (leave it running)
+//   CHECK=k51… node checks/vault_spike.mjs     V-P2 by hand: is that record still resolvable?
+// Behind an HTTPS proxy, Node 22's fetch needs NODE_USE_ENV_PROXY=1.
 import * as crypto from 'node:crypto';
 import * as ipns from 'ipns';
 import * as keys from '@libp2p/crypto/keys';
@@ -28,6 +30,14 @@ const CHECK_MIN = Number(process.env.CHECK_MIN || 60);
 // The vault's largest padded plaintext (vault::MAX_PLAIN) + nonce (24) + tag (16).
 const SEALED = 5632 + 24 + 16;
 
+if (process.env.CHECK) {
+  // A later look at a record published earlier (V-P2 without a process left running).
+  for (const [what, url] of [['routing API', `${ROUTING}/routing/v1/ipns/${process.env.CHECK}`], ['gateway', `${GATEWAY}/ipns/${process.env.CHECK}?format=ipns-record`]]) {
+    const r = await fetch(url, { headers: { Accept: CT }, signal: AbortSignal.timeout(60_000) }).then(async (x) => `${x.status}, ${(await x.arrayBuffer()).byteLength} bytes`, (e) => `error ${e.message}`);
+    console.log(`${new Date().toISOString().slice(0, 16).replace('T', ' ')}  V-P2 ${process.env.CHECK.slice(0, 12)}… ${what}: ${r}`);
+  }
+  process.exit(0);
+}
 const priv = await keys.generateKeyPair('Ed25519');
 const name = pid.peerIdFromPrivateKey(priv).toCID().toString(b36.base36);
 const inline = cidlib.CID.createV1(0x55, identity.identity.digest(crypto.randomBytes(SEALED)));

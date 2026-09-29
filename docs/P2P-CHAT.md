@@ -1208,7 +1208,9 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 | C-P5 | OPFS quota and eviction with `persist()` | ⏳ per browser, on devices | ✋ | App. D |
 | C-P4 | Republishing signed IPNS records; browser PUT | ✅ **Live:** Chrome, Safari and **iPhone** `PUT` a signed record to `delegated-ipfs.dev` (200), and `trustless-gateway.link` serves back the **identical 397-byte record**. Kubo `name put` also accepts third-party records (source) | 🤖 | App. D |
 
-**The offline Tor lab** (`checks/tor-lab/lab.sh up`, Appendix C.5) stands in for the Tor network, which this container cannot reach; the live-network runs are T-10.
+**The offline Tor lab** (`checks/tor-lab/lab.sh up`, Appendix C.5) stands in for the Tor network; the live-network runs are T-10.
+
+**The real Tor network from a container without UDP** (`checks/tor-lab/lab.sh relay`, 2026-09-29): cloud containers reach the Internet only through an HTTPS proxy, so WebRTC to real Snowflake volunteers is impossible there. The relay mode runs the Snowflake broker and four proxies locally (WebRTC stays on localhost) and has them relay to the Tor Project's Snowflake bridge (`2B280B23…`, `wss://snowflake.torproject.net/`) over WebSocket/TLS through the proxy. Everything after that hop is the real Tor network: consensus, onion services, HSDirs, exits. `lab.sh relay-verify`: a system `tor` bootstrapped in 30 s and check.torproject.org answered `IsTor: true`. `RELAY=1` runs the Tor e2e tests and spikes that way (lab-only steps skipped, as with `LIVE=1`). It needs `snowflake.torproject.net` allowed by the container's network policy; it does not test the Snowflake volunteers' WebRTC leg (the laptop runs, `LIVE=1`, do).
 
 **Container limits (why some checks are still open):** no outbound UDP, no IPv6, and HTTPS only to an allow-list (crates.io and the Go proxy). The Snowflake broker, IPFS gateways and STUN were unreachable, and only Chromium was installed.
 
@@ -1844,8 +1846,8 @@ Everything else follows from this table: the vault makes the *state* follow the 
 
 | ID | Scope / question | Done when | Status |
 |---|---|---|---|
-| V-P1 (spike) | `delegated-ipfs.dev` accepts and returns a V2-only record of ~9.5 KiB with an identity-CID value; `trustless-gateway.link` returns it | Live PUT/GET byte-identical, as C-P4 | ⏳ `node checks/vault_spike.mjs` on a machine that reaches it (a 9 248-byte vault-shaped record; the build container's network policy blocks the host) |
-| V-P2 (spike) | How long the DHT keeps the record without republishing | Measured over 72 h (resolve every hour) | ⏳ `HOURS=72 node checks/vault_spike.mjs` |
+| V-P1 (spike) | `delegated-ipfs.dev` accepts and returns a V2-only record of ~9.5 KiB with an identity-CID value; `trustless-gateway.link` returns it | Live PUT/GET byte-identical, as C-P4 | ✅ Live 2026-09-29 (`NODE_USE_ENV_PROXY=1 node checks/vault_spike.mjs`): a 9 248-byte V2-only record with a 5 672-byte inline identity CID accepted (`PUT` 200) and returned byte-identical by the routing API and by `trustless-gateway.link` |
+| V-P2 (spike) | How long the DHT keeps the record without republishing | Measured over 72 h (resolve every hour) | ⏳ running: record `k51qzi5uqu5dgvhn5btbh9q1hrrcgbdwz00a4qwwdd0w5pz9syqsu5jpjfisq5` published 2026-09-29 16:22 UTC, never republished; `CHECK=<name> node checks/vault_spike.mjs` |
 | V-1 | `channel::vault`: keys, dag-cbor, padding, seal/open, V2-only record | Unit tests | ✅ tamper (every 97th byte), wrong key and name, the largest vault ≤ 10 KiB |
 | V-2 | Publish on change and on every lease renewal; restore on sign-in; fetch from the channel's onion and mirrors | Lab E2E | ✅ `e2e_tor_vault.mjs` |
 | V-3 | Continue without history; back-fill; the writer lease and "Take over here" | Lab E2E | ✅ `e2e_tor_vault.mjs` (back-fill: unit tests; in the app from mirrors) |

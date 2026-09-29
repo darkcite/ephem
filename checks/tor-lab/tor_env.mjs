@@ -21,6 +21,9 @@ export const LIVE = process.env.LIVE === '1';
 export const RELAY = !LIVE && process.env.RELAY === '1';
 /** Timeout of Tor steps (bootstrap, first dial): the real network is slower than the lab. */
 export const T = LIVE || RELAY ? 300_000 : 180_000;
+/** The real Tor network (LIVE or RELAY): the lab-only steps (chutney client, stand-ins reached
+ *  through lab exits) are skipped. */
+export const REAL = LIVE || RELAY;
 
 const DEAD_BROKER = 'http://127.0.0.1:59999'; // nothing listens: connection refused
 

@@ -194,6 +194,13 @@ if [ -f /tmp/ephlab/lab.env ]; then
     { echo "### Lab: soak, $SOAK min"; echo '```'; cat "$OUT/lab-soak.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
   fi
 fi
+# A container without UDP: the real Tor network through `checks/tor-lab/lab.sh relay`.
+if [ -f /tmp/ephrelay/relay.env ]; then
+  for t in e2e_tor_app e2e_tor_room e2e_tor_cards e2e_tor_channel e2e_tor_vault e2e_tor_multi; do
+    RELAY=1 NODE_USE_ENV_PROXY=1 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/$t.mjs" 2>&1 | tee "$OUT/relay-$t.log"
+    { echo "### Real Tor network via the local relay: $t"; echo '```'; cat "$OUT/relay-$t.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
+  done
+fi
 if [ "${NET:-1}" != 0 ]; then
   for t in e2e_tor_app e2e_tor_room e2e_tor_cards e2e_tor_channel e2e_tor_multi; do
     LIVE=1 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/$t.mjs" 2>&1 | tee "$OUT/live-$t.log"
