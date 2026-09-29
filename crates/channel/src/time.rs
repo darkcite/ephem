@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! RFC 3339 UTC timestamps with nanoseconds, as IPNS writes its `Validity`
 //! (`2026-10-29T12:00:00.000000000Z`), from and to Unix seconds. No calendar library.
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Ephem wire formats (docs/P2P-CHAT.md §8, §11, Appendix A).
 //!
 //! `no_std`, no allocation: every encoder writes into a caller-provided buffer and every

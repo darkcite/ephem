@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 """Stamps integrity hashes and the build id into the web app (docs/P2P-CHAT.md §17.1, §17.2).
 
 - app/index.html, between `<!-- stamp:begin -->` and `<!-- stamp:end -->`:
@@ -44,6 +46,8 @@ CSP = ("default-src 'none'; script-src 'self' 'wasm-unsafe-eval' '{importmap}'; 
 CONNECT = " https:"
 # channel.html: a redirect, nothing else.
 REDIRECT = """<!doctype html>
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- Copyright 2026 Anton (darkcite) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">

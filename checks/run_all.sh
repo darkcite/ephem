@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 # Runs every checkpoint that can be automated on a laptop (macOS or Linux; on Windows use WSL2).
 # Plan, meaning of each ID and pass criteria: docs/P2P-CHAT.md §23 (gates) and §24 (checkpoints).
 #
@@ -165,13 +167,16 @@ if command -v cargo >/dev/null 2>&1; then
 else
   NT="SKIPPED (no cargo)"
 fi
+# Every source file carries its SPDX license header (tools/spdx.py, LICENSE).
+SPDX=$( (cd "$REPO" && python3 tools/spdx.py --check) 2>&1 | tail -1)
+echo "$SPDX"
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_app.mjs" 2>&1 | tee "$OUT/app-e2e.log"
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_mvp2.mjs" 2>&1 | tee "$OUT/app-e2e-mvp2.log"
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_room.mjs" 2>&1 | tee "$OUT/app-e2e-room.log"
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_cards.mjs" 2>&1 | tee "$OUT/app-e2e-cards.log"
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_multi.mjs" 2>&1 | tee "$OUT/app-e2e-multi.log"
 node "$ROOT/channel_interop.mjs" 2>&1 | tee "$OUT/channel-interop.log"
-{ echo "## App"; echo; echo "Native tests: $NT"; echo; echo "### MVP-1"; echo '```'; cat "$OUT/app-e2e.log"; echo '```'; echo; echo "### MVP-2"; echo '```'; cat "$OUT/app-e2e-mvp2.log"; echo '```'; echo; echo "### MVP-3 rooms"; echo '```'; cat "$OUT/app-e2e-room.log"; echo '```'; echo; echo "### Contact cards"; echo '```'; cat "$OUT/app-e2e-cards.log"; echo '```'; echo; echo "### Several chats in one tab"; echo '```'; cat "$OUT/app-e2e-multi.log"; echo '```'; echo; echo "### Channel formats vs the JS IPFS libraries"; echo '```'; cat "$OUT/channel-interop.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
+{ echo "## App"; echo; echo "Native tests: $NT"; echo; echo "License headers: $SPDX"; echo; echo "### MVP-1"; echo '```'; cat "$OUT/app-e2e.log"; echo '```'; echo; echo "### MVP-2"; echo '```'; cat "$OUT/app-e2e-mvp2.log"; echo '```'; echo; echo "### MVP-3 rooms"; echo '```'; cat "$OUT/app-e2e-room.log"; echo '```'; echo; echo "### Contact cards"; echo '```'; cat "$OUT/app-e2e-cards.log"; echo '```'; echo; echo "### Several chats in one tab"; echo '```'; cat "$OUT/app-e2e-multi.log"; echo '```'; echo; echo "### Channel formats vs the JS IPFS libraries"; echo '```'; cat "$OUT/channel-interop.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
 fi
 
 if want tor; then

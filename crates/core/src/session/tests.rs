@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Two sessions run against each other through an in-memory "network".
 
 use super::*;

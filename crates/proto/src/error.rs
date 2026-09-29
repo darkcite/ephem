@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Stable error codes (§19). `u16` on the wire and in the UI.
 
 #[repr(u16)]

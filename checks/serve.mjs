@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Shared local server for real-browser checkpoint runs (safari_checks.mjs, iphone_checks.mjs):
 // serves checks/web/, a per-run config.json, a mailbox for cross-engine field exchange,
 // and collects posted results.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Ephem cryptography (docs/P2P-CHAT.md §7.1, §10).
 //!
 //! - [`identity`]: 32-byte seed → X25519 static (Noise) + Ed25519 signing key, `PeerId`, handle.

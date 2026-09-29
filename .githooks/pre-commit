@@ -1,0 +1,6 @@
+#!/bin/sh
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
+# Stamps the SPDX license header on every file staged for commit (tools/spdx.py).
+# Enable once per clone: git config core.hooksPath .githooks
+exec python3 "$(git rev-parse --show-toplevel)/tools/spdx.py" --staged

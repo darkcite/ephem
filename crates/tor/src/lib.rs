@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Ephem Tor mode (docs/P2P-CHAT.md §28, Appendix C.5): arti inside the web app, reaching Tor
 //! only through Snowflake.
 //!

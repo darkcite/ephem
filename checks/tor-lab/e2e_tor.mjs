@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // E4 browser half (docs/P2P-CHAT.md Appendix C.5): Chromium loads tor_bg.wasm, bootstraps
 // arti through the offline lab (Go broker → WebRTC → Go proxy → Go snowflake server → bridge)
 // and echoes through the lab's onion service. Needs `checks/tor-lab/lab.sh up` and

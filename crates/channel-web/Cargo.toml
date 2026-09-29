@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 [package]
 name = "ephem-channel-web"
 description = "Ephem public channels in the browser (part of the Tor build): owner, onion gateway, reader, mirrors"

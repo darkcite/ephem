@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! QR codes (§8.2): rendering the code link as SVG, and decoding camera frames with `rqrr`
 //! (Safari has no `BarcodeDetector`). Setup path (one per code / scan attempt): may allocate.
 

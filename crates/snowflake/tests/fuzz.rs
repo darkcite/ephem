@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! E7 (docs/P2P-CHAT.md Appendix C.4): the parsers that read what a Snowflake proxy sends us
 //! (encapsulation, KCP, smux, the whole session) take arbitrary and mutated input without
 //! panicking, and fail only with their typed errors. Deterministic (seeded xorshift), so a

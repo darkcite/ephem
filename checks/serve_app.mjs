@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Serves the Ephem app from this laptop to your phones and other devices through a free
 // Cloudflare quick tunnel (`brew install cloudflared`, no account). The repo can stay private.
 //

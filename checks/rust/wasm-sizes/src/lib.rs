@@ -1,4 +1,6 @@
 #![allow(unused)]
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 static mut OUT: [u8; 4096] = [0; 4096];
 
 #[unsafe(no_mangle)]

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // APP-E2E-MULTI over Tor (docs/P2P-CHAT.md Appendix F.3.2) in the offline lab: Alice's one
 // onion service carries several chats. Bob and Carol each open one of her Tor invites; each
 // incoming stream finds its chat; a lost stream in Bob's chat is redialled without touching

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Contact cards (§7.5): `kind = 6`, a QR code or `#k=` link that lets someone add you as a
 //! contact without chatting first, and (Tor mode) dial you once with the card's secret.
 //!

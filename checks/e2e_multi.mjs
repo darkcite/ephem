@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // APP-E2E-MULTI (docs/P2P-CHAT.md Appendix F.3, UI-2) in real Chromium, direct mode: one tab
 // holds several chats at once. Alice chats with Bob and with Carol (two invites); each chat
 // keeps its own messages, receipts and draft; a message in the chat that is not on screen raises

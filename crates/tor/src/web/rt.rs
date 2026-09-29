@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Browser runtime for arti (`tor_rtcompat` traits): tasks on the page's event loop
 //! (`spawn_local`), timers from `setTimeout`, and "blocking" work run inline (there are no
 //! threads). Combined with [`crate::net::BridgeNet`] and [`crate::tls::TorTls`] in a

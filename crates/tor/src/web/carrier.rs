@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Snowflake in the browser: broker rendezvous (`fetch`), WebRTC DataChannels to volunteer
 //! proxies, and the Turbotunnel session's packets over them (§28.3; spike E2 for the exchange).
 //!

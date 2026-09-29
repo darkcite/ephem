@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Public channels in the browser (§27, Appendix D), over the embedded Tor client. Part of the
 //! Tor build of the app (Appendix F.3.3): in Tor mode it shares the chats' Tor client and
 //! identity (`App::bind_channels`); the direct page loads that build only for its channel tabs,

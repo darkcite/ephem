@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Remembered identities (§7.2, §7.3): up to 8 slots in IndexedDB, each holding the ENCRYPTED key
 // file exactly as Rust produced it, plus its plaintext label and display handle for the sign-in
 // list. The passphrase is never stored. Safari may clear this storage after 7 days without a

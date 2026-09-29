@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! `tor_bg.wasm`: arti in the page, reaching Tor only through Snowflake.
 //!
 //! [`Tor`] is the Rust handle (used by the Ephem app build, `crates/wasm` feature `tor`):

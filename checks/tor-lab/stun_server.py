@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 """Minimal STUN server for the offline Tor lab (RFC 5389 Binding requests only).
 
 The lab's Snowflake proxy and NAT probe need a STUN server; the public ones are

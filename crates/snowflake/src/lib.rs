@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Snowflake client transport for Tor mode (docs/P2P-CHAT.md §28.3, Appendix C.5), sans-IO.
 //!
 //! The byte stream to the Snowflake bridge is: Tor link protocol → [`smux`] v2 stream →

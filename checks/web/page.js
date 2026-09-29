@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // In-browser half of the checkpoint suite (docs/P2P-CHAT.md §24). Used by
 // browser_checks.mjs (Playwright), safari_checks.mjs (real Safari) and the iPhone page
 // (index.html + runner.js). Every function returns plain JSON.

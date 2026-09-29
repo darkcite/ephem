@@ -1,0 +1,23 @@
+Ephem
+Copyright 2026 Anton (darkcite)
+
+Licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE):
+free for any noncommercial purpose (personal use, research, education, charities,
+public institutions); commercial use needs a separate license from the copyright
+holder.
+
+--------------------------------------------------------------------------
+Third-party code
+--------------------------------------------------------------------------
+
+vendor/ holds four crates of arti 0.46.0 (arti-client, tor-dirmgr, tor-hsservice,
+tor-persist), Copyright The Tor Project, Inc., licensed MIT OR Apache-2.0, with small
+wasm-only patches marked "Ephem patch" (vendor/README.md). They keep their own
+licenses; the PolyForm license and the SPDX headers of this project do not apply to
+them.
+
+Every other dependency is an unmodified crates.io or npm package resolved at build
+time (Cargo.toml, Cargo.lock, checks/package.json) under its own license. The built
+WebAssembly in app/pkg/ links such crates (among them arti, rustls, ring, snow,
+curve25519-dalek, qrcode, rqrr); their licenses are MIT, Apache-2.0, BSD-style, ISC
+or the ring license, all permissive.

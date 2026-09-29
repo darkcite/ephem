@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! DataChannel frames (§11.1) and inner records (§11.2).
 //!
 //! Outer header (12 B, authenticated as AAD): `ver u8 | ftype u8 | flags u16 | seq u64`.

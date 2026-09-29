@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Turbotunnel encapsulation (snowflake `common/encapsulation`): packets inside a byte stream.
 //!
 //! Each chunk starts with a 1–3 byte length prefix: `dcxxxxxx [cyyyyyyy [0zzzzzzz]]`, where `d` = 1

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Small rendering helpers shared by the chat and channel lists (app.js, channels.js).
 
 /** A row's avatar: the name's first letter on a colour from the name (an identicon, not an

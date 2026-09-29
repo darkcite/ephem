@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! CAR v1 (content-addressed archive): `varint(len) ‖ dag-cbor {roots, version: 1}`, then
 //! blocks `varint(len) ‖ CID ‖ bytes`. What the trustless gateway API serves for
 //! `?format=car`, what Kubo's `ipfs dag import` reads, and the channel's backup format.

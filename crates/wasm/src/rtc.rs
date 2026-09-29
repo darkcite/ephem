@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! web-sys RTCPeerConnection adapter (§9). Setup-path code: closures, promises and SDP strings
 //! allocate here, once per link. The per-frame path (`onmessage` → core → `send`) does not
 //! allocate on the Rust side; the one RX copy (JS `ArrayBuffer` → wasm RX slot) is documented

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Unsigned LEB128 varints (multiformats, protobuf).
 
 /// Appends `v`.

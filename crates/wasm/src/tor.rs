@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Tor mode of the adapter (§28): chat links over Tor streams to onion services.
 //!
 //! The tab hosts one onion service whose key is derived from the identity seed; its invites

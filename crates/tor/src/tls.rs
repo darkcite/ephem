@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! TLS for Tor channels, with rustls + ring (no C beyond ring's own, no OS certificate store).
 //!
 //! Same policy as arti's `RustlsProvider` (tor-rtcompat, MIT/Apache-2.0), which arti exports

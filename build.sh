@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 # Builds the Ephem web app into app/pkg/ (committed, served by GitHub Pages), and app/tor.html.
 # Needs: rustup target wasm32-unknown-unknown, wasm-bindgen-cli matching crates/wasm (=0.2.129).
 # Optional: wasm-opt (binaryen) shrinks the module further.

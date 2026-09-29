@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Contact cards over Tor (docs/P2P-CHAT.md §7.5, §28.4 case 3), in the offline lab:
 //
 //   Alice shows her card → Bob and Carol add her from it → Bob presses Connect: the dial carries

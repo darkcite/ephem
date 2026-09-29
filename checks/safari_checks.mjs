@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Real-Safari checkpoints (macOS). Serves checks/web/ locally and opens it in Safari.
 // The page runs S1 (one tab), S2, S4, S8, E2, C-P1, C-P4 and posts results back.
 // Cross-engine S1: a Playwright-driven Chrome tab is the other peer; the two browsers

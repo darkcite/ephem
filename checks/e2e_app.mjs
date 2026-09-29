@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // End-to-end test of the Ephem app (/app/) in real Chromium, over a real WebRTC DataChannel.
 //
 //   Alice: landing → app → saves her identity (key file), switches away and signs back in

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Shared helpers of the end-to-end tests (e2e_app.mjs, e2e_mvp2.mjs): a static server for the
 // repository root, Chromium launch options, console/CSP watchers and PASS/FAIL bookkeeping.
 import * as fs from 'node:fs';

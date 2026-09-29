@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Short authentication string (§10.4).
 //!
 //! `s = BLAKE2s("p2pchat-sas" ‖ handshake_hash)`; 6 digits from `s[0..3]`, 4 emoji from `s[3..7]`.

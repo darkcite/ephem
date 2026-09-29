@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Ephem UI glue. Rust (pkg/ephem_bg.wasm) owns every piece of protocol and chat state; this file
 // renders the DOM and forwards input. Event contract: crates/wasm/src/lib.rs `ev` / `meta`.
 // Re-entrancy rule: an ephemEvent handler never calls into `app` synchronously (use `later`).

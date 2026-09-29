@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Public channels (docs/P2P-CHAT.md §27, Appendix D and F.3; CH-2…CH-5, UI-3…UI-5) in the
 // offline lab, in the app's Following and My channels tabs:
 //

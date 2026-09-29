@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // TOR-2 (docs/P2P-CHAT.md §28, Appendix C.5): the Ephem app in Tor mode, end to end, in the
 // offline lab. Two separate browsers open app/tor.html; each runs its own arti over Snowflake
 // (lab broker → WebRTC → Go proxy → Go snowflake server → bridge) and hosts its onion service.

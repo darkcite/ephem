@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Checkpoint runner for a real browser tab: laptop Safari (safari_checks.mjs),
 // iPhone (iphone_checks.mjs over a tunnel), or GitHub Pages (static config.json).
 // Config comes from ./config.json; see those scripts for the fields.

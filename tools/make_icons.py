@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 """Generates the Ephem app icons (app/icons/*.png, app/icons/icon.svg) without dependencies.
 
 The mark: an accent (#5b9cf5) chat bubble on the dark panel colour (#171a21), the palette of
@@ -100,6 +102,10 @@ SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
 """
 
 
+# The license header of every source file (tools/spdx.py).
+SPDX = "<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->\n<!-- Copyright 2026 Anton (darkcite) -->\n"
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     png(os.path.join(OUT, "icon-192.png"), 192, False)
@@ -107,7 +113,7 @@ def main():
     png(os.path.join(OUT, "icon-maskable-512.png"), 512, True)
     png(os.path.join(OUT, "apple-touch-icon.png"), 180, True)
     with open(os.path.join(OUT, "icon.svg"), "w") as f:
-        f.write(SVG)
+        f.write(SPDX + SVG)
 
 
 if __name__ == "__main__":

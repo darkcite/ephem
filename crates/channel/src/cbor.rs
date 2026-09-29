@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! DAG-CBOR, the subset channels use: unsigned integers, byte and text strings, arrays, maps
 //! with text keys, booleans, null and CID links (tag 42). Encoding is canonical (shortest
 //! integer forms, map keys sorted by length then bytes); decoding is strict: anything that

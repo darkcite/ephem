@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 # Chutney network of the Ephem offline Tor lab (docs/P2P-CHAT.md Appendix C.5).
 #
 # 3 directory authorities + 1 bridge authority, 5 exit relays (onion services need enough

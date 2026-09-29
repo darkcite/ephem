@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // E8 in your real browsers (macOS): opens the checks page in Chrome, Safari and Firefox
 // (whichever are installed) in E8 mode and collects one result per browser.
 // Usage: node e8_checks.mjs <out-dir>

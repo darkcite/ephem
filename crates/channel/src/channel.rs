@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! The channel model (§D.5.1): manifest, posts, pages and the root, as dag-cbor blocks.
 //!
 //! ```text

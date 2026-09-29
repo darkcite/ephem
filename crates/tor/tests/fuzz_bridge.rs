@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! BR-1 (docs/P2P-CHAT.md Appendix F.2.3): bridge-line parsing takes arbitrary and mutated text
 //! without panicking, and whatever it accepts is valid. Deterministic (seeded xorshift);
 //! `FUZZ_ITERS` raises the budget (`cargo test --release -p ephem-tor --test fuzz_bridge`).

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Turbotunnel session (snowflake `client/lib`): one KCP connection and one smux stream that
 //! outlive the WebRTC DataChannels (proxies) under them.
 //!

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! SDP ↔ minimal fields (Appendix A). Proven in every browser pair by checkpoint S1.
 
 use crate::buf::Buf;

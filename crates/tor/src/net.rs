@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! The only "network" the Tor code has: the Snowflake bridge (§28.5 transport guard).
 //!
 //! arti is configured with the Snowflake bridges at placeholder addresses ([`BRIDGE_ADDRS`], as

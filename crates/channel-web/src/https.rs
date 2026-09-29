@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! One HTTPS request through a Tor exit (§D.5.2: the owner publishes the channel's IPNS record
 //! to `delegated-ipfs.dev` without revealing itself). TLS is rustls with the Mozilla roots
 //! (`webpki-roots`); the lab adds its own test root. HTTP/1.1, `Connection: close`.

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- Copyright 2026 Anton (darkcite) -->
 # Ephem: design, specification and plan
 
 **Ephem** is the product name of this ephemeral, backend-free, peer-to-peer messenger (decided 2026-09-28). The repository is `darkcite/ephem` (renamed from `p2p-chat`); the site is `https://<owner>.github.io/ephem/`.

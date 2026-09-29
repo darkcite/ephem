@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Writes a sample channel for the interop check (`checks/channel_interop.mjs`): the IPNS name,
 //! the signed record and a CAR of all blocks, into the directory given as the argument.
 

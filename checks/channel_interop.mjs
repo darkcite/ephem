@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // CH-1 interop (docs/P2P-CHAT.md §23.1b C-1): what crates/channel writes is valid for the
 // reference JavaScript IPFS libraries — the IPNS record validates for its name (`ipns`), the
 // name and root parse as CIDs (`multiformats`), every CAR block hashes to its CID and decodes as

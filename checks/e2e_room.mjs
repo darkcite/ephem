@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // End-to-end test of rooms (MVP-3, docs/P2P-CHAT.md §14) in real Chromium, four tabs:
 //
 //   owner A creates a room · members B and C and observer D join by invite + answer · members

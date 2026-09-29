@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! The page's view of a channel as JSON (no serde: a handful of fields, escaped by hand).
 //!
 //! `{"name","root","sequence","validity","title","about","created","updated","mirrors":[…],

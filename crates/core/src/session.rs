@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! One 1:1 chat (§12) over a sequence of network paths.
 //!
 //! - A **path** is one RTCPeerConnection: codes → Noise KK → transport. It is disposable (P5).

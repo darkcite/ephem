@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Fixed-capacity output buffer (no allocation). Overflow is a caller bug: it is caught by
 //! `debug_assert!` and reported as `Err(())` so release builds fail closed instead of panicking.
 

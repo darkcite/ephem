@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Tor bridges (docs/P2P-CHAT.md Appendix F.2): which Snowflake setup the Tor client starts with.
 // Rust parses and checks the lines (`App.bridges_check`, crates/tor/src/bridge.rs); this file
 // only picks the lines, keeps the per-browser "wait for my bridges" flag and makes share links.

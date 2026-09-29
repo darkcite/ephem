@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Message state of one chat (§11.3, §11.7): the pending ring and self-destruct timers.
 //!
 //! Both are fixed-capacity and allocated once per chat (setup path). Nothing here grows.

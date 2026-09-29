@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Interop with the reference Go snowflake server (v2.14.1: kcp-go v5.6.24, smux v1.5.56), E3 in docs/P2P-CHAT.md Appendix C.5.
 //!
 //! The server runs as a Tor server transport would (PT environment), with its ORPort pointed at

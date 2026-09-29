@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Noise sessions (§10.1): KK for direct mode (both static keys known from the codes), IK for
 //! Tor mode (§28.4: the dialer knows the inviter's key from the one-way invite; the inviter
 //! learns the dialer's key from message 1).

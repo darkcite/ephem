@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // BR-2 (docs/P2P-CHAT.md Appendix F.2): the user's own Tor bridges, end to end in the offline
 // lab. The lab's Snowflake is pasted as bridge lines in the settings, the way a user would paste
 // lines from whoever runs a bridge; Tor then starts with them, they are kept in the encrypted key

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! The Snowflake byte stream as arti sees a TCP connection to the bridge.
 //!
 //! arti reads and writes through [`SnowflakeStream`] (`AsyncRead`/`AsyncWrite`); a *carrier*

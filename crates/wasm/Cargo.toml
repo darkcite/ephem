@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 [package]
 name = "ephem-wasm"
 description = "Ephem browser adapter: the only crate touching the browser (web-sys WebRTC, JS events)"

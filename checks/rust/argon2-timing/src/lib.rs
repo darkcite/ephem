@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 #[unsafe(no_mangle)]
 pub extern "C" fn kdf(m_kib: u32, t: u32) -> u32 {
     use argon2::{Argon2, Params, Algorithm, Version};

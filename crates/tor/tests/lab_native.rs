@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! E4, native half: arti bootstraps over *our* Snowflake transport (crates/snowflake) and TLS
 //! (crates/tor/src/tls.rs) through the offline lab's Snowflake bridge, then reaches the lab's
 //! onion service. tokio only provides tasks and timers here; every byte to Tor goes through

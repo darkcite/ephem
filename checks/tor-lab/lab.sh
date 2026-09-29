@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 # Ephem offline Tor lab (docs/P2P-CHAT.md Appendix C.5): a private Tor network (chutney) with a
 # Snowflake bridge, plus the real Go Snowflake broker, proxy and NAT probe on localhost.
 # Nothing here touches the Internet once the tools are installed.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // S5b: Argon2id cost in WASM under V8 (the engine Chrome uses).
 import * as fs from 'node:fs';
 const wasm = fs.readFileSync(process.argv[2]);

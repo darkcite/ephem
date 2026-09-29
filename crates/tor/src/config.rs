@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! arti configuration for Tor mode: the Snowflake bridges at placeholder addresses, nothing on
 //! disk (in-memory state, ephemeral keystore), and, for the offline lab only, the private
 //! network's authorities and fallbacks (chutney's `arti.toml`).

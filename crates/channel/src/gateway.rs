@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! The read-only subset of the IPFS trustless-gateway API a channel's onion serves (§D.2):
 //!
 //! - `GET /ipns/<name>?format=ipns-record` → the signed record;

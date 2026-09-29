@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // TOR-4 (docs/P2P-CHAT.md §28.7): a room in Tor mode, in the offline lab. Three browsers, each
 // with its own arti over Snowflake and its own onion service: owner A invites B and C with
 // TOR_INVITEs; the owner introduces B and C (sealed TOR_INVITE relayed through it) and one of

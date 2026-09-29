@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // iPhone checkpoints without GitHub Pages (works while the repo is private).
 // Serves checks/web/ from this laptop through a free Cloudflare quick tunnel
 // (`cloudflared`, no account), prints a QR code, and collects the results the iPhone sends.

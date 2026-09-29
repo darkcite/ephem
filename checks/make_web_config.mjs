@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Writes checks/web/config.json for the static (GitHub Pages) copy of the checks page.
 // The IPNS test record is signed by a throwaway key and valid for one year; re-run to refresh.
 import * as fs from 'node:fs';

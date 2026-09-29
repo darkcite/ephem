@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! KCP (ikcp / kcp-go v5 compatible; ported from v5.6.8, interop-tested against v5.6.24), as Snowflake configures it: stream mode, congestion
 //! window off (`nc = 1`), no FEC, no crypto, MTU 1400, `nodelay = 0`, interval 10 ms, no fast
 //! resend. Sans-IO: the caller passes the time and receives output packets through a closure.

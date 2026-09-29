@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 """S8 / TS3: raw STUN binding requests over UDP (IPv4 and IPv6), plus a VPN/WARP verdict.
 
 Prints the public address each STUN server reports, which is what a peer

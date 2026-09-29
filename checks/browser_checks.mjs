@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Browser checkpoints: S1, S2, S4, S8/TS3/TS4, E2 (G2), C-P1, C-P4, E8.
 // Usage: node browser_checks.mjs <out-dir>
 // Env:   BROWSERS=chrome,webkit (chrome = installed Google Chrome; chromium/firefox/webkit = Playwright builds)

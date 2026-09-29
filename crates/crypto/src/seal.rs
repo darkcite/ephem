@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Sealed boxes between two known static keys (§14.4): signalling that a room owner forwards
 //! between members M and Y without being able to read or alter it.
 //!

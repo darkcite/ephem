@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Encrypted identity key file v2 (§7.3). Sign-in/save path only (allocates; Argon2id needs
 //! about 19 MiB), never on the chat path.
 //!

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! IPNS records (the IPNS Record specification, V2 with V1 compatibility fields).
 //!
 //! Protobuf `IpnsEntry`: 1 `value`, 2 `signatureV1`, 3 `validityType` (0 = EOL), 4 `validity`

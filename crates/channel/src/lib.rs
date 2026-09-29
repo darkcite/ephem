@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Public channels (docs/P2P-CHAT.md §27, Appendix D): the data model, IPFS-native.
 //!
 //! Sans-IO and independent of the browser: blocks are dag-cbor (a deterministic CBOR subset),

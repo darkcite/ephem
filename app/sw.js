@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Ephem service worker (docs/P2P-CHAT.md §17.1).
 // - Caches only the static app files below; never sees codes (URL fragments are not sent) or messages.
 // - Pins the version: a new sw.js installs and WAITS; the page shows the new build and asks the
@@ -5,7 +7,7 @@
 // - Tor mode (tor.html and the Tor build, §28.2) is cached on first use only: direct users never
 //   download it. It belongs to the same version (the build id covers it).
 // VERSION, FILES and TOR_FILES are written by tools/stamp.py (run by ./build.sh).
-const VERSION = '083894b10e7e';
+const VERSION = '840e8419406c';
 const FILES = ["./", "index.html", "app.css", "app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
 const TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm", "channel.html", "redirect.js"];
 const CACHE = `ephem-${VERSION}`;

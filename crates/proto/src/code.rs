@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Invite / answer codes (§8.3): fixed little-endian layout, parsed in place.
 
 use crate::VERSION;

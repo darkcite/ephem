@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 [package]
 name = "ephem-core"
 description = "Ephem sans-IO session state machine (no browser, deterministic, natively testable)"

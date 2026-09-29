@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "description": "Claude Code settings for Ephem: every commit made by an agent first gets the SPDX license header on its staged files (tools/spdx.py).",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.claude/hooks/spdx-before-commit.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

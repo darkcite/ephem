@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Contact cards in direct mode (docs/P2P-CHAT.md §7.5), in real Chromium:
 //
 //   Alice (saved identity) shows her card (#k= link, 30 days) → Bob (saved identity) opens it

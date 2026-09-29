@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Tor bridge lines (docs/P2P-CHAT.md Appendix F.2): the Tor Browser / torrc format, parsed into
 //! the Snowflake setup a browser page can run.
 //!

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 [package]
 name = "ephem-snowflake"
 description = "Snowflake client transport, sans-IO: Turbotunnel encapsulation, KCP and smux v2 (docs/P2P-CHAT.md Appendix C.5)"

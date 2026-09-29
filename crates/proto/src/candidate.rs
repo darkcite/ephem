@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Packed ICE candidates (§8.4). Only UDP, component 1, `host` and `srflx` are ever carried.
 
 use crate::buf::{Buf, Rd};

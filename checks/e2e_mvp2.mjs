@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // End-to-end test of the MVP-2 features in real Chromium (docs/P2P-CHAT.md §23.1):
 //
 //   remembered identities (IndexedDB slot, sign in from the list after a reload) · nicknames ·

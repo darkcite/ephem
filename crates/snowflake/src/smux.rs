@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! smux v2 client (xtaci/smux compatible; ported from v1.5.24, interop-tested against v1.5.56), one stream: the Tor connection to the bridge.
 //!
 //! Frame: `ver u8 = 2, cmd u8, len u16 LE, sid u32 LE`, then `len` bytes. Commands: SYN 0, FIN 1,

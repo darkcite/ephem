@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! CIDv1 (multiformats): `varint(1) ‖ varint(codec) ‖ multihash`. Blocks use SHA2-256
 //! (multihash `0x12`, 32 bytes); an IPNS name is a `libp2p-key` CID over the identity multihash
 //! of the protobuf-encoded public key. Text forms: base32 lower (`b…`, blocks) and base36

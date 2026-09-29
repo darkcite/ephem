@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 """TCP echo server for the offline Tor lab: the target of the lab's onion service and of the
 Snowflake interop tests. Every connection echoes what it receives until the peer closes.
 

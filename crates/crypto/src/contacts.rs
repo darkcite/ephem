@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Contacts (§7.5): a fixed-capacity table that lives in RAM while signed in and on disk only
 //! inside the encrypted key file (TLV 0x01). Saved identities only. Setup/UI path: allocations
 //! here happen on sign-in, on edits and on save, never while chatting.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Ephem browser adapter (docs/P2P-CHAT.md §6.1): the only crate that touches the browser.
 //!
 //! Rust owns all state; JS renders the DOM and forwards user input. Events go to JS through one

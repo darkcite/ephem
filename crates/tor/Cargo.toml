@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 [package]
 name = "ephem-tor"
 description = "Ephem Tor mode (tor_bg.wasm): arti in the browser over Snowflake, onion services (docs/P2P-CHAT.md §28, Appendix C.5)"

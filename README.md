@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- Copyright 2026 Anton (darkcite) -->
 # Ephem
 
 Ephemeral, serverless, end-to-end encrypted chat that runs entirely in the browser (Rust → WebAssembly). No account, no server, no history.

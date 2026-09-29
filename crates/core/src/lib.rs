@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Ephem sans-IO core (docs/P2P-CHAT.md §6.2, §11, §12, §13).
 //!
 //! No browser, no clock, no randomness of its own: the adapter feeds inputs (`now_ms`, local

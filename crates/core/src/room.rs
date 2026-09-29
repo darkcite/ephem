@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Rooms (§14): owner-controlled, up to 16 members, full mesh of pairwise Noise links.
 //!
 //! Authority is the **owner-signed room state**: `version`, room id and the member table

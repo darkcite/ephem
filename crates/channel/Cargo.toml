@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 [package]
 name = "ephem-channel"
 description = "Ephem public channels (§27, Appendix D): IPFS-native blocks (dag-cbor, CIDv1, CAR v1), IPNS V2 records, signed posts, verification"

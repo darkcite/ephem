@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Identity (§7.1): one 32-byte seed, keys derived with domain-separated HKDF-BLAKE2s.
 
 use blake2::{Blake2s256, Digest};

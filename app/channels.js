@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 // Ephem public channels (docs/P2P-CHAT.md §27, Appendix D and F.3.3): the Following and My
 // channels tabs. Rust (ChannelApp, part of the Tor build) builds, signs, serves and verifies
 // everything; this file keeps the lists, stores channels (OPFS, IndexedDB where OPFS cannot

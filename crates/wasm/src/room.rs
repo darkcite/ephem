@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright 2026 Anton (darkcite)
 //! Room layer of the adapter (§14): the owner-signed state, admissions, introductions and T2.
 //!
 //! Every member keeps one pairwise link per other member (full mesh, ≤ 15 links). The owner

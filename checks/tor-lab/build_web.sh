@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
 # Builds tor_bg.wasm for the lab page (checks/tor-lab/web/pkg, not committed).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
