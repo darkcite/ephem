@@ -49,6 +49,10 @@ button.wide { width: 100%; }
 .rows .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
 .rows li.ok .dot { background: var(--ok); }
 .rows li.bad .dot { background: var(--bad); }
+.rows .avatar { width: 30px; height: 30px; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #fff;
+  background: hsl(var(--hue, 210) 45% 38%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--line); }
+.rows li.ok .avatar { background: hsl(var(--hue, 210) 45% 38%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ok); }
+.rows li.bad .avatar { background: hsl(var(--hue, 210) 20% 30%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--bad); }
 .back { margin: 0; padding: 2px 10px; font-size: 16px; }
 @media (min-width: 900px) { .back { display: none; } }
 @media (max-width: 899px) {
@@ -61,6 +65,15 @@ button.wide { width: 100%; }
   body.kbd .tabs { display: none; }
   body.kbd .shell, body.kbd.pane-open .shell { grid-template-rows: minmax(0, 1fr); }
   body .composer { padding-bottom: 8px; }
+  /* The list's main button (New chat, Follow a channel, New channel): in the middle of the
+     screen while the list is empty, otherwise centred at the bottom within thumb reach. */
+  .side { display: flex; flex-direction: column; padding-bottom: 0; }
+  .side > .list:not([hidden]) { flex: 1 0 auto; display: flex; flex-direction: column; }
+  .list > button.wide { order: 1; position: sticky; bottom: 12px; z-index: 2; align-self: center; width: auto;
+    margin: auto 0 12px; padding: 10px 24px; border-radius: 999px; font-size: 15px; box-shadow: 0 4px 16px rgba(0, 0, 0, .45); }
+  .list:has(> .note:not([hidden])) { justify-content: center; }
+  .list:has(> .note:not([hidden])) > button.wide { order: 0; position: static; margin: 16px 0; }
+  .list:has(> .note:not([hidden])) > .note { text-align: center; }
 }
 
 h1 { font-size: 15px; margin: 6px 0 4px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg); }
