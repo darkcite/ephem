@@ -135,7 +135,7 @@ IPNS record ──▶ root {v:1, kind:"board", manifest⁴², catalog⁴², thre
 **Rejected: a Noise-authenticated stream.** The onion already authenticates the host (by its address) and encrypts end to end; the poster has no stable key to authenticate with anyway. Noise would add a handshake round trip over Tor for nothing.
 
 1. `GET /pow` → `{epoch u32, seed [32], effort_thread u32, effort_reply u32, effort_image u32, effort_report u32, paused bool}` (a fixed 60-byte body, not CBOR).
-2. The poster builds `s`, signs it, solves the PoW (G.8) in wasm on the page (the app has no workers), in slices of ~20 ms between frames, with a progress bar and Cancel.
+2. The poster builds `s`, signs it, solves the PoW (G.8) in wasm in **Web Workers** (one per core, up to 4, each on its own nonces: B-P1 found one Equi-X attempt takes 64–131 ms and cannot be interrupted, so slicing on the page is impossible), with a progress bar and Cancel. The workers load the same pinned wasm (SRI) and receive only the challenge; nothing else leaves the page.
 3. `POST /submit` with `Content-Type: application/vnd.ephem.board-submit` and `Content-Length`. Answer: `200 {no, rev}` once the post is in a published snapshot (≤ ~1 s), or an error status plus a stable `u16` code (G.6.3).
 
 **Submit body (little-endian, parsed in place):**
@@ -332,8 +332,8 @@ Only when some follower runs a Kubo mirror (D.7.2): the root's pin links reach e
 
 | ID | Scope / question | Done when |
 |---|---|---|
-| B-P1 (spike) | `equix` for wasm32: builds without a JIT; solve and verify times in Chrome, Firefox, Safari and on an iPhone; Ed25519 verify time for comparison | Numbers per browser; efforts for a ~3 s median reply set from them |
-| B-P2 (spike) | Tor onion-service PoW (hs-pow v1) and introduction DoS limits in our vendored arti, service and client side | Known yes/no per side; if yes, enabled in the lab and a flood test shows it working |
+| B-P1 (spike) | `equix` for wasm32: builds without a JIT; solve and verify times in Chrome, Firefox, Safari and on an iPhone; Ed25519 verify time for comparison | ✅ Chromium (2026-09-29, `checks/spikes/RESULTS-B-P1-B-P2.md`): equix 0.7.0 builds for wasm32 (interpreted hashx); **88.6 ms per attempt, 2.16 solutions per attempt → 24.4 solutions/s per core**; verify ≈ 0.1 ms; 4 Web Workers 3.7×. Effort E costs E solutions on average: median ≈ 28 ms × E per core here, so **~10 s (B6) ≈ E 350 on this 2.1 GHz Xeon core, ≈ 90–175 on a phone 2–4× slower** (estimate). A native JIT attacker on 4 cores is ~37× one browser core. ⏳ Firefox, Safari, iPhone |
+| B-P2 (spike) | Tor onion-service PoW (hs-pow v1) and introduction DoS limits in our vendored arti, service and client side | ✅ answered: arti 0.46.0 implements both sides behind the experimental `hs-pow-full` feature (descriptor pow-params, INTRODUCE2 check with replay log, effort-ordered queue, prop 362 effort updates; `enable_pow` config), and it compiles for wasm32, **but** the service runs its loops through `spawn_blocking` + `reenter_block_on` (panics in our page runtime, even with `enable_pow = false`) and the client solves on `std::thread::spawn`. Enabling it needs patches to vendored `tor-hsservice` and `tor-hsclient` (async loops; solve in steps or a Worker). Until then, introduction floods can take a board offline (G.8) |
 | B-P3 (spike) | Does `tor-hsservice` tell which rendezvous circuit a stream came on? | Yes → per-circuit caps (G.8); no → dropped |
 | B-P4 (spike) | Pixel readback of a 2 048 px image (memory on iPhone; noise under Firefox RFP, Brave, Safari); pure-Rust JPEG encode time in wasm | A 12 MP photo re-encoded under 2 s on an iPhone, peak memory measured |
 | B-P5 (spike) | A 512 KiB `POST` to an onion from a tab over Snowflake: time and failure rate (lab and live) | Median and p95 measured; the image cap confirmed or lowered |

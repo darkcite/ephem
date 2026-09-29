@@ -1,0 +1,21 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- Copyright 2026 Anton (darkcite) -->
+<!doctype html>
+<meta charset="utf-8">
+<title>Equi-X bench</title>
+<script type="module">
+import { bench } from './bench.js';
+// Single thread (main thread) run.
+window.runMain = (k, base) => bench(k, base);
+// W module workers solving in parallel; returns per-worker results and the total wall time.
+window.runWorkers = (w, k) => new Promise((resolve, reject) => {
+  const out = []; const t0 = performance.now();
+  for (let j = 0; j < w; j++) {
+    const wk = new Worker('./bench.js', { type: 'module' });
+    wk.onerror = (e) => reject(new Error(e.message));
+    wk.onmessage = (e) => { out.push(e.data); wk.terminate(); if (out.length === w) resolve({ out, wall: performance.now() - t0 }); };
+    wk.postMessage({ k, base: 9_000_000 + j * 100_000 });
+  }
+});
+window.ready = true;
+</script>

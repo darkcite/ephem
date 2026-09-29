@@ -2,3 +2,5 @@
 # Copyright 2026 Anton (darkcite)
 /target/
 __pycache__/
+/checks/spikes/*/target/
+/checks/spikes/*/pkg/

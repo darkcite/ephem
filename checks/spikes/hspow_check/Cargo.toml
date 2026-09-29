@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
+# Spike B-P2 (docs/BOARDS.md G.16): does arti 0.46 (vendored patches) build with hs-pow-full,
+# natively and for wasm32-unknown-unknown? `cargo check` only. Not part of the repo workspace.
+[package]
+name = "hspow-check"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Same features as crates/tor/Cargo.toml, plus hs-pow-full.
+arti-client = { version = "0.46", default-features = false, features = ["onion-service-client", "onion-service-service", "ephemeral-keystore", "bridge-client", "keymgr", "experimental-api", "hs-pow-full"] }
+tor-hsservice = { version = "0.46", features = ["hs-pow-full"] }
+tor-hsclient = { version = "0.46", features = ["hs-pow-full"] }
+tor-rtcompat = { version = "0.46", default-features = false }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+rustls-pki-types = { version = "1", features = ["web"] }
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+tor-dirmgr = { version = "0.46", default-features = false }
+
+[patch.crates-io]
+arti-client = { path = "../../../vendor/arti-client" }
+tor-dirmgr = { path = "../../../vendor/tor-dirmgr" }
+tor-persist = { path = "../../../vendor/tor-persist" }
+tor-hsservice = { path = "../../../vendor/tor-hsservice" }

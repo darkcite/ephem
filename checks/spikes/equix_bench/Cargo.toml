@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
+# Spike B-P1 (docs/BOARDS.md G.16): Equi-X solve/verify speed, native and wasm32.
+# Standalone: the empty [workspace] keeps it out of the repo workspace.
+[package]
+name = "equix-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "equix-bench"
+path = "src/main.rs"
+
+[dependencies]
+# Same version as the optional dependency of the vendored tor-hsservice 0.46.0.
+# No default features: the hashx JIT (dynasmrt) exists only for x86_64/aarch64.
+equix = { version = "=0.7.0", default-features = false }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Native: enable the hashx compiler so RuntimeOption::CompileOnly/TryCompile can be compared.
+equix = { version = "=0.7.0", features = ["compiler"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.129"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

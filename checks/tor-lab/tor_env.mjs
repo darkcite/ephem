@@ -16,8 +16,11 @@ import * as path from 'node:path';
 import { serve } from '../e2e_lib.mjs';
 
 export const LIVE = process.env.LIVE === '1';
-/** Timeout of Tor steps (bootstrap, first dial): the live network is slower than the lab. */
-export const T = LIVE ? 300_000 : 180_000;
+/** RELAY=1: the real Tor network through `lab.sh relay` (a container without UDP: the local
+ *  Snowflake broker and proxies relay to the Tor Project's bridge over WebSocket/TLS). */
+export const RELAY = !LIVE && process.env.RELAY === '1';
+/** Timeout of Tor steps (bootstrap, first dial): the real network is slower than the lab. */
+export const T = LIVE || RELAY ? 300_000 : 180_000;
 
 const DEAD_BROKER = 'http://127.0.0.1:59999'; // nothing listens: connection refused
 
@@ -43,7 +46,28 @@ export function labBridges(env = labEnv(), dead = false) {
   return dead ? line(`${DEAD_BROKER}/`) : `${line(`${DEAD_BROKER}/`)}\n${line(env.BROKER_URL)}`;
 }
 
-const lab = LIVE ? null : labConfig();
+const relayEnv = () => Object.fromEntries(fs.readFileSync('/tmp/ephrelay/relay.env', 'utf8').trim().split('\n').map((l) => l.split('=')));
+
+/** The real Tor network through the local relay: the lab's shape, the real consensus. */
+function relayConfig() {
+  const env = relayEnv();
+  return {
+    bridges: `snowflake 192.0.2.3:80 ${env.BRIDGE_FP} fingerprint=${env.BRIDGE_FP} url=${env.BROKER_URL} ice=${env.STUN_URL}`,
+    labBroker: env.BROKER_URL,
+    fingerprint: env.BRIDGE_FP,
+    nat: 'unrestricted',
+    network: '',
+    log: process.env.TOR_LOG || 'info',
+  };
+}
+
+const lab = LIVE ? null : RELAY ? relayConfig() : labConfig();
+
+/** The transport arguments of the lab page's `TorNet` (checks/tor-lab/web): lab or relay. */
+export function transportArgs() {
+  const env = RELAY ? relayEnv() : labEnv();
+  return { broker: env.BROKER_URL, fp: env.BRIDGE_FP, stun: env.STUN_URL, nat: 'unrestricted', net: RELAY ? '' : fs.readFileSync(`${env.LAB}/arti-net.toml`, 'utf8'), level: process.env.TOR_LOG || 'info' };
+}
 
 /** Static server of the repository, with the pages' CSP also naming the lab broker (lab only). */
 export function serveTor(route = null) {

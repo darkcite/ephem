@@ -98,4 +98,58 @@ window.dialTab = async (a, onion) => {
   const reply = await readN(s, 4);
   return { reply, ms: Math.round(performance.now() - t0), steps };
 };
+
+// B-P5 (docs/BOARDS.md G.16): uploads of board-post size to an onion hosted by another tab.
+// Each upload is a new stream: 4-byte big-endian length, the body, then the host answers "ok"
+// once it has every byte (it only counts them: nothing is kept).
+window.hostSink = async (a) => {
+  const tor = await start(a);
+  const onion = tor.host('ephemsink', crypto.getRandomValues(new Uint8Array(32)));
+  (async () => {
+    for (;;) {
+      const s = await tor.accept();
+      (async () => {
+        let head = new Uint8Array(), need = -1, got = 0;
+        for (;;) {
+          const b = await s.read(65536);
+          if (!b.length) return;
+          if (need < 0) {
+            head = new Uint8Array([...head, ...b]);
+            if (head.length < 4) continue;
+            need = new DataView(head.buffer).getUint32(0);
+            got = head.length - 4;
+          } else got += b.length;
+          if (got >= need) return s.write(enc.encode('ok'));
+        }
+      })();
+    }
+  })();
+  return { onion };
+};
+window.uploads = async (a, onion, sizes, reps) => {
+  const tor = await start(a);
+  const out = [];
+  for (const size of sizes) {
+    for (let r = 0; r < reps; r++) {
+      const body = new Uint8Array(4 + size);
+      new DataView(body.buffer).setUint32(0, size);
+      crypto.getRandomValues(body.subarray(4, Math.min(body.length, 4 + 65536)));
+      const t0 = performance.now();
+      try {
+        let s = null;
+        for (let i = 0; !s; i++) {
+          try { s = await tor.connect(onion, 80); } catch (e) { if (i > 40) throw e; await new Promise((z) => setTimeout(z, 3000)); }
+        }
+        const t1 = performance.now();
+        await s.write(body);
+        const reply = await readN(s, 2);
+        const t2 = performance.now();
+        out.push({ size, open: Math.round(t1 - t0), send: Math.round(t2 - t1), ok: reply === 'ok' });
+      } catch (e) {
+        out.push({ size, error: String(e).slice(0, 160) });
+      }
+    }
+  }
+  return out;
+};
 </script>

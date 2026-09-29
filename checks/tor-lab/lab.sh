@@ -9,6 +9,13 @@
 #   checks/tor-lab/lab.sh down     stop everything
 #   checks/tor-lab/lab.sh verify   a system `tor` client bootstraps through Snowflake and
 #                                  reaches the lab onion (proof that the lab works)
+#   checks/tor-lab/lab.sh relay    the REAL Tor network from a container without UDP: a local
+#                                  Snowflake broker and proxies (WebRTC stays on localhost) that
+#                                  relay to the Tor Project's Snowflake bridge over WebSocket/TLS
+#                                  (wss://snowflake.torproject.net/, through HTTPS_PROXY); writes
+#                                  $RELAY_DIR/relay.env. Tests use it with RELAY=1.
+#   checks/tor-lab/lab.sh relay-verify   a system `tor` bootstraps on the real network that way
+#   checks/tor-lab/lab.sh relay-down
 #
 # Needs: tor + tor-gencert (apt), go, python3, git.
 set -euo pipefail
@@ -24,6 +31,14 @@ BROKER_PORT=18080
 PROBE_PORT=18443
 STUN_PORT=3478
 ECHO_PORT=4747
+# Relay mode (the real Tor network): its own directory and ports, beside the lab.
+RELAY_DIR="${EPHEM_RELAY:-/tmp/ephrelay}"
+RELAY_BROKER_PORT=18081
+RELAY_PROBE_PORT=18444
+RELAY_STUN_PORT=3479
+# The Tor Project's Snowflake bridge (Tor Browser's bridge line) and its WebSocket front.
+REAL_BRIDGE_FP=2B280B23E1107BB62ABFC40DDCC8824814F80A72
+REAL_RELAY_URL=wss://snowflake.torproject.net/
 NET="$HERE/ephem-net"
 export PATH="$BIN:$PATH" CHUTNEY_DATA_DIR="$LAB"
 
@@ -177,9 +192,73 @@ PY
   [ "$got" = "ephem-lab" ] && log "verify: onion echo OK" || { log "verify: onion echo failed: $got"; exit 1; }
 }
 
+relay_bg() { # name, command...  (as bg, in the relay directory)
+  local name="$1"; shift
+  nohup "$@" >"$RELAY_DIR/$name.log" 2>&1 &
+  echo $! > "$RELAY_DIR/$name.pid"
+}
+
+relay_down() {
+  for p in "$RELAY_DIR"/*.pid; do [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null || true; rm -f "$p"; done
+  log "relay: down"
+}
+
+relay() {
+  tools
+  relay_down >/dev/null 2>&1 || true
+  rm -rf "$RELAY_DIR"; mkdir -p "$RELAY_DIR"
+  printf '{"displayName":"flakey","webSocketAddress":"%s","fingerprint":"%s"}\n' "$REAL_RELAY_URL" "$REAL_BRIDGE_FP" > "$RELAY_DIR/bridges.json"
+  relay_bg stun python3 "$HERE/stun_server.py" "$RELAY_STUN_PORT"
+  relay_bg probe "$BIN/sf-probetest" -disable-tls -addr "127.0.0.1:$RELAY_PROBE_PORT" -stun "stun:127.0.0.1:$RELAY_STUN_PORT" -unsafe-logging
+  relay_bg broker "$BIN/sf-broker" -disable-tls -disable-geoip -addr "127.0.0.1:$RELAY_BROKER_PORT" -bridge-list-path "$RELAY_DIR/bridges.json" -allowed-relay-pattern "snowflake.torproject.net$" -unsafe-logging
+  sleep 1
+  # The WebSocket to the bridge honours HTTPS_PROXY (gorilla/websocket's default dialer), so it
+  # leaves through the container's proxy; the proxy's CA is in the system store Go reads.
+  for i in 1 2 3 4; do
+  relay_bg "proxy$i" "$BIN/sf-proxy" -broker "http://127.0.0.1:$RELAY_BROKER_PORT/" -relay "$REAL_RELAY_URL" \
+    -keep-local-addresses -allowed-relay-hostname-pattern "snowflake.torproject.net$" \
+    -nat-probe-server "http://127.0.0.1:$RELAY_PROBE_PORT/probe" -stun "stun:127.0.0.1:$RELAY_STUN_PORT" -capacity 0 -verbose -unsafe-logging
+  done
+  cat > "$RELAY_DIR/relay.env" <<EOF
+RELAY_DIR=$RELAY_DIR
+BRIDGE_FP=$REAL_BRIDGE_FP
+BROKER_URL=http://127.0.0.1:$RELAY_BROKER_PORT/
+STUN_URL=stun:127.0.0.1:$RELAY_STUN_PORT
+EOF
+  log "relay: up: $(tr '\n' ' ' < "$RELAY_DIR/relay.env")"
+}
+
+relay_verify() {
+  # shellcheck disable=SC1091
+  . "$RELAY_DIR/relay.env"
+  local d="$RELAY_DIR/verify-client"; rm -rf "$d"; mkdir -p "$d"
+  cat > "$d/torrc" <<EOF
+DataDirectory $d
+SocksPort 127.0.0.1:19051
+UseBridges 1
+Sandbox 0
+Bridge snowflake 192.0.2.3:80 $BRIDGE_FP fingerprint=$BRIDGE_FP
+ClientTransportPlugin snowflake exec $BIN/sf-client -url $BROKER_URL -ice $STUN_URL -keep-local-addresses -log $d/sf-client.log -unsafe-logging
+EOF
+  tor -f "$d/torrc" >"$d/tor.log" 2>&1 &
+  local pid=$! t0=$SECONDS
+  until grep -q "Bootstrapped 100%" "$d/tor.log"; do
+    if (( SECONDS - t0 > 300 )); then log "relay-verify: no bootstrap in 300 s"; tail -5 "$d/tor.log"; kill $pid; exit 1; fi
+    sleep 3
+  done
+  log "relay-verify: bootstrapped on the real Tor network in $((SECONDS - t0)) s"
+  local ip
+  ip="$(curl -sS -m 90 --socks5-hostname 127.0.0.1:19051 https://check.torproject.org/api/ip || echo failed)"
+  kill $pid
+  log "relay-verify: check.torproject.org through Tor says: $ip"
+}
+
 case "${1:-}" in
   up) up ;;
   down) down ;;
   verify) verify ;;
-  *) echo "usage: $0 up|down|verify"; exit 2 ;;
+  relay) relay ;;
+  relay-verify) relay_verify ;;
+  relay-down) relay_down ;;
+  *) echo "usage: $0 up|down|verify|relay|relay-verify|relay-down"; exit 2 ;;
 esac
