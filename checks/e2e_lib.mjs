@@ -75,6 +75,11 @@ export const toChats = async (page) => {
   await ready(page);
   await page.click('#tab-chats');
 };
+/** Opens the "Got a code?" sheet (the header's Code button, on every tab). */
+export const openCode = async (page) => {
+  await ready(page);
+  if (await page.isHidden('#code-sheet')) await page.click('#b-code');
+};
 export const toHome = async (page) => {
   await toChats(page);
   await page.click('#b-new');
@@ -93,6 +98,7 @@ export async function connect(a, b) {
   await a.click('#b-invite');
   await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#i='), null, { timeout: 15000 });
   await openSettings(b);
+  await openCode(b);
   await b.fill('#t-code', await a.inputValue('#v-code .link'));
   await b.click('#b-apply');
   await b.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#a='), null, { timeout: 15000 });

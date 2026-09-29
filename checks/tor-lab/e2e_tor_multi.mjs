@@ -7,7 +7,7 @@
 // appears in Alice's list (not on screen, since she is in another chat) and opens on a tap.
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network.
-import { check, finish, launch, msgWith, PASS, problems, toChats, toHome, toSettings, watch } from '../e2e_lib.mjs';
+import { check, finish, launch, msgWith, PASS, problems, toChats, toHome, toSettings, watch, openCode } from '../e2e_lib.mjs';
 import { T, dumpLogs, record, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
@@ -63,8 +63,10 @@ try {
   // Two invites of one onion, open at the same time; each dial finds its own chat.
   const forBob = await invite(a);
   const forCarol = await invite(a);
+  await openCode(b);
   await b.fill('#t-code', forBob);
   await b.click('#b-apply');
+  await openCode(c);
   await c.fill('#t-code', forCarol);
   await c.click('#b-apply');
   await Promise.all([b, c].map((p) => p.waitForSelector('#v-chat:not([hidden])', { timeout: T })));

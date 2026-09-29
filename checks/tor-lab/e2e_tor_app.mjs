@@ -8,7 +8,7 @@
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 runs it on the real Tor network
 // instead (tor_env.mjs).
-import { check, finish, launch, msgWith, PASS, problems, toChats, toHome, toSettings, watch } from '../e2e_lib.mjs';
+import { check, finish, launch, msgWith, PASS, problems, toChats, toHome, toSettings, watch, openCode } from '../e2e_lib.mjs';
 import { T, dumpLogs, record, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
@@ -83,6 +83,7 @@ try {
   check('Alice: one Tor invite (kind 5, 104 bytes), no answer box', Buffer.from(code, 'base64url').length === 104 && await a.isHidden('#answer-box'), `${code.length} chars`);
 
   const t1 = Date.now();
+  await openCode(b);
   await b.fill('#t-code', link);
   await b.click('#b-apply');
   await Promise.all([a, b].map((p) => p.waitForSelector('#v-chat:not([hidden])', { timeout: T })));

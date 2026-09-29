@@ -8,7 +8,7 @@
 //   identity transfer to a new device (SAS on both, encrypted key file incl. contacts).
 //
 // Usage: node checks/e2e_mvp2.mjs   (build first with ./build.sh; E2E_BROWSER=chrome for installed Chrome)
-import { check, connect, finish, launch, msgWith, PASS, problems, serve, toChats, toSettings, watch } from './e2e_lib.mjs';
+import { check, connect, finish, launch, msgWith, PASS, problems, serve, toChats, toSettings, watch, openCode } from './e2e_lib.mjs';
 
 const srv = await serve();
 const base = `http://127.0.0.1:${srv.address().port}`;
@@ -111,6 +111,7 @@ try {
   await n.click('#b-id-receive');
   await n.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#i='), null, { timeout: 15000 });
   check('new device shows a transfer invite', (await n.textContent('#code-title')) === 'Receive an identity');
+  await openCode(a);
   await a.fill('#t-code', await n.inputValue('#v-code .link'));
   answer(a, true);
   await a.click('#b-apply');

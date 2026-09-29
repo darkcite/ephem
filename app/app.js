@@ -1232,9 +1232,18 @@ function started() {
   return c;
 }
 
+/** The "Got a code?" sheet (header button), from every tab. */
+function openCodeSheet(text = '') {
+  if (text) $('t-code').value = text;
+  $('code-sheet').hidden = false;
+  $('t-code').focus();
+}
+const closeCodeSheet = () => { $('code-sheet').hidden = true; };
+
 function applyCode(raw, scanned) {
   const v = raw.trim();
   if (!v) return;
+  closeCodeSheet();
   if (app.card_nick(v) !== undefined) return addCard(v);
   if (/#c=/.test(v)) return channels.openLink(v);
   const info = app.code_info(v);
@@ -1824,6 +1833,9 @@ async function main() {
     app.create_invite(Number($('s-ttl').value));
     started();
   };
+  $('b-code').onclick = () => ($('code-sheet').hidden ? openCodeSheet() : closeCodeSheet());
+  $('b-code-close').onclick = closeCodeSheet;
+  $('code-sheet').onclick = (e) => { if (e.target === $('code-sheet')) closeCodeSheet(); };
   $('b-apply').onclick = () => applyCode($('t-code').value, false);
   const cardOnly = (t) => (app.card_nick(t.trim()) !== undefined ? addCard(t.trim()) : error('That is not a contact card. Cards are links with #k=; invites go in “Got a code?”.'));
   $('b-add-card').onclick = () => cardOnly($('t-card').value);
@@ -1836,7 +1848,7 @@ async function main() {
     $('br-link').select();
   };
   $('b-scan-card').onclick = () => scan(cardOnly);
-  $('b-scan').onclick = () => scan((t) => applyCode(t, true));
+  $('b-scan').onclick = () => { closeCodeSheet(); scan((t) => applyCode(t, true)); };
   $('b-scan-cancel').onclick = () => scanStop?.();
   $('b-room').onclick = () => {
     applyPrefs();
@@ -1906,6 +1918,8 @@ async function main() {
       e.preventDefault();
       const i = list.findIndex((l) => l.classList.contains('active'));
       list[(i + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length].click();
+    } else if (e.key === 'Escape' && !$('code-sheet').hidden) {
+      closeCodeSheet();
     } else if (e.key === 'Escape' && !$('b-back').hidden && matchMedia('(max-width: 899px)').matches && !e.target.closest('textarea, input')) {
       backToList();
     }
@@ -1955,7 +1969,7 @@ async function main() {
   }
   // An answer or reconnect code for a chat of this tab (none here: a fresh tab holds none).
   if (app.code_fits(frag)) return applyCode(frag, false);
-  $('t-code').value = baseUrl() + frag;
+  openCodeSheet(baseUrl() + frag);
   error('Open this code in the tab that holds the chat (or that created the invite), or paste it there.');
 }
 

@@ -19,7 +19,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import QRCode from 'qrcode';
-import { check, finish, launch, msgWith, openSettings, PASS, problems, ROOT, serve, toHome, toSettings, watch } from './e2e_lib.mjs';
+import { check, finish, launch, msgWith, openSettings, PASS, problems, ROOT, serve, toHome, toSettings, watch, openCode } from './e2e_lib.mjs';
 
 // Test hook: when set, sw.js is served with this VERSION (simulates a new release).
 let swVersion = null;
@@ -132,6 +132,7 @@ try {
   await b.waitForSelector('#v-start:not([hidden])');
   await openSettings(b);
   const tScan = Date.now();
+  await openCode(b);
   await b.click('#b-scan');
   await b.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#a='), null, { timeout: 30000 })
     .catch(async (e) => { throw new Error(`scan: ${await b.textContent('#scan-status')} — ${e.message}`); });
@@ -252,6 +253,7 @@ try {
   check('leave ends the chat on the other side', (await a.textContent('#note-title')) === 'Chat ended', await a.textContent('#note-text'));
 
   await a.click('#b-again');
+  await openCode(a);
   await a.fill('#t-code', `${base}/app/#i=AAAA`);
   await a.click('#b-apply');
   await a.waitForSelector('#error:not([hidden])');

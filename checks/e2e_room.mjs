@@ -9,7 +9,7 @@
 //   closing the room.
 //
 // Usage: node checks/e2e_room.mjs   (build first with ./build.sh; E2E_BROWSER=chrome for installed Chrome)
-import { check, finish, launch, msgWith, openSettings, problems, serve, toSettings, watch } from './e2e_lib.mjs';
+import { check, finish, launch, msgWith, openSettings, problems, serve, toSettings, watch, openCode } from './e2e_lib.mjs';
 
 const srv = await serve();
 const base = `http://127.0.0.1:${srv.address().port}`;
@@ -26,6 +26,7 @@ async function join(a, p, observer) {
   await a.click(observer ? '#b-room-observer' : '#b-room-invite');
   await a.waitForFunction(() => document.querySelector('#room-invite .link')?.value.includes('#i='), null, { timeout: 15000 });
   await openSettings(p);
+  await openCode(p);
   await p.fill('#t-code', await a.inputValue('#room-invite .link'));
   accept(p); // "every member will see your IP" (§29.2)
   await p.click('#b-apply');

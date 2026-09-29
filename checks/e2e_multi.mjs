@@ -87,6 +87,14 @@ try {
   }));
   check('tabs, tab panels and the live message log carry their ARIA roles', roles.tablist === 4 && roles.selected === 'tab-chats' && roles.panels === 4 && roles.live === 'polite', JSON.stringify(roles));
 
+  // "Got a code?" from every tab: the header's Code button.
+  await a.click('#tab-settings');
+  await a.click('#b-code');
+  const sheet = await a.isVisible('#t-code') && await a.isVisible('#b-scan');
+  await a.keyboard.press('Escape');
+  check('the Code button opens "Got a code?" from any tab (here Settings); Escape closes it', sheet && await a.isHidden('#code-sheet'));
+  await a.click('#tab-chats');
+
   // Phone-sized window: the list first; a chat opens full screen with Back.
   const ph = await open('phone', { width: 390, height: 800 });
   check('phone: the list (and the tab bar) first, no pane', await ph.isVisible('#b-new') && await ph.isVisible('#tab-follow') && await ph.isHidden('#pane'));
@@ -96,6 +104,7 @@ try {
   check('phone: Settings is a tab of its own (identity, contacts, connection); the tab bar stays', await ph.isVisible('#b-id-save') && await ph.isVisible('#s-ttl') && await ph.isVisible('#tab-chats'));
   const frame = await ph.evaluate(() => ({ page: document.scrollingElement.scrollHeight - innerHeight, pane: document.querySelector('#pane').scrollHeight > document.querySelector('#pane').clientHeight }));
   check('phone: the page itself never scrolls (full screen), only the pane', frame.page <= 0 && frame.pane, JSON.stringify(frame));
+  check('phone: the Code button is in the header', await ph.isVisible('#b-code'));
   await ph.click('#tab-chats');
   await ph.click('#b-back');
   check('phone: Back returns to the list', await ph.isVisible('#b-new') && await ph.isHidden('#pane'));

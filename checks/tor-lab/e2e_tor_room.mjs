@@ -7,7 +7,7 @@
 // Then room messages, and a member losing its member links (the dialler redials).
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network (tor_env.mjs).
-import { check, finish, launch, msgWith, problems, toHome, toSettings, watch } from '../e2e_lib.mjs';
+import { check, finish, launch, msgWith, problems, toHome, toSettings, watch, openCode } from '../e2e_lib.mjs';
 import { T, noise, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
@@ -44,6 +44,7 @@ async function join(a, p) {
   await a.waitForFunction(() => document.querySelector('#room-invite .link')?.value.includes('#t='), null, { timeout: 15_000 });
   check('owner shows a Tor invite, no answer box', await a.isHidden('#t-room-answer'));
   await toHome(p);
+  await openCode(p);
   await p.fill('#t-code', await a.inputValue('#room-invite .link'));
   await p.click('#b-apply');
   await p.waitForSelector('#v-chat:not([hidden])', { timeout: T });

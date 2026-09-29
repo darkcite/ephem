@@ -200,3 +200,9 @@ h2 small { color: var(--dim); font-weight: 400; text-transform: none; letter-spa
 .problems { margin: 6px 0; padding-left: 18px; }
 .problems .bad { color: var(--bad); }
 .problems .dim { color: var(--dim); }
+/* The header's Code button and its sheet ("Got a code?", from every tab) */
+.codebtn { margin: 0; padding: 3px 10px; }
+.sheet { position: fixed; inset: 0; z-index: 9; background: rgba(15, 17, 21, .8); display: flex; align-items: flex-start; justify-content: center;
+  padding: max(56px, calc(env(safe-area-inset-top) + 48px)) 12px 12px; }
+.sheet .card { width: min(560px, 100%); margin: 0; box-shadow: 0 8px 30px rgba(0, 0, 0, .5); }
+@media (max-width: 420px) { #me { display: none; } }

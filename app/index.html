@@ -6,13 +6,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-2RTBG7WhVuY58HLoBDXmKTTdSqa+6/Zs/pdl/cLKplA='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="db08a2af736f">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-sl/P16/b9YSQjiAylogW1pRZTDBCDTI5LHIwk1IpWpc='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="6010df3d2458">
 <meta name="ephem-wasm" content="sha384-d45bo3fvWkkNfP9Q8DTo6CmoC5moWhNxW3RcFukweqivIdCoAJ4x8DJtkd/jR6Tu">
 <meta name="ephem-tor-wasm" content="sha384-huiTBDRwYI65mCbbJnkfbLixVB91P3qIb7ZwWcVgki8reqLq7ksGIlRaf6a6WRtp">
-<link rel="stylesheet" href="app.css" integrity="sha384-2wUUgtgzC3bEtmkuh8nj/g/WvkCL5LNQZWBM3RbYTSLw05SvGy8/m098QDVysiJu">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-VurKggt0HxEsTre1S3ns3D9vLmDRXtxQnl4A3ABp+4tW+3YzgtJLkytheaklsX/O","./slots.js":"sha384-IlHgZ/G7YQmb6j7JCXNAbe997AcQ0jgf9kFcPNaROP0AcYmGBAzZ9Okdm4ch/5yC","./bridges.js":"sha384-XinMCx7qqD+BIl3mImyuYX0YNpqx/XA/fy1rBXFb3VrD/Hp62Vg7zBWO5+v1qTAV","./channels.js":"sha384-Hqqw/ywA5WXJnNdpuHdPhzeCxM8kq/y8biPdooOY5VixCk3WdnylHWlknEon2db4","./ui.js":"sha384-Dg5+MKtdFNG4n1QschjGOvWfALXvB+/c+rOXQZOFRC3N7R0ouVLg7exIRd33Txvx","./pkg/ephem.js":"sha384-ldCyPwipVz+B49iV5oX++4gYxOjoOP1DlvAQoKsXt/B/s6jHcdQ4I+5YhmDfEBrd","./pkg/ephem_tor.js":"sha384-vGENgBZ23ZMgijevNvmDtPf0WyLfnFz6Xu3y0nPL8JAulbrmVabR6a6zojsgMvCs"}}</script>
-<script type="module" src="app.js" integrity="sha384-VurKggt0HxEsTre1S3ns3D9vLmDRXtxQnl4A3ABp+4tW+3YzgtJLkytheaklsX/O"></script>
+<link rel="stylesheet" href="app.css" integrity="sha384-xGEqTNiobxi9HAoBzMhf9lc3YRtdhPo8eJsHzlgZIZ1JyZAS7ROzzgPN582mJNt8">
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-L41DpXfyzW71j44jepIWqnaglJoouCOvLerKZNMltpvKqmUIX7Wycd/CwOjjApTD","./slots.js":"sha384-IlHgZ/G7YQmb6j7JCXNAbe997AcQ0jgf9kFcPNaROP0AcYmGBAzZ9Okdm4ch/5yC","./bridges.js":"sha384-XinMCx7qqD+BIl3mImyuYX0YNpqx/XA/fy1rBXFb3VrD/Hp62Vg7zBWO5+v1qTAV","./channels.js":"sha384-Hqqw/ywA5WXJnNdpuHdPhzeCxM8kq/y8biPdooOY5VixCk3WdnylHWlknEon2db4","./ui.js":"sha384-Dg5+MKtdFNG4n1QschjGOvWfALXvB+/c+rOXQZOFRC3N7R0ouVLg7exIRd33Txvx","./pkg/ephem.js":"sha384-ldCyPwipVz+B49iV5oX++4gYxOjoOP1DlvAQoKsXt/B/s6jHcdQ4I+5YhmDfEBrd","./pkg/ephem_tor.js":"sha384-vGENgBZ23ZMgijevNvmDtPf0WyLfnFz6Xu3y0nPL8JAulbrmVabR6a6zojsgMvCs"}}</script>
+<script type="module" src="app.js" integrity="sha384-L41DpXfyzW71j44jepIWqnaglJoouCOvLerKZNMltpvKqmUIX7Wycd/CwOjjApTD"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -37,7 +37,22 @@
   <a class="brand" href="../">Ephem</a>
   <span id="me" class="pill" title="Your display handle (not a proof of identity)">…</span>
   <span id="status" class="pill status">starting</span>
+  <button id="b-code" class="primary codebtn" aria-haspopup="dialog" aria-controls="code-sheet" title="Scan or paste an invite, answer, contact card, channel or bridge link">⌗ Code</button>
 </header>
+
+<!-- "Got a code?": from every tab (the header's Code button). -->
+<div id="code-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="code-sheet-title" hidden>
+  <div class="card">
+    <h2 id="code-sheet-title">Got a code?</h2>
+    <p>Scan it, or paste an invite link to answer it, the answer to your own invite, a reconnect code, someone's contact card, a channel link or a bridge link.</p>
+    <textarea id="t-code" rows="3" placeholder="https://…/app/#i=…" spellcheck="false" autocomplete="off"></textarea>
+    <div class="actions">
+      <button id="b-apply" class="primary">Open code</button>
+      <button id="b-scan" class="scan">Scan QR code</button>
+      <button id="b-code-close" class="ghost">Close</button>
+    </div>
+  </div>
+</div>
 
 <div class="shell">
   <nav class="tabs" role="tablist" aria-label="Ephem">
@@ -80,7 +95,7 @@
 
   <section id="v-start" class="view pane-home" hidden>
     <h1>New chat</h1>
-    <p class="lead"><span class="direct-only">Two codes, one each way.</span><span class="tor-only">One code, through Tor.</span> Nothing is stored: when either of you leaves, the chat is gone. You can have up to 16 chats and rooms open at once.</p>
+    <p class="lead"><span class="direct-only">Two codes, one each way.</span><span class="tor-only">One code, through Tor.</span> Nothing is stored: when either of you leaves, the chat is gone. You can have up to 16 chats and rooms open at once. Got a code from someone? Use <strong>⌗ Code</strong> at the top.</p>
     <p id="ios-note" class="warn" hidden>Links open in Safari, not in this installed app. Scan codes with the in-app scanner, or paste them.</p>
 
     <div class="card">
@@ -92,15 +107,6 @@
       <h2>Or open a room</h2>
       <p>Up to 16 people, each connected <span class="direct-only">directly</span><span class="tor-only">through Tor</span> to every other one. You own the room: you invite members (or read-only observers) and can remove them. When you leave, the room is gone.</p>
       <button id="b-room">Create room</button>
-    </div>
-    <div class="card">
-      <h2>Got a code?</h2>
-      <p>Scan it, paste an invite link to answer it, paste the answer to your own invite, or paste someone's contact card to add them.</p>
-      <textarea id="t-code" rows="3" placeholder="https://…/app/#i=…" spellcheck="false" autocomplete="off"></textarea>
-      <div class="actions">
-        <button id="b-apply">Open code</button>
-        <button id="b-scan" class="scan">Scan QR code</button>
-      </div>
     </div>
   </section>
 

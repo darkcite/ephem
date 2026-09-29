@@ -6,7 +6,7 @@
 // file, a reload waits for them until sign-in, and they travel as a `#b=` link.
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`. Lab only (LIVE has no bridges of ours).
-import { check, finish, launch, PASS, problems, toHome, toSettings, watch } from '../e2e_lib.mjs';
+import { check, finish, launch, PASS, problems, toHome, toSettings, watch, openCode } from '../e2e_lib.mjs';
 import { LIVE, dumpLogs, labBridges, record, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 if (LIVE) {
@@ -105,6 +105,7 @@ try {
   await a.click('#b-invite');
   await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#t='), null, { timeout: 10_000 });
   await toHome(b);
+  await openCode(b);
   await b.fill('#t-code', await a.inputValue('#v-code .link'));
   await b.click('#b-apply');
   await Promise.all([a, b].map((p) => p.waitForSelector('#v-chat:not([hidden])', { timeout: 120_000 })));

@@ -8,7 +8,7 @@
 //   the SAS is still prompted, then ✔ → Alice resets her card (new secret, the link changes).
 //
 // Usage: node checks/e2e_cards.mjs   (build first with ./build.sh)
-import { check, connect, finish, launch, PASS, problems, serve, toSettings, watch } from './e2e_lib.mjs';
+import { check, connect, finish, launch, PASS, problems, serve, toSettings, watch, openCode } from './e2e_lib.mjs';
 
 const srv = await serve();
 const base = `http://127.0.0.1:${srv.address().port}/app/`;
@@ -55,6 +55,7 @@ try {
   check('Alice shows her card (QR + #k= link, 30 days)', /works until/.test(await a.textContent('#card-expiry')) && (await a.$('#card .qr svg')) !== null, card.length + ' chars');
 
   // A temporary identity has no contacts.
+  await openCode(t);
   await t.fill('#t-code', card);
   await t.click('#b-apply');
   await t.waitForSelector('#error:not([hidden])');

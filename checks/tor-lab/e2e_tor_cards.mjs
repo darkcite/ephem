@@ -9,7 +9,7 @@
 //   contact (his card secret was dropped after the first connection).
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network.
-import { check, finish, launch, msgWith, PASS, problems, toChats, toHome, toSettings, watch } from '../e2e_lib.mjs';
+import { check, finish, launch, msgWith, PASS, problems, toChats, toHome, toSettings, watch, openCode } from '../e2e_lib.mjs';
 import { T, dumpLogs, record, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
@@ -57,6 +57,7 @@ try {
   for (const p of [b, c]) {
     p.answers.push('Alice');
     await toHome(p);
+    await openCode(p);
     await p.fill('#t-code', card);
     await p.click('#b-apply');
     await toSettings(p);
