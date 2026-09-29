@@ -14,18 +14,26 @@ export const T = LIVE ? 300_000 : 180_000;
 
 const DEAD_BROKER = 'http://127.0.0.1:59999'; // nothing listens: connection refused
 
+const labEnv = () => Object.fromEntries(fs.readFileSync('/tmp/ephlab/lab.env', 'utf8').trim().split('\n').map((l) => l.split('=')));
+
 function labConfig() {
-  const env = Object.fromEntries(fs.readFileSync('/tmp/ephlab/lab.env', 'utf8').trim().split('\n').map((l) => l.split('=')));
+  const env = labEnv();
   return {
-    // A dead broker first: every rendezvous exercises the fallback to the next URL.
-    broker: `${DEAD_BROKER}/,${env.BROKER_URL}`,
+    // Bridge lines as a user would paste them (Appendix F.2). A dead broker first: every
+    // rendezvous exercises the fallback to the next URL.
+    bridges: labBridges(env),
     labBroker: env.BROKER_URL,
     fingerprint: env.BRIDGE_FP,
-    ice: env.STUN_URL,
     nat: 'unrestricted',
     network: fs.readFileSync(`${env.LAB}/arti-net.toml`, 'utf8'),
     log: process.env.TOR_LOG || 'info',
   };
+}
+
+/** The lab's Snowflake as bridge lines (`dead`: only the dead broker, unusable in practice). */
+export function labBridges(env = labEnv(), dead = false) {
+  const line = (url) => `snowflake 192.0.2.3:80 ${env.BRIDGE_FP} fingerprint=${env.BRIDGE_FP} url=${url} ice=${env.STUN_URL}`;
+  return dead ? line(`${DEAD_BROKER}/`) : `${line(`${DEAD_BROKER}/`)}\n${line(env.BROKER_URL)}`;
 }
 
 const lab = LIVE ? null : labConfig();
@@ -34,7 +42,7 @@ const lab = LIVE ? null : labConfig();
 export function serveTor(route = null) {
   if (LIVE) return serve(null, route);
   const origins = `${DEAD_BROKER} ${new URL(lab.labBroker).origin}`;
-  return serve((p, read) => (/\/(tor|channel)\.html$/.test(p) ? read().replace('https://snowflake-broker.torproject.net', origins) : null), route);
+  return serve((p, read) => (/\/(tor|channel)\.html$/.test(p) ? read().replace("connect-src 'self' https:", `connect-src 'self' https: ${origins}`) : null), route);
 }
 
 /** Prepares a browser context for tor.html (the lab settings, unless LIVE). */

@@ -198,7 +198,7 @@ fn parse_line(line: &str, n: u32, out: &mut Bridges) -> Result<(), Problem> {
         return Err(Problem::NoStun);
     }
     let fp_upper = fp.to_ascii_uppercase();
-    if !out.fingerprints.iter().any(|x| *x == fp_upper) {
+    if !out.fingerprints.contains(&fp_upper) {
         if out.fingerprints.len() < BRIDGE_ADDRS.len() {
             out.fingerprints.push(fp_upper);
         } else {

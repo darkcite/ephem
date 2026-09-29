@@ -656,6 +656,28 @@ export class App {
         }
     }
     /**
+     * Section `t` of the key file (0x05 Tor bridge lines, 0x06 followed channels, 0x07 owned
+     * channels) as UTF-8, or empty.
+     * @param {number} t
+     * @returns {string}
+     */
+    section(t) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.app_section(retptr, this.__wbg_ptr, t);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Sends `len` bytes previously written at `text_ptr()`. `reply_seq` = 0 for no reply,
      * otherwise the quoted message `(reply_sender, reply_seq)`. Returns chat_seq or -error code.
      * @param {number} len
@@ -687,6 +709,18 @@ export class App {
      */
     set_prefs(privacy, drop_ipv6, read_receipts, typing) {
         wasm.app_set_prefs(this.__wbg_ptr, privacy, drop_ipv6, read_receipts, typing);
+    }
+    /**
+     * Replaces section `t` (empty text removes it). Save the key file afterwards.
+     * @param {number} t
+     * @param {string} text
+     * @returns {number}
+     */
+    set_section(t, text) {
+        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.app_set_section(this.__wbg_ptr, t, ptr0, len0);
+        return ret >>> 0;
     }
     /**
      * Sets the chat's self-destruct timer (1:1: either person; room: the owner).
@@ -859,7 +893,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_694(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_698(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -931,7 +965,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_694_60(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_698_62(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -1079,7 +1113,7 @@ function __wbg_get_imports() {
         },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 33, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_665);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_669);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000002: function(arg0, arg1) {
@@ -1089,7 +1123,7 @@ function __wbg_get_imports() {
         },
         __wbindgen_generic_0000000000000003: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("RTCPeerConnectionIceEvent")], shim_idx: 13, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_282_63);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_282_65);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000004: function(arg0, arg1) {
@@ -1124,22 +1158,22 @@ function __wasm_bindgen_func_elem_282(arg0, arg1, arg2) {
     wasm.__wasm_bindgen_func_elem_282(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_282_63(arg0, arg1, arg2) {
-    wasm.__wasm_bindgen_func_elem_282_63(arg0, arg1, addHeapObject(arg2));
+function __wasm_bindgen_func_elem_282_65(arg0, arg1, arg2) {
+    wasm.__wasm_bindgen_func_elem_282_65(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_694(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_694(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_698(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_698(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_694_60(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_694_60(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_698_62(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_698_62(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_665(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_669(arg0, arg1, arg2) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        wasm.__wasm_bindgen_func_elem_665(retptr, arg0, arg1, addHeapObject(arg2));
+        wasm.__wasm_bindgen_func_elem_669(retptr, arg0, arg1, addHeapObject(arg2));
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         if (r1) {

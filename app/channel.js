@@ -3,16 +3,8 @@
 // stores the owner's channel (OPFS, IndexedDB where OPFS cannot write), renders, and forwards
 // input. Nothing of the chat app is loaded here.
 import * as slots from './slots.js';
+import * as bridges from './bridges.js';
 
-// The same built-in Snowflake settings as Tor mode (app.js); the lab test hook `ephemTorLab`
-// replaces them (a page script cannot set it: the CSP allows only our files).
-const SNOWFLAKE = {
-  broker: 'https://snowflake-broker.torproject.net/,https://1098762253.rsc.cdn77.org/',
-  fingerprint: '2B280B23E1107BB62ABFC40DDCC8824814F80A72,8838024498816A039FCBBAB14E6F40A0843051FA',
-  ice: 'stun:stun.l.google.com:19302,stun:stun.antisip.com:3478,stun:stun.bluesip.net:3478,stun:stun.dus.net:3478,stun:stun.epygi.com:3478,stun:stun.sonetel.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.voys.nl:3478',
-  nat: '',
-  network: '',
-};
 const INDEX = 0; // one channel per identity in this version (§D.3 allows more)
 // Readers without Tor: channels mirrored to public IPFS (§D.6.3). In channel.html's CSP.
 const GATEWAY = 'https://trustless-gateway.link';
@@ -371,10 +363,12 @@ async function main() {
   // Lab test hook (checks/tor-lab): with the lab's settings injected, the test may drive the
   // app directly (e.g. 1 000 posts for C-P3). Never set otherwise.
   if (globalThis.ephemTorLab) globalThis.ephemChannel = app;
-  const c = globalThis.ephemTorLab || SNOWFLAKE;
-  const log = globalThis.ephemTorLab?.log || globalThis.ephemTorLog;
+  // The built-in Snowflake (bridges.js); the lab test hook `ephemTorLab` replaces it (a page
+  // script cannot set it: the CSP allows only our files).
+  const lab = globalThis.ephemTorLab;
+  const log = lab?.log || globalThis.ephemTorLog;
   if (log) app.tor_log(log);
-  torUp = app.tor_start(c.broker, c.fingerprint, c.ice, c.nat, c.network, new Uint8Array());
+  torUp = app.tor_start(lab?.bridges || bridges.DEFAULT_BRIDGES, lab?.nat || '', lab?.network || '', new Uint8Array());
   torUp.catch((e) => { status('Tor failed', 'bad'); error(e); });
   const tick = setInterval(() => {
     const s = app.tor_status();

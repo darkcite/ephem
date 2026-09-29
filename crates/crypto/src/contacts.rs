@@ -10,6 +10,51 @@ pub const MAX_NICK: usize = 32;
 /// Key-file TLV types (§7.3).
 pub const TLV_CONTACTS: u8 = 0x01;
 pub const TLV_CARD: u8 = 0x04;
+/// Settings sections the adapter keeps as opaque UTF-8 in the key file's other sections
+/// (Appendix F): custom Tor bridge lines, the channels followed, the channels owned.
+pub const TLV_TOR_BRIDGES: u8 = 0x05;
+pub const TLV_FOLLOWS: u8 = 0x06;
+pub const TLV_CHANNELS: u8 = 0x07;
+
+/// The value of section `t` in a TLV area (`others` of [`Contacts::from_tlv`]).
+pub fn section(tlv: &[u8], t: u8) -> Option<&[u8]> {
+    let mut r = Rd::new(tlv);
+    while r.remaining() > 0 {
+        let (k, len) = (r.u8()?, r.u16()? as usize);
+        let v = r.take(len)?;
+        if k == t {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// Replaces (or with an empty `value`, removes) section `t` in a TLV area; the other sections
+/// keep their order. `false` if `value` does not fit a section (64 KiB).
+pub fn set_section(tlv: &mut Vec<u8>, t: u8, value: &[u8]) -> bool {
+    if value.len() > u16::MAX as usize {
+        return false;
+    }
+    let mut out = Vec::with_capacity(tlv.len() + 3 + value.len());
+    let mut r = Rd::new(tlv);
+    while r.remaining() > 0 {
+        let (Some(k), Some(len)) = (r.u8(), r.u16()) else { break };
+        let Some(v) = r.take(len as usize) else { break };
+        if k != t {
+            out.push(k);
+            out.extend_from_slice(&len.to_le_bytes());
+            out.extend_from_slice(v);
+        }
+    }
+    if !value.is_empty() {
+        out.push(t);
+        out.extend_from_slice(&(value.len() as u16).to_le_bytes());
+        out.extend_from_slice(value);
+    }
+    tlv.fill(0);
+    *tlv = out;
+    true
+}
 /// Default lifetime of a new contact card (§7.5).
 pub const CARD_TTL_S: u32 = 30 * 24 * 3600;
 
@@ -361,7 +406,7 @@ mod tests {
         assert!(c.impersonated(b"Bob", &bob).is_none(), "the real Bob");
         assert_eq!(c.save(eve, None, false, &[0xff], 1), Err(ContactError::BadNick));
 
-        let others = [0x07u8, 2, 0, 7, 7];
+        let others = [0x7fu8, 2, 0, 7, 7];
         let tlv = c.to_tlv(&others);
         let (back, kept) = Contacts::from_tlv(&tlv).unwrap();
         assert_eq!(back.list(), c.list());
@@ -369,6 +414,22 @@ mod tests {
         assert!(Contacts::from_tlv(&tlv[..tlv.len() - 1]).is_none(), "truncated");
         c.remove(&bob).unwrap();
         assert_eq!(c.remove(&bob), Err(ContactError::NotFound));
+    }
+
+    #[test]
+    fn sections() {
+        let mut t = vec![0x7fu8, 1, 0, 9];
+        assert!(set_section(&mut t, TLV_TOR_BRIDGES, b"snowflake x"));
+        assert!(set_section(&mut t, TLV_FOLLOWS, b"[]"));
+        assert_eq!(section(&t, TLV_TOR_BRIDGES), Some(&b"snowflake x"[..]));
+        assert!(set_section(&mut t, TLV_TOR_BRIDGES, b"y"));
+        assert_eq!((section(&t, TLV_TOR_BRIDGES), section(&t, 0x7f)), (Some(&b"y"[..]), Some(&[9u8][..])));
+        assert!(set_section(&mut t, TLV_TOR_BRIDGES, b""));
+        assert_eq!(section(&t, TLV_TOR_BRIDGES), None);
+        assert_eq!(t[..4], [0x7f, 1, 0, 9], "other sections keep their order");
+        assert!(!set_section(&mut t, TLV_FOLLOWS, &vec![0; 70_000]));
+        let (_, kept) = Contacts::from_tlv(&Contacts::new().to_tlv(&t)).unwrap();
+        assert_eq!(kept, t, "settings travel as other sections");
     }
 
     #[test]

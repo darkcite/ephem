@@ -37,7 +37,7 @@ impl TorWire {
 use core::cell::RefCell;
 use ephem_core::room::{OWNER_IDX, RoomRole};
 use ephem_core::{Event, MsgRef, Privacy, Session, Settings, State};
-use ephem_crypto::contacts::{ContactError, Contacts, OwnCard};
+use ephem_crypto::contacts::{self, ContactError, Contacts, OwnCard};
 use ephem_crypto::{Identity, PeerId, keyfile};
 use ephem_proto::ErrorCode;
 use ephem_proto::b64url;
@@ -426,6 +426,11 @@ fn contact_err(e: ContactError) -> ErrorCode {
 }
 
 #[inline]
+/// The key-file sections the page may read and write (`App::section`).
+fn settings_section(t: u8) -> bool {
+    matches!(t, contacts::TLV_TOR_BRIDGES | contacts::TLV_FOLLOWS | contacts::TLV_CHANNELS)
+}
+
 fn status(r: Result<(), ErrorCode>) -> u32 {
     match r {
         Ok(()) => 0,
@@ -461,19 +466,38 @@ pub struct App {
 #[wasm_bindgen]
 impl App {
     /// Starts arti over Snowflake, then hosts our onion service (key from the identity seed).
-    /// Progress arrives as TOR events. `broker`: comma-separated broker URLs, tried in order;
-    /// `fingerprint`: comma-separated Snowflake bridges (one or two);
-    /// `ice`: comma-separated `stun:` URLs; `nat`: the broker's
-    /// NAT hint (empty = "unknown"); `network_toml`: empty for the real Tor network; `cache`:
-    /// the directory snapshot of `tor_cache` from an earlier session (warm start), or empty.
-    pub fn tor_start(&self, broker: &str, fingerprint: &str, ice: &str, nat: &str, network_toml: &str, cache: &[u8]) -> u32 {
+    /// Progress arrives as TOR events. `bridges`: Snowflake bridge lines in the Tor Browser
+    /// format (the defaults or the user's, Appendix F.2; see `bridges_check`); `nat`: the
+    /// broker's NAT hint (empty = "unknown"); `network_toml`: empty for the real Tor network;
+    /// `cache`: the directory snapshot of `tor_cache` from an earlier session, or empty.
+    pub fn tor_start(&self, bridges: &str, nat: &str, network_toml: &str, cache: &[u8]) -> u32 {
+        let b = ephem_tor::bridge::parse(bridges);
+        if !b.usable() {
+            return ErrorCode::InvalidInvite as u32;
+        }
         let sf = ephem_tor::web::Snowflake {
-            brokers: ephem_tor::web::list(broker),
-            fingerprints: ephem_tor::web::list(fingerprint),
-            ice: ephem_tor::web::list(ice),
+            brokers: b.brokers,
+            fingerprints: b.fingerprints,
+            ice: b.ice,
             nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
         };
         status(tor::start(&self.inner, sf, network_toml, cache))
+    }
+
+    /// Checks Tor bridge lines (Appendix F.2): JSON `{"usable", "bridges": [fingerprints],
+    /// "brokers", "stun", "problems": [{"line", "error", "text"}]}`.
+    pub fn bridges_check(&self, text: &str) -> String {
+        let b = ephem_tor::bridge::parse(text);
+        let fps: Vec<String> = b.fingerprints.iter().map(|f| format!("\"{f}\"")).collect();
+        let probs: Vec<String> = b.problems.iter().map(|(n, p)| format!("{{\"line\":{n},\"error\":{},\"text\":\"{}\"}}", p.is_error(), p.reason())).collect();
+        format!(
+            "{{\"usable\":{},\"bridges\":[{}],\"brokers\":{},\"stun\":{},\"problems\":[{}]}}",
+            b.usable(),
+            fps.join(","),
+            b.brokers.len(),
+            b.ice.len(),
+            probs.join(",")
+        )
     }
 
     /// The Tor directory as a gzip snapshot for IndexedDB (public data; empty until
@@ -622,6 +646,28 @@ impl App {
     pub fn set_nick(&self, nick: &str) -> u32 {
         let ok = self.inner.borrow_mut().prefs.settings.set_nick(nick.trim().as_bytes());
         status(if ok { Ok(()) } else { Err(ErrorCode::NotPermitted) })
+    }
+
+    // ---- settings kept in the key file (Appendix F; saved identities only) ----
+
+    /// Section `t` of the key file (0x05 Tor bridge lines, 0x06 followed channels, 0x07 owned
+    /// channels) as UTF-8, or empty.
+    pub fn section(&self, t: u8) -> String {
+        let g = self.inner.borrow();
+        match g.saved.as_ref() {
+            Some(s) if settings_section(t) => contacts::section(&s.others, t).map(|v| String::from_utf8_lossy(v).into_owned()).unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+
+    /// Replaces section `t` (empty text removes it). Save the key file afterwards.
+    pub fn set_section(&self, t: u8, text: &str) -> u32 {
+        let mut g = self.inner.borrow_mut();
+        let r = match g.saved.as_mut() {
+            Some(s) if settings_section(t) => if contacts::set_section(&mut s.others, t, text.as_bytes()) { Ok(()) } else { Err(ErrorCode::NotPermitted) },
+            _ => Err(ErrorCode::NotPermitted),
+        };
+        status(r)
     }
 
     // ---- contacts (§7.5, saved identities only) ----

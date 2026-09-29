@@ -5,8 +5,8 @@
 // - Tor mode (tor.html and the Tor build, §28.2) is cached on first use only: direct users never
 //   download it. It belongs to the same version (the build id covers it).
 // VERSION, FILES and TOR_FILES are written by tools/stamp.py (run by ./build.sh).
-const VERSION = 'a903c20b8678';
-const FILES = ["./", "index.html", "app.css", "app.js", "slots.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
+const VERSION = 'af66b94dda7d';
+const FILES = ["./", "index.html", "app.css", "app.js", "slots.js", "bridges.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
 const TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm", "channel.html", "channel.js", "pkg/ephem_channel.js", "pkg/ephem_channel_bg.wasm"];
 const CACHE = `ephem-${VERSION}`;
 const TOR_PATHS = new Set(TOR_FILES.map((f) => new URL(f, self.location).pathname));

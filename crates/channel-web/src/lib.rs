@@ -113,10 +113,14 @@ impl ChannelApp {
 
     // ---- Tor ----
 
-    /// As the chat's Tor mode (`tor.html`): Snowflake broker(s), bridge fingerprint(s), STUN,
-    /// NAT hint, lab network (empty = real Tor), directory snapshot for a warm start.
-    pub fn tor_start(&self, broker: &str, fingerprint: &str, ice: &str, nat: &str, network_toml: &str, cache: &[u8]) -> Result<js_sys::Promise, JsValue> {
-        let sf = Snowflake { brokers: list(broker), fingerprints: list(fingerprint), ice: list(ice), nat: if nat.is_empty() { "unknown".into() } else { nat.into() } };
+    /// As the chat's Tor mode (`tor.html`): Snowflake bridge lines (Appendix F.2), NAT hint, lab
+    /// network (empty = real Tor), directory snapshot for a warm start.
+    pub fn tor_start(&self, bridges: &str, nat: &str, network_toml: &str, cache: &[u8]) -> Result<js_sys::Promise, JsValue> {
+        let b = ephem_tor::bridge::parse(bridges);
+        if !b.usable() {
+            return Err(err("no usable snowflake bridge line"));
+        }
+        let sf = Snowflake { brokers: b.brokers, fingerprints: b.fingerprints, ice: b.ice, nat: if nat.is_empty() { "unknown".into() } else { nat.into() } };
         let tor = Rc::new(Tor::new(sf, network_toml, cache).map_err(err)?);
         self.st.borrow_mut().tor = Some(tor.clone());
         Ok(wasm_bindgen_futures::future_to_promise(async move {

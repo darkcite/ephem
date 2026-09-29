@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-CgFrLPhNSsdAE7G8aHvcB/Lz1wuUOYoMWZDC6bUjPHs='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://snowflake-broker.torproject.net https://1098762253.rsc.cdn77.org; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="a903c20b8678">
-<meta name="ephem-wasm" content="sha384-SrgnVKFMIO9RoBBlqJJwKun40+0btFjkCzgje/K0ldbxaZPS2AFFIMD86jTfAzW2">
-<link rel="stylesheet" href="app.css" integrity="sha384-q0zNj9Ym9VNmbe0X0QjM4R34aODVuBcNq8iN7I7/30higKLLQPhRLKfzzsgtgVQG">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-qYL1j5hepc+DhOfyYxtLrupSUnegCqdXMBqhV2x9iTAoNJbjhnFIRyNbBShZz0Ye","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem_tor.js":"sha384-emyUks6sJa9B874y4P//Qu+fYvvWgjFlMqBDmBGl7qUN/F65VR4pKJ6pK3KeEwhO"}}</script>
-<script type="module" src="app.js" integrity="sha384-qYL1j5hepc+DhOfyYxtLrupSUnegCqdXMBqhV2x9iTAoNJbjhnFIRyNbBShZz0Ye"></script>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-pQ4Z5VjycSBPvV/M/P536r85b7fi5gUF7MCYgWV+TVw='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="af66b94dda7d">
+<meta name="ephem-wasm" content="sha384-LrCm+NcvCwy1pPWd0WLpPB+HMqRp9BlPmeMQhlzQ7rlFlgcDtHl6gnrY7EIY4PTE">
+<link rel="stylesheet" href="app.css" integrity="sha384-Y+x3CqybcsMzsp4p5lJL4MXixo8zhC1qHqCiylCYuPP97ExvFBNXbua3Sv1RVA96">
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-YuBWl64/hL1NEo1FTB1Ar82PN3jU3HVIt9YiFLTEufAzILQj5w64mtOjpt8URuX3","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./bridges.js":"sha384-jdoNia6Eq3azxd8geruCudBE8S3kc0qqpeVo4KUUUO3RhZv7wzWb3nSnCVmZc3kI","./pkg/ephem_tor.js":"sha384-N/PZsAL6YuS4in0mLbT4VyZmRAwKlZFVJ4ToIEOR1fAfXpdZDkcU3IMbVD2gswEW"}}</script>
+<script type="module" src="app.js" integrity="sha384-YuBWl64/hL1NEo1FTB1Ar82PN3jU3HVIt9YiFLTEufAzILQj5w64mtOjpt8URuX3"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -145,7 +145,7 @@
       </div>
     </div>
 
-    <details class="card">
+    <details id="settings" class="card">
       <summary>Connection and privacy settings</summary>
       <label class="direct-only">Addresses in my codes
         <select id="s-privacy">
@@ -165,6 +165,23 @@
         </select>
       </label>
       <p class="note direct-only">STUN servers: Google and Cloudflare. They learn your public IP address, as does your peer. No relay is ever used.</p>
+      <div id="bridges-box" class="sub tor-only">
+        <h3>Tor connection</h3>
+        <label class="row"><input id="r-br-auto" type="radio" name="bridges" checked> Automatic: the Tor Project's Snowflake</label>
+        <label class="row"><input id="r-br-custom" type="radio" name="bridges"> My own bridges</label>
+        <div id="br-custom" hidden>
+          <textarea id="t-bridges" rows="4" placeholder="snowflake 192.0.2.3:80 <fingerprint> url=https://… ice=stun:…:3478" spellcheck="false" autocomplete="off"></textarea>
+          <label class="row"><input id="c-br-fallback" type="checkbox"> Also use the Tor Project's Snowflake when mine cannot be reached</label>
+          <p class="note">Only <strong>snowflake</strong> bridge lines work in a web page: obfs4, WebTunnel and meek need connections a page cannot open. Get lines from whoever runs the bridge, or from bridges.torproject.org (choose snowflake). Signed in, they are kept in your encrypted key file; with a temporary identity, only in this tab.</p>
+        </div>
+        <ul id="br-problems" class="note problems" hidden></ul>
+        <div class="actions">
+          <button id="b-br-apply">Use this setting</button>
+          <button id="b-br-share" hidden>Share my bridges</button>
+        </div>
+        <textarea id="br-link" class="link" rows="2" readonly spellcheck="false" hidden></textarea>
+        <p id="br-state" class="note"></p>
+      </div>
     </details>
   </section>
 

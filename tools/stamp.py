@@ -20,12 +20,12 @@ import os
 import re
 
 APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app")
-MODULES = ["app.js", "slots.js", "pkg/ephem.js"]
-TOR_MODULES = ["app.js", "slots.js", "pkg/ephem_tor.js"]
-HASHED = ["app.css", "app.js", "slots.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest"]
+MODULES = ["app.js", "slots.js", "bridges.js", "pkg/ephem.js"]
+TOR_MODULES = ["app.js", "slots.js", "bridges.js", "pkg/ephem_tor.js"]
+HASHED = ["app.css", "app.js", "slots.js", "bridges.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest"]
 TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm"]
 # Public channels (§27): their own page, script and build; cached on first use like Tor mode.
-CHANNEL_MODULES = ["channel.js", "slots.js", "pkg/ephem_channel.js"]
+CHANNEL_MODULES = ["channel.js", "slots.js", "bridges.js", "pkg/ephem_channel.js"]
 CHANNEL_FILES = ["channel.html", "channel.js", "pkg/ephem_channel.js", "pkg/ephem_channel_bg.wasm"]
 PRECACHE = ["./", "index.html"] + HASHED + [
     "icons/icon.svg",
@@ -37,10 +37,11 @@ PRECACHE = ["./", "index.html"] + HASHED + [
 CSP = ("default-src 'none'; script-src 'self' 'wasm-unsafe-eval' '{importmap}'; style-src 'self'; "
        "img-src 'self' data: blob:; connect-src 'self'{connect}; worker-src 'self'; manifest-src 'self'; "
        "media-src 'self' blob:; base-uri 'none'; form-action 'none'")
-# Tor mode reaches only the Snowflake broker with fetch (§28.6); everything else goes through Tor.
-TOR_CONNECT = " https://snowflake-broker.torproject.net https://1098762253.rsc.cdn77.org"
-# Channel readers without Tor: the public trustless gateway (§D.6.3).
-CHANNEL_CONNECT = " https://trustless-gateway.link"
+# Tor mode reaches only a Snowflake broker with fetch (§28.6); everything else goes through Tor.
+# The broker may be the user's own (bridge lines, Appendix F.2), so any https: origin (decision
+# D5: WebRTC, which carries the proxies, is outside connect-src anyway; scripts stay hash-pinned).
+# Channel readers without Tor reach the public trustless gateway (§D.6.3) under the same rule.
+TOR_CONNECT = " https:"
 
 
 def read(rel):
@@ -100,7 +101,7 @@ def main():
     # channel.html is its own source; only its stamp block is written. Its script is channel.js.
     with open(os.path.join(APP, "channel.html"), encoding="utf-8") as f:
         channel = f.read()
-    block = stamp_block(hashes, CHANNEL_MODULES, "pkg/ephem_channel_bg.wasm", TOR_CONNECT + CHANNEL_CONNECT).replace("{build}", meta, 1)
+    block = stamp_block(hashes, CHANNEL_MODULES, "pkg/ephem_channel_bg.wasm", TOR_CONNECT).replace("{build}", meta, 1)
     block = block.replace('src="app.js" integrity="' + hashes["app.js"] + '"', 'src="channel.js" integrity="' + hashes["channel.js"] + '"')
     write("channel.html", restamp(channel, block))
 

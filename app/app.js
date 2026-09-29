@@ -4,21 +4,9 @@
 // Tor mode (§28): tor.html (html data-mode="tor") loads the Tor build, pkg/ephem_tor*, instead;
 // the direct page never downloads it.
 import * as slots from './slots.js';
+import * as bridges from './bridges.js';
 
 const TOR = document.documentElement.dataset.mode === 'tor';
-// Tor mode: the Snowflake rendezvous and bridge built into the app (as in Tor Browser, §28.3).
-// Its STUN servers serve only the Snowflake proxy connections, never a chat peer (§28.5).
-const SNOWFLAKE = {
-  // The direct broker, then its CDN URL (reachable where the broker's name is blocked; no
-  // domain fronting, which browsers cannot do). Both are in tor.html's CSP.
-  broker: 'https://snowflake-broker.torproject.net/,https://1098762253.rsc.cdn77.org/',
-  // Both Snowflake bridges of the Tor Project (snowflake-01, snowflake-02), as in Tor Browser:
-  // one failing does not stop Tor.
-  fingerprint: '2B280B23E1107BB62ABFC40DDCC8824814F80A72,8838024498816A039FCBBAB14E6F40A0843051FA',
-  ice: 'stun:stun.l.google.com:19302,stun:stun.antisip.com:3478,stun:stun.bluesip.net:3478,stun:stun.dus.net:3478,stun:stun.epygi.com:3478,stun:stun.sonetel.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.voys.nl:3478',
-  nat: '',
-  network: '', // empty: the real Tor network
-};
 let App, qr_svg_path;
 
 const EV = { CODE: 1, CONNECTED: 2, HELLO: 3, CHAT: 4, DELIVERED: 5, DEGRADED: 6, ALIVE: 7, PEER_HIDDEN: 8, CLOSED: 9, ERROR: 10,
@@ -843,6 +831,7 @@ function renderIdentity() {
   if (document.activeElement !== $('i-nick')) $('i-nick').value = app.nick();
   renderContacts();
   renderSlots();
+  bridgesOnIdentity();
 }
 
 // ---- remembered identities (§7.2) and contacts (§7.5) ---------------------------------------
@@ -1092,8 +1081,13 @@ function saveIdentity() {
   if (p1 !== $('i-pass2').value) return error('The passphrases differ.');
   const pw = enc.encode(p1);
   $('i-pass').value = $('i-pass2').value = '';
-  const blob = app.save_identity(label, pw); // pw is wiped by Rust
+  let blob = app.save_identity(label, pw); // pw is wiped by Rust
   if (!blob.length) return;
+  // Bridges pasted under the temporary identity move into the new key file.
+  if (ramBridges && app.set_section(0x05, ramBridges) === 0) {
+    blob = app.resave_identity();
+    ramBridges = '';
+  }
   download(blob, keyFileName());
   $('t-keytext').value = b64u(blob);
   $('id-saved').hidden = false;
@@ -1235,7 +1229,7 @@ const bc = 'BroadcastChannel' in globalThis ? new BroadcastChannel('p2pchat-code
 
 function takeFragment() {
   const h = location.hash;
-  if (!/^#[iarqtk]=/.test(h)) return null;
+  if (!/^#[iarqtkb]=/.test(h)) return null;
   history.replaceState(null, '', location.pathname);
   return h;
 }
@@ -1353,15 +1347,120 @@ function connectContact(hex, name) {
 }
 
 // Test hooks, set before the page loads (a page script cannot set them: the CSP allows only our
-// files): `ephemTorLab`, the offline lab's broker, bridge and Tor network (checks/tor-lab);
-// `ephemTorLog`, an arti log level for the console (diagnostics of live runs).
-async function startTor() {
-  const c = globalThis.ephemTorLab || SNOWFLAKE;
-  const log = globalThis.ephemTorLab?.log || globalThis.ephemTorLog;
+// files): `ephemTorLab`, the offline lab's bridge lines, NAT hint and Tor network
+// (checks/tor-lab; `bridges: null` = use the settings as a user would); `ephemTorLog`, an arti
+// log level for the console (diagnostics of live runs).
+let torStarted = false, torCustom = false, ramBridges = '';
+function beginTor() {
+  const lab = globalThis.ephemTorLab;
+  if (lab?.bridges) return startTor(lab.bridges, false);
+  if (bridges.waiting()) {
+    $('tor-state').textContent = 'Tor is waiting for your own bridges: sign in with your identity, or paste them under “Connection and privacy settings” → Tor connection.';
+    status('Tor waits for bridges');
+    return;
+  }
+  startTor(bridges.DEFAULT_BRIDGES, false);
+}
+
+async function startTor(lines, custom) {
+  if (torStarted) return;
+  const lab = globalThis.ephemTorLab;
+  const log = lab?.log || globalThis.ephemTorLog;
   if (log) app.tor_log(log);
-  torCacheKey = `dir:${c.fingerprint}`;
-  app.tor_start(c.broker, c.fingerprint, c.ice, c.nat, c.network, await torCache());
+  const check = JSON.parse(app.bridges_check(lines));
+  if (!check.usable) {
+    $('tor-state').textContent = 'Your bridges cannot be used: fix them under “Connection and privacy settings” → Tor connection.';
+    return;
+  }
+  torStarted = true;
+  torCustom = custom;
+  torCacheKey = `dir:${check.bridges.join(',')}`;
+  app.tor_start(lines, lab?.nat || '', lab?.network || '', await torCache());
   setInterval(saveTorCache, 30 * 60 * 1000);
+  renderBridges();
+}
+
+// ---- Tor bridges (Appendix F.2) ----
+const savedBridges = () => (app.identity_label() ? app.section(0x05) : ramBridges);
+
+function renderBridges(text = savedBridges()) {
+  if (!TOR) return;
+  const { lines, fallback } = bridges.unsaved(text);
+  if (document.activeElement !== $('t-bridges') && !$('t-bridges').dataset.draft) {
+    $('r-br-custom').checked = !!lines;
+    $('r-br-auto').checked = !lines;
+    $('t-bridges').value = lines;
+    $('c-br-fallback').checked = fallback;
+  }
+  $('br-custom').hidden = !$('r-br-custom').checked;
+  $('b-br-share').hidden = !lines;
+  const using = !torStarted ? '' : torCustom ? 'Tor is using your bridges.' : "Tor is using the Tor Project's Snowflake.";
+  const differs = torStarted && !!lines !== torCustom;
+  const fromLink = $('t-bridges').dataset.draft === 'link' ? 'Bridges from a link: check them, then “Use this setting”.' : '';
+  $('br-state').textContent = [fromLink, using, differs ? 'Your saved setting differs: it applies after a reload.' : ''].filter(Boolean).join(' ');
+}
+
+function showBridgeProblems(check) {
+  const ul = $('br-problems');
+  ul.replaceChildren();
+  for (const p of check.problems) {
+    const li = document.createElement('li');
+    li.className = p.error ? 'bad' : 'dim';
+    li.textContent = `Line ${p.line}: ${p.error ? 'not used' : 'note'}: ${p.text}.`;
+    ul.append(li);
+  }
+  if (!check.usable) {
+    const li = document.createElement('li');
+    li.className = 'bad';
+    li.textContent = 'No usable snowflake bridge: a line needs a fingerprint, url=https://… and ice=stun:….';
+    ul.append(li);
+  }
+  ul.hidden = !ul.children.length;
+}
+
+async function applyBridges() {
+  const custom = $('r-br-custom').checked;
+  const text = custom ? bridges.saved($('t-bridges').value, $('c-br-fallback').checked) : '';
+  if (custom) {
+    const check = JSON.parse(app.bridges_check($('t-bridges').value));
+    showBridgeProblems(check);
+    if (!check.usable) return;
+  } else $('br-problems').hidden = true;
+  if (app.identity_label()) {
+    if (app.set_section(0x05, text) !== 0) return;
+    await persist();
+  } else ramBridges = text;
+  bridges.setWaiting(custom);
+  delete $('t-bridges').dataset.draft;
+  renderBridges(text);
+  if (!torStarted) {
+    startTor(custom ? bridges.effective(text) : bridges.DEFAULT_BRIDGES, custom);
+  } else if (custom !== torCustom || custom) {
+    const again = app.identity_label() ? 'sign in again' : 'paste your bridges again (a temporary identity keeps them only in this tab)';
+    if (confirm(`Tor restarts with this setting: the page reloads, open chats end, and you ${again}. Reload now?`)) location.reload();
+  }
+}
+
+// A `#b=` link fills the setting (not applied until the user says so).
+function openBridgeLink(frag) {
+  const lines = bridges.fromLink(frag);
+  if (lines === null) return error('This bridge link is damaged.');
+  $('settings').open = true;
+  $('r-br-custom').checked = true;
+  $('br-custom').hidden = false;
+  $('t-bridges').value = lines;
+  $('t-bridges').dataset.draft = 'link';
+  showBridgeProblems(JSON.parse(app.bridges_check(lines)));
+  renderBridges();
+  $('bridges-box').scrollIntoView();
+}
+
+// After a sign-in: the identity's bridges start a waiting Tor, or are offered for the next start.
+function bridgesOnIdentity() {
+  if (!TOR) return;
+  const text = savedBridges();
+  renderBridges(text);
+  if (!torStarted && bridges.waiting() && text) startTor(bridges.effective(text), true);
 }
 
 // Warm start (§28.3): the public Tor directory (consensus, authority certificates,
@@ -1399,8 +1498,9 @@ const io = new IntersectionObserver((entries) => {
 }, { threshold: 0.6 });
 
 async function main() {
-  // A Tor invite opens in Tor mode, every other code in direct mode (modes never mix, §28.2).
-  if (location.hash.startsWith('#t=') !== TOR && /^#[iarqt]=/.test(location.hash)) {
+  // A Tor invite or bridge link opens in Tor mode, every other code in direct mode (modes never
+  // mix, §28.2).
+  if (/^#[tb]=/.test(location.hash) !== TOR && /^#[iarqtb]=/.test(location.hash)) {
     location.replace((TOR ? './' : 'tor.html') + location.hash);
     return;
   }
@@ -1414,7 +1514,7 @@ async function main() {
   app = new App();
   metaPtr = app.meta_ptr();
   renderIdentity();
-  if (TOR) startTor();
+  if (TOR) beginTor();
 
   const codeBoxes = document.querySelectorAll('.codebox');
   for (const box of codeBoxes) {
@@ -1425,6 +1525,14 @@ async function main() {
   $('b-apply').onclick = () => applyCode($('t-code').value, false);
   const cardOnly = (t) => (app.card_nick(t.trim()) !== undefined ? addCard(t.trim()) : error('That is not a contact card. Cards are links with #k=; invites go in “Got a code?”.'));
   $('b-add-card').onclick = () => cardOnly($('t-card').value);
+  $('r-br-auto').onchange = $('r-br-custom').onchange = () => { $('br-custom').hidden = !$('r-br-custom').checked; };
+  $('b-br-apply').onclick = applyBridges;
+  $('t-bridges').oninput = () => { $('t-bridges').dataset.draft = '1'; };
+  $('b-br-share').onclick = () => {
+    $('br-link').value = bridges.shareLink($('t-bridges').value);
+    $('br-link').hidden = false;
+    $('br-link').select();
+  };
   $('b-scan-card').onclick = () => scan(cardOnly);
   $('b-scan').onclick = () => scan((t) => applyCode(t, true));
   $('b-answer').onclick = () => applyCode($('t-answer').value, false);
@@ -1570,6 +1678,7 @@ async function main() {
   status(TOR ? 'starting Tor' : 'ready');
   show('v-start');
   if (!frag) return;
+  if (frag.startsWith('#b=')) return openBridgeLink(frag);
   if (frag.startsWith('#i=') || frag.startsWith('#t=') || frag.startsWith('#k=')) return applyCode(frag, false);
   if (await forward(frag)) {
     $('note-title').textContent = 'Code delivered';
