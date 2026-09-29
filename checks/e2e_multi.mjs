@@ -60,8 +60,14 @@ try {
   await say(b, 'are you there?');
   await a.waitForFunction(() => /Bob.*1/.test([...document.querySelectorAll('#chats li')].map((l) => l.textContent).join('|')), null, { timeout: 10_000 });
   check('a message in the background chat raises its unread count', await a.isVisible('#badge-chats') && (await a.textContent('#badge-chats')) === '1');
-  await pick(a, 'Bob');
+  const note = a.locator('#notices .notice', { hasText: 'Bob' });
+  await say(b, 'hello again');
+  await a.waitForFunction(() => /2 new messages/.test(document.querySelector('#notices')?.textContent), null, { timeout: 10_000 });
+  check('an in-app notice names the other chat, one per chat (a burst updates its count), without the text',
+    await note.count() === 1 && !(await a.textContent('#notices')).includes('are you there'), (await note.textContent()).trim());
+  await note.click();
   await a.waitForFunction(() => document.querySelector('#log')?.textContent.includes('are you there?'));
+  check('tapping the notice opens that chat', await a.locator('#notices .notice').count() === 0);
   check('switching chats: its messages, its draft; unread cleared', (await a.inputValue('#t-msg')) === 'draft for Bob' && await a.isHidden('#badge-chats'));
   await a.fill('#t-msg', '');
   await say(a, 'yes, Bob');

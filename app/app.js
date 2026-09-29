@@ -288,6 +288,40 @@ function notify(title) {
   try { new Notification(title, { tag: 'ephem', silent: false }); } catch { /* not in this context */ }
 }
 
+// In-app notices (docs/P2P-CHAT.md F.6): something happened out of view (another chat, a
+// followed channel). One notice per source (a burst of messages updates its count), at most 3
+// on screen, gone after 6 s or on a tap, which opens the source. Never the message text: only
+// who and how many, as for system notifications (P7 applies to the screen too).
+const NOTICE_MS = 6000;
+const MAX_NOTICES = 3;
+const notices = new Map();           // key → { el, n, timer }
+function notice(key, title, sub, open) {
+  let x = notices.get(key);
+  if (!x) {
+    const el = document.createElement('div');
+    el.className = 'notice';
+    el.setAttribute('role', 'status');
+    el.innerHTML = '<span class="grow"><b></b><span class="sub"></span></span><button class="ghost" aria-label="Dismiss">×</button>';
+    x = { el, n: 0, timer: 0 };
+    notices.set(key, x);
+    $('notices').prepend(el);
+    while (notices.size > MAX_NOTICES) dropNotice(notices.keys().next().value);
+  }
+  x.n++;
+  x.el.querySelector('b').textContent = title;
+  x.el.querySelector('.sub').textContent = typeof sub === 'function' ? sub(x.n) : sub;
+  x.el.onclick = (e) => { dropNotice(key); if (!e.target.closest('button')) open?.(); };
+  clearTimeout(x.timer);
+  x.timer = setTimeout(() => dropNotice(key), NOTICE_MS);
+}
+function dropNotice(key) {
+  const x = notices.get(key);
+  if (!x) return;
+  clearTimeout(x.timer);
+  x.el.remove();
+  notices.delete(key);
+}
+
 function renderCodeBox(box, kind, code) {
   const link = `${baseUrl()}#${FRAG[kind]}=${code}`;
   box.querySelector('.qr').innerHTML = qr_svg_path(link);
@@ -396,8 +430,11 @@ function addMessage(c, sender, seq, body, ttl, reply) {
   if (mine && c.room) roomTick(c, m);
   c.preview = `${mine ? 'You: ' : c.room ? c.nameOf(sender) + ': ' : ''}${body.slice(0, 60)}`;
   c.at = Date.now();
-  if (!mine && (c !== shown || document.hidden)) {
+  if (!mine && (c !== shown || tab !== 'chats' || document.hidden)) {
     if (c !== shown) c.unread++;
+    if (c !== shown || tab !== 'chats') {
+      notice(`chat:${c.id}`, c.room ? `${c.nameOf(sender)} in ${c.title}` : c.title, (n) => (n === 1 ? 'New message' : `${n} new messages`), () => display(c));
+    }
     notify(`New message in Ephem${c.room ? ' (room)' : ''}`);
   }
   renderList();
@@ -628,7 +665,10 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       openChat(c, c.room ? 'Connected to the room owner. The member list arrives next.'
         : TOR ? 'Connected through Tor: neither of you sees the other\'s IP address. Messages are end-to-end encrypted and exist only in these two tabs.'
           : 'Connected directly. Messages are end-to-end encrypted and exist only in these two tabs.');
-      if (c !== shown) notify('A chat connected in Ephem');
+      if (c !== shown) {
+        notify('A chat connected in Ephem');
+        notice(`chat:${c.id}`, c.title || 'A chat', 'Connected', () => display(c));
+      }
       break;
     }
     case EV.HELLO: {
@@ -786,6 +826,7 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       c.title = 'From your contact card';
       later(() => showCardRequest(c));
       notify('Someone wants to connect through your contact card');
+      if (c !== shown) notice(`chat:${c.id}`, 'Someone has your contact card', 'Wants to connect: tap to answer', () => display(c));
       break;
   }
 };
@@ -1976,7 +2017,7 @@ async function main() {
   wasm = await mod.default({ module_or_path: fetch(wasmUrl, wasmSri ? { integrity: wasmSri } : {}) });
   app = new App();
   metaPtr = app.meta_ptr();
-  channels.init({ TOR, phone, app, mod: TOR ? mod : null, showPane, setTab, setStatus, error, persist, scan, download, notify, ramSections: () => !app.identity_label() });
+  channels.init({ TOR, phone, app, mod: TOR ? mod : null, showPane, setTab, setStatus, error, persist, scan, download, notify, notice, ramSections: () => !app.identity_label() });
   renderIdentity();
   if (TOR) beginTor();
 

@@ -46,6 +46,7 @@ export function init(c) {
     engine = Promise.resolve(ch);
     if (globalThis.ephemTorLab) globalThis.ephemChannel = ch; // lab test hook (C-P3)
   }
+  if (globalThis.ephemTorLab) globalThis.ephemChannelsRefresh = refreshAll; // lab: refresh now
 }
 
 /** Tor mode: the chats' Tor client is up (ev::TOR 2). */
@@ -153,7 +154,7 @@ async function loadEngine() {
 let running = false;
 async function startAll() {
   if (!ch || torResolve) return;
-  for (const o of owned) if (!o.onion && !o.away) serveOwned(o);
+  for (const o of owned) if (!o.onion && !o.away && !o.restoring) serveOwned(o);
   syncVault();
   if (running) return;
   running = true;
@@ -301,7 +302,11 @@ function take(f, r) {
   const onScreen = current?.read === f.n && !$('v-read').hidden;
   if (onScreen) f.seen = newest;
   f.fresh = onScreen ? 0 : live.filter((p) => p.seq > (f.seen || 0)).length;
-  if (f.fresh && r.sequence > before && document.hidden) ctx.notify(`New post in ${f.t}`);
+  if (f.fresh && r.sequence > before) {
+    if (document.hidden) ctx.notify(`New post in ${f.t}`);
+    const fresh = f.fresh;
+    ctx.notice(`channel:${f.n}`, f.t, fresh === 1 ? 'New post' : `${fresh} new posts`, () => { ctx.setTab('follow'); showReader(f.n, f.o); });
+  }
 }
 
 // ---- reader -----------------------------------------------------------------------------------
@@ -530,7 +535,7 @@ function renderOwned() {
     li.innerHTML = '<span class="dot"></span><span class="grow"><b></b><span class="sub"></span></span>';
     li.querySelector('b').textContent = o.t || `Channel ${o.i}`;
     avatar(li, o.t || o.n);
-    li.querySelector('.sub').textContent = o.away ? 'written by your other device' : REACH[r] || 'offline';
+    li.querySelector('.sub').textContent = o.restoring ? 'restoring from your other device…' : o.away ? 'written by your other device' : REACH[r] || 'offline';
     li.onclick = () => { ctx.setTab('own'); showOwner(o.i); };
     ul.append(li);
   }
@@ -552,7 +557,7 @@ function showOwner(i) {
   const o = owned.find((x) => x.i === i);
   if (!o) return newChannel();
   current = { own: i };
-  if (o.away) return showAway(o);
+  if (o.away || o.restoring) return showAway(o);
   ctx.showPane('v-own');
   renderOwn(o);
   renderOwned();
@@ -735,6 +740,12 @@ const signedIn = () => { try { return !!ch?.label(); } catch { return false; } }
 const leasedElsewhere = (v) => !!v && v.device !== deviceId() && v.until * 1000 > Date.now();
 const timeOf = (s) => new Date(s * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+/** The line under My channels that says what the vault sync is doing. */
+function syncState(text) {
+  $('own-sync').hidden = !text;
+  $('own-sync').textContent = text;
+}
+
 /** Another identity: nothing known about its vault yet; this device writes until told. */
 function resetVault() {
   vault = null;
@@ -745,15 +756,20 @@ function resetVault() {
 async function syncVault(takeover = false) {
   if (!ch || !signedIn() || syncing) return;
   syncing = true;
+  let found = null;                  // null: the vault could not be read
   try {
+    if (torResolve) syncState('Starting Tor to look for this identity\'s channels on your other devices…');
     await torUp;
+    syncState('Looking for this identity\'s channels (the list your devices share, through Tor)…');
     const [host, root] = routing();
     try {
       const j = await ch.vault_fetch(host, root);
       vault = j ? JSON.parse(j) : null;
+      found = !!vault;
     } catch (e) {
       // Offline, or the routing service is down: keep going as we are (this device writes).
       console.info('vault:', e?.message || e);
+      syncState(`Could not read the list of your channels (${e?.message || e}); trying again in a few minutes.`);
       if (!takeover) return;
     }
     if (leasedElsewhere(vault) && !takeover) return standDown();
@@ -764,7 +780,17 @@ async function syncVault(takeover = false) {
       await scanOwned(); // Rust released them: reopen from the store
       for (const o of owned) o.away = false;
     }
-    for (const e of vault?.channels || []) await restore(e, takeover);
+    // Listed at once, restored side by side (each can take up to RESTORE_MS).
+    const todo = (vault?.channels || []).filter((e) => takeover || !owned.some((o) => o.i === e.index));
+    for (const e of todo) if (!owned.some((o) => o.i === e.index)) owned.push({ i: e.index, n: ch.channel_name(e.index), t: e.title, onion: '', restoring: true });
+    owned.sort((a, b) => a.i - b.i);
+    renderOwned();
+    if (todo.length) syncState(`Restoring ${todo.length} channel${todo.length === 1 ? '' : 's'} from your other device or mirrors…`);
+    await Promise.all(todo.map((e) => restore(e, takeover)));
+    // No list published yet (an older version, or the other device was never online since):
+    // this identity's first channels may still be online at their own addresses.
+    if (found === false && !owned.length) await probeOwned();
+    syncState(found === false && !owned.length ? 'No channels found for this identity. If you created one on another device, open Ephem there (with Tor) once: it then publishes the list, and this device finds it.' : '');
     await publishVault();
     for (const o of owned) if (!o.onion) serveOwned(o);
     renderOwned();
@@ -799,7 +825,7 @@ function standDown() {
 /** Channel `e` of the vault on this device: the newest version from its onion or mirrors,
  *  else (none answers) continued without its older posts. `fresh`: re-read even if stored. */
 async function restore(e, fresh) {
-  const have = owned.find((o) => o.i === e.index);
+  const have = owned.find((o) => o.i === e.index && !o.restoring);
   if (have && !fresh) return;
   const n = ch.channel_name(e.index);
   const onions = [ch.channel_onion(e.index), ...e.mirrors].join(',');
@@ -816,8 +842,29 @@ async function restore(e, fresh) {
     ch.resume(e.index);
     await store('channels', n, ch.car(e.index), ch.record(e.index));
   }
-  if (!have) owned.push({ i: e.index, n, t: e.title, onion: '' });
+  const o = owned.find((x) => x.i === e.index);
+  if (o) delete o.restoring;
+  else owned.push({ i: e.index, n, t: e.title, onion: '' });
   owned.sort((a, b) => a.i - b.i);
+  renderOwned();
+}
+
+/** Without a vault: the first channels of this identity read from their own onions (another
+ *  device may be serving them). Found ones are kept here like restored ones. */
+const PROBE = 4;
+async function probeOwned() {
+  syncState('No list of your channels yet: asking your first channel addresses directly…');
+  await Promise.all(Array.from({ length: PROBE }, async (_, i) => {
+    const n = ch.channel_name(i);
+    try {
+      const r = await Promise.race([ch.read(n, ch.channel_onion(i), 0), new Promise((_, no) => setTimeout(() => no(new Error('no answer')), RESTORE_MS))]);
+      ch.open(i, r.car(), r.record());
+      await store('channels', n, ch.car(i), ch.record(i));
+      owned.push({ i, n, t: JSON.parse(ch.view(i)).title, onion: '' });
+    } catch { /* no channel at this index, or its host is offline */ }
+  }));
+  owned.sort((a, b) => a.i - b.i);
+  renderOwned();
 }
 
 /** Older posts missing here: joined from the channel's onion or mirrors when one has them. */
@@ -882,7 +929,10 @@ async function renew() {
 function showAway(o) {
   ctx.showPane('v-own-away');
   $('a-title').textContent = o.t || `Channel ${o.i}`;
-  $('a-state').textContent = vault ? `Your other device writes this channel (its lease runs until at least ${timeOf(vault.until)}; it renews it while it runs).` : 'Your other device writes this channel.';
+  $('b-takeover').hidden = !!o.restoring;
+  $('a-state').textContent = o.restoring
+    ? 'Restoring this channel on this device: reading it from your other device or its mirrors through Tor (up to a minute and a half). If none of them is online, it continues here without its older posts, which join later.'
+    : vault ? `Your other device writes this channel (its lease runs until at least ${timeOf(vault.until)}; it renews it while it runs).` : 'Your other device writes this channel.';
   renderOwned();
 }
 

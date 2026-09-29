@@ -26,10 +26,10 @@ const { server: routing, cfg, routed } = await routingStandIn();
 const lab = { ...(REAL ? {} : { routing: cfg }), leaseS: LEASE_S, restoreMs: REAL ? 90_000 : 40_000 };
 const browsers = [];
 
-async function device(who) {
+async function device(who, extra = {}) {
   const b = await launch();
   browsers.push(b);
-  const ctx = await torContext(await b.newContext({ acceptDownloads: true }), lab);
+  const ctx = await torContext(await b.newContext({ acceptDownloads: true }), { ...lab, ...extra });
   const p = await ctx.newPage();
   watch(p, who);
   record(p, who);
@@ -123,6 +123,30 @@ try {
   const vc2 = await view(C.p);
   check('C\'s post continues the same chain (seq 3 on top of the 2 missing ones)', vc2.posts[0]?.seq === 3 && vc2.missing === 2);
   await C.p.waitForFunction(() => /Online through Tor/.test(document.querySelector('#o-serving')?.textContent), null, { timeout: T });
+  // ---- no vault at all (a device that never published one): found at the channel's onion ----
+  if (!REAL) {
+    // E cannot publish (its routing host is dead), so it leaves no vault; F finds none.
+    const E = await device('E', { routing: { ...cfg, host: '127.0.0.1:9' } });
+    await toSettings(E.p);
+    await E.p.click('#b-id-save');
+    await E.p.fill('#i-label', 'Vault test');
+    await E.p.fill('#i-pass', PASS);
+    await E.p.fill('#i-pass2', PASS);
+    const [dl2] = await Promise.all([E.p.waitForEvent('download'), E.p.click('#b-id-do-save')]);
+    const key2 = fs.readFileSync(await dl2.path());
+    await E.p.click('#tab-own');
+    await E.p.waitForSelector('#v-own-new:not([hidden]) #ch-new:not([hidden])', { timeout: 30_000 });
+    await E.p.fill('#i-title', 'Unlisted');
+    await E.p.check('#c-understood');
+    await E.p.click('#b-create');
+    await E.p.waitForFunction(() => /Online through Tor/.test(document.querySelector('#o-serving')?.textContent), null, { timeout: T });
+    const F = await device('F');
+    await signIn(F.p, key2);
+    await F.p.click('#tab-own');
+    const t4 = Date.now();
+    await F.p.waitForFunction(() => /Unlisted/.test(document.querySelector('#owns')?.textContent), null, { timeout: T });
+    check('no vault published: the new device still finds the channel at its own onion (a probe)', true, `${Date.now() - t4} ms`);
+  }
   check('no page errors or CSP violations', unexpected(problems).length === 0, unexpected(problems).join(' | '));
 } catch (e) {
   check('vault flow', false, e.message.split('\n')[0]);

@@ -131,6 +131,19 @@ try {
   await r.waitForFunction(() => [...document.querySelectorAll('#r-posts .body')].some((b) => b.textContent === 'fourth post'), null, { timeout: T });
   check('a followed channel refreshes: the new post arrives', true);
 
+  // Elsewhere in the app (here: Chats), a new post in a followed channel shows an in-app notice.
+  await tab(r, 'chats');
+  await o.fill('#t-post', 'fifth post');
+  await o.click('#b-post');
+  await o.waitForFunction(() => [...document.querySelectorAll('#o-posts .body')].some((b) => b.textContent === 'fifth post'));
+  await r.evaluate(() => globalThis.ephemChannelsRefresh());
+  const note = r.locator('#notices .notice', { hasText: 'Lab news' });
+  await note.waitFor({ timeout: T });
+  const noteText = (await note.textContent()).trim();
+  await note.click();
+  await r.waitForFunction(() => !document.querySelector('#v-read').hidden && [...document.querySelectorAll('#r-posts .body')].some((b) => b.textContent === 'fifth post'), null, { timeout: T });
+  check('a new post in a followed channel: an in-app notice, and a tap opens the channel', /New post/.test(noteText), noteText);
+
   // The second channel reads the same way.
   await r.goto(link2.replace('/tor.html#', '/tor.html?2#'));
   await r.waitForFunction(() => document.querySelector('#r-title')?.textContent === 'Lab two', null, { timeout: T });
