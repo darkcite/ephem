@@ -1781,6 +1781,67 @@ https://<owner>.github.io/ephem/channel.html#c=<ipns-name>&o=<channel-onion>[&m=
 | C-P5 | OPFS quota and eviction with `persist()` on each browser | ⏳ |
 | E8 | A hidden desktop tab with an open DataChannel keeps its timers running | ✅ Chrome and Firefox; ❌ Safari (§24.2 E8) |
 
+### D.11 One identity on several devices: the vault (proposed, not built)
+
+**Problem (owner report, 2026-09-29).** A channel lives in the storage of the browser that created it (OPFS/IndexedDB, D.5). The same identity signed in on another device, in a private window, in the iPhone Home Screen app instead of Safari (iOS keeps their storage apart), or in Safari after 7 days without a visit (ITP may evict storage), finds no channel. Today the only move is the manual backup (Export → Import).
+
+**Goal.** A device that has only the identity (key file + passphrase) finds its channels and can keep posting, **even when every other device of this identity and every mirror is off**, with no server of ours and no companion program (P10).
+
+**The honest limit first.** IPFS stores nothing by itself: bytes survive only where some node keeps them. With all our devices and mirrors off, three places remain, each with a different reach:
+
+| Where | Holds | Survives with everything off | Cost |
+|---|---|---|---|
+| **The key file** (a TLV section, like the follow list) | A snapshot as of the last save/export | For ever (it is the user's file) | Stale: only as fresh as the last export |
+| **An IPNS record on the public DHT** (the vault record, V.2) | ≤ ~6 KiB, encrypted: the channel list, heads, mirrors, the writer lease | **~36–48 h** after the last republish (DHT nodes drop records older than their record age; to be measured, spike V-P2) | Free, anonymous (published through a Tor exit, as D.5.2) |
+| **An IPFS storage provider** the user chooses (optional, V.4) | The whole channel (CARs), plain: the channel is public anyway | For as long as the account lasts | An account with a third party; the upload goes through a Tor exit |
+
+Everything else follows from this table: the vault makes the *state* follow the identity for free; the *content* follows it for free only while some holder is online (another device, a mirror, a provider), and otherwise the new device **continues the channel without its history** and back-fills it later.
+
+#### D.11.1 Keys (all derived, nothing new to keep)
+
+- `vault_sign = HKDF(seed, "p2pchat/vault-sign")` → Ed25519; its IPNS name is the vault name. One-way like D.3: the name links to nothing (not the chat `PeerId`, onion, or any channel).
+- `vault_key = HKDF(seed, "p2pchat/vault-key")` → 32-byte XChaCha20-Poly1305 key (crate `chacha20poly1305`, already a dependency of `crates/crypto`).
+- Two channels of one identity are linked **only inside the ciphertext**; the vault name is never given to followers or mirrors, so they cannot tie channels together.
+
+#### D.11.2 The vault record
+
+- An **IPNS V2-only** record (no V1 fields: they would duplicate the value and halve the space) under the vault name; `sequence` grows on every change; `validity = now + 30 days`; `ttl = 60 s`.
+- Its value is `/ipfs/<CIDv1 raw, identity multihash, base58btc>`: the ciphertext **inlined in the CID**, so no block has to be fetched from anyone; the device decodes it from the record itself.
+- Ciphertext = `nonce(24) ‖ XChaCha20-Poly1305(vault_key, AAD = "ephem-vault-v1" ‖ sequence, plaintext)`; the plaintext is padded to the next of 1, 2, 4 or 6 KiB so its size does not reveal what changed.
+- Plaintext (TLV, as the key file): version; **writer lease** `{device id (random, per browser), until}`; per owned channel `{index, title, head page CID, root CID, count, record sequence, updated, mirrors[]}` (≈ 250 B each: 16 channels ≈ 4 KiB); the follow list only if it still fits (it also lives in the key file); optional storage-provider settings (V.4), token included (it is encrypted).
+- Size budget: IPNS records are limited to **10 KiB** (IPNS spec; `ipns::MAX_RECORD`); the base58 CID text expands the ciphertext ×1.37, so **≈ 6 KiB of plaintext**. Spike V-P1 confirms `delegated-ipfs.dev` accepts and serves a record of that size with an identity-CID value.
+
+#### D.11.3 Flows
+
+1. **Publish.** Every device of the identity, once Tor is up, `PUT`s the vault record through a Tor exit to `https://delegated-ipfs.dev/routing/v1/ipns/<vault name>` (the D.5.2 path, spike C-P4 ✅) on each change, and **re-signs and republishes it every 12 h** while it runs, which keeps it inside the DHT's record age. The channel records themselves are republished as today (D.5.3), by the owner and by any mirror.
+2. **Sign in on a new device.** Derive the vault name, `GET` the record (routing API or `trustless-gateway.link/ipns/<name>?format=ipns-record`), verify the IPNS signature (V2 data), decrypt. No vault found (never published, or older than the DHT keeps): fall back to the **key file's snapshot**, then to probing indices 0–15 (D.3 channel names) for their channel records on the routing API.
+3. **Fetch the content** of each channel, first source wins, all verified by CID and signatures as a reader does (D.6): the channel's own onion (another device hosting it), the mirrors listed in the vault, the storage provider / gateway caches (`trustless-gateway.link`, CAR by root CID).
+4. **Nothing answers: continue without history.** The device knows the root and head-page CIDs, the count, the manifest fields and the sequence from the vault. It rebuilds and re-signs the manifest, starts a **new head page whose `prev` is the old head page's CID** (D.5.1), and posts on top: `sequence` and `count` continue, and every reader sees one chain. The UI says "N older posts are not on this device; they appear when your other device, a mirror or your storage provider is online". Back-fill is automatic: when the old head page becomes fetchable, it is verified against the CID already linked and stored.
+5. **One writer at a time (the lease).** Two devices posting at once would fork the chain (the higher `sequence` wins on IPNS, the other device's posts drop out), and two tabs hosting the same channel onion compete for its descriptor. So the vault carries a lease: the device that hosts/posts writes `{its id, now + 15 min}` and renews it while it runs. Another device that finds a live lease reads the channel (as a follower would) and offers **"Take over here"**; taking over writes a new lease, and the old device, on its next renewal, sees it lost the lease, stops serving the channel onion and says so. An expired lease (the other device is off) is taken silently. Before every post the writer re-reads the channel's latest record, so a stale device never overwrites a newer version.
+
+#### D.11.4 Optional: keep the whole channel online with a storage provider
+
+- Settings → "Keep a copy with a storage provider": the user pastes an API token of an IPFS pinning/storage service that accepts **CAR uploads over HTTPS with CORS** (candidates to test in spike V-P3: Pinata, Filebase, Storacha). The owner's tab uploads each new CAR (the diff since the last upload) through a Tor exit.
+- Effect: the channel is readable **by everyone** from `trustless-gateway.link` while all devices and mirrors are off, and a new device gets the full history (step 3).
+- Costs, shown before enabling: a third party (its IP is the Tor exit's); the **account** may identify the user if it was opened with a real email or payment, which links that person to the channel; free tiers have size limits. The token lives only in the vault and the key file, encrypted.
+
+#### D.11.5 Security notes
+
+- The vault is public ciphertext: anyone can fetch it; only the seed opens it. The vault name, the channel names and the channel onions are all independent HKDF outputs, so an observer cannot group them; the DHT and the routing API see only Tor exits.
+- A key-file thief gets the vault too (as they get the channels today, D.3): the identity is the root secret either way.
+- A replayed old vault record is refused by `sequence` once a newer one was seen on this device; on a brand-new device the worst case is a stale state, and step 5 still re-reads each channel's own (independently signed) latest record before writing.
+
+#### D.11.6 Phases and spikes
+
+| ID | Scope / question | Done when |
+|---|---|---|
+| V-P1 (spike) | `delegated-ipfs.dev` accepts and returns a V2-only record of ~9.5 KiB with an identity-CID value; `trustless-gateway.link` returns it | Live PUT/GET byte-identical, as C-P4 |
+| V-P2 (spike) | How long the DHT keeps the record without republishing | Measured over 72 h (resolve every hour) |
+| V-1 | `channel::vault`: keys, TLV, padding, seal/open, V2-only record; the key-file snapshot section | Unit tests, fuzzed open |
+| V-2 | Publish on change and every 12 h; restore on sign-in (vault → snapshot → probe); fetch from onion/mirrors/gateway | Lab E2E: create on A, close A, sign in on B, channel listed |
+| V-3 | Continue without history; back-fill; the writer lease and "Take over here" | Lab E2E: B posts with A off; A returns, sees the lease, stops; readers see one chain |
+| V-P3 (spike) → V-4 | Storage providers with CORS CAR upload; the optional setting | Live: upload through Tor, read back from the gateway |
+
 ## Appendix E: Features considered from Tox/qTox and Telegram
 
 **Rule:** a feature is adopted only if it works with **no application server**. It may use the peers' own devices and free, no-registration third-party services.
