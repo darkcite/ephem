@@ -20,7 +20,11 @@ body { min-height: 100dvh; display: flex; flex-direction: column; font: 14px/1.4
    an iPhone Home Screen app); the tab list and the pane scroll inside it. Desktop: tabs and list
    beside the pane. Phones: the list or the pane, with the tab bar always at the bottom. ---- */
 html, body { height: 100%; overscroll-behavior: none; }
-body { height: var(--vvh, 100dvh); min-height: 0; overflow: hidden; }
+/* The frame is pinned to the four edges, not given 100dvh: an iPhone Home Screen app with a
+   translucent status bar computes 100dvh as the screen minus the status bar, which left that
+   much empty under the tab bar. With the keyboard up it is the visible area above it. */
+body { position: fixed; inset: 0; height: auto; min-height: 0; overflow: hidden; }
+body.kbd { bottom: auto; height: var(--vvh, 100dvh); }
 /* With the on-screen keyboard open (body.kbd, set from visualViewport in app.js) the frame is
    exactly the visible area above the keyboard: header on top, the composer right on the
    keyboard, no tab bar (it comes back when the keyboard closes). */
