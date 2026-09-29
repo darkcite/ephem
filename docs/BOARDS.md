@@ -26,7 +26,7 @@
 | Post numbers | **Yes**, board-wide, monotonic `no` (u64), assigned by the host | Never reused, also across devices (G.13) |
 | Quote links `>>123`, backlinks | **Yes**, computed by readers from the body | No host-side parsing; `>>>` cross-board links: **no** in v1 (one board per link) |
 | Greentext (`>` at line start) | **Yes**, render-only | No other markup; bodies are plain text, escaped everywhere |
-| Poster IDs per thread | **Owner flag** `ids` | On: one random key per thread per tab, shown as an 8-character ID. Off: a fresh key per post (G.4) |
+| Poster IDs per thread | **Owner flag** `ids`, **off by default** (B5) | On: one random key per thread per tab, shown as an 8-character ID. Off: a fresh key per post (G.4) |
 | Tripcodes | **Yes, as signed keys** ("trip keys") | Unforgeable, unlike 4chan's hashed passwords (G.4) |
 | Capcodes (owner, janitor) | **Yes** | The post is signed by the board key or a listed janitor key |
 | Bump order, bump limit, sage | **Yes** | A reply bumps its thread unless `sage` or the thread is past the bump limit |
@@ -201,7 +201,7 @@ Decoding happens only in the browser's own sandboxed image decoder, in every rol
 |---|---|---|
 | Proof of work | **Equi-X** (the puzzle of Tor's onion-service PoW v1), via arti's pure-Rust `equix` crate. Challenge = `"ephem-board-pow-v1" ‖ board name ‖ seed(epoch) ‖ kind ‖ thread ‖ BLAKE2b(s ‖ image) ‖ nonce ‖ effort`. Valid when `BLAKE2b-32(challenge ‖ solution) × effort ≤ 2³² − 1`: the expected solve count is `effort` | Buys cost, not identity. A botnet or a GPU farm still posts; Equi-X is CPU-oriented, which narrows the GPU advantage. In wasm, hashx runs interpreted (no JIT): speed is spike B-P1 |
 | Freshness | `seed(epoch) = BLAKE2b-keyed(pow secret, epoch)`, epoch = 10 min; the current and previous epochs are accepted. The work is bound to the post's content and thread, so it cannot be precomputed ahead of ~20 min or reused | — |
-| Efforts | Owner sets a base; defaults: reply ×1, image ×4, new thread ×8, report ×½. Target ~3 s median for a reply on a recent iPhone (set after B-P1) | Slow phones pay more |
+| Efforts | Owner sets a base; defaults: reply ×1, image ×4, new thread ×8, report ×½. Target **~10 s** median for a reply on a recent phone (B6; calibrated after B-P1) | Slow phones pay more |
 | Adaptive effort | Doubles when accepted posts pass 50 % of the per-minute cap, or the slot pool is > 50 % busy for 30 s; halves after 10 calm minutes; capped by the owner's maximum. `GET /pow` always gives the current value | Legitimate posters wait longer during a flood |
 | Caps | Board-wide posts per minute; 8 submit slots; per-thread duplicate check | — |
 | Per circuit | If `tor-hsservice` exposes which rendezvous circuit a stream came on (spike B-P3): ≤ 4 streams and ≤ 1 submit per 10 s per circuit | New circuits are cheap for a client; this only slows naive floods |
@@ -315,15 +315,18 @@ Only when some follower runs a Kubo mirror (D.7.2): the root's pin links reach e
 | Poster TX | canvas RGBA → wasm scratch (≤ 16 MiB, allocated when the image picker opens, freed after) | **1 copy** | Setup path, a documented allocation exception (§22) |
 | Poster TX | JPEG out → submit slot → `write` | 0 | Encoded straight into the slot |
 
-## G.15 Decisions for the owner
+## G.15 Decisions (the owner, 2026-09-29)
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
-| B1 | Images | Supported, **off by default**, pre-moderation offered when turned on |
-| B2 | Posting while the owner is offline | **(a) pauses** in v1; (b) later; (c) rejected (G.10) |
-| B3 | No-JS posting from Tor Browser | **No** (G.11.2) |
-| B4 | Boards per identity | **4** |
-| B5 | Poster IDs | Owner flag, **on** by default (per-thread keys) |
+| B1 | Images | Supported, **off by default**; the owner turns them on after a warning (JPEG only, re-encoded in the poster's tab, thumbnails by the host) |
+| B2 | Posting while the owner is offline | **Pauses**; reading continues from mirrors. Mirror queues (G.10 b) later; several writers rejected |
+| B3 | No-JS posting from Tor Browser | **No**: Tor Browser reads the plain page; posting needs Ephem (G.11.2) |
+| B4 | Boards per identity, default size | **4 boards**; **10 pages × 15 threads** (150 live threads), bump limit 300, oldest-bumped pruned, text archive kept |
+| B5 | Poster IDs | Owner flag, **off by default**: a fresh key per post unless the owner turns IDs on |
+| B6 | Proof-of-work cost | Target **~10 s median for a reply on a recent phone** (was ~3 s); threads ×8 as before; adaptive effort on top during floods |
+| B7 | Moderation in v1 | **Owner only**: delete, ban a poster or trip key, lock, sticky, pause posting. Janitors, word filters, reports and pre-moderation move to a later phase (BD-5b) |
+| B8 | Tripcodes | **Yes, signed trip keys** (G.4) |
 
 ## G.16 Phases and spikes
 
@@ -340,7 +343,8 @@ Only when some follower runs a Kubo mirror (D.7.2): the root's pin links reach e
 | BD-2 | Submit format, sans-IO host pipeline (G.6.2), Equi-X PoW, epochs, replay set, filters, caps | Native tests for every refusal row; fuzzed submit parser (10⁶ runs clean); no allocation after serve start (counting allocator) |
 | BD-3 | Board gateway: bounded stream pool, `/pow`, `/submit`, keep-alive GETs; OPFS per-block store; owner and poster in the Tor build | Lab E2E: owner + 2 posters, a thread with replies, sage, bump order, a pruned thread |
 | BD-4 | Images: poster re-encode (after B-P4), host whitelist + decode + thumbnail, `media`, reader "show images" | Lab E2E: a photo with EXIF/GPS posts; the served bytes carry no APP1; a JPEG with a COM segment is refused |
-| BD-5 | Moderation: deletes, lock, sticky, bans, trips, capcodes, janitors, reports, mod log, pause, pre-moderation | Lab E2E: a janitor deletes; readers see the tombstone and the log entry |
+| BD-5 | Moderation, owner only (B7): deletes, lock, sticky, bans, trips, owner capcode, mod log, pause | Lab E2E: the owner deletes and bans; readers see the tombstone and the log entry |
+| BD-5b | Later (B7): janitors, word filters, reports, pre-moderation | Lab E2E: a janitor deletes; a filtered post is refused |
 | BD-6 | Reader UI (catalog, thread, reply box, watched threads), Following integration, the plain HTML page, board mirrors | Lab E2E: owner offline → read from a mirror, posting says `E_BOARD_OFFLINE`; plain page fetched through a C Tor client |
 | BD-7 | Several devices, after V-1…V-3 | Lab E2E: take over on B, numbers continue without a gap collision |
 | BD-8 | Later: mirror submit queues (G.10 b) | A separate proposal |
