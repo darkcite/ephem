@@ -931,7 +931,7 @@ function renderContacts() {
     li.append(rename, del);
     ul.append(li);
   }
-  if (!rows.length) ul.innerHTML = '<li class="dim">No contacts yet. After a chat, use “＋ contact”.</li>';
+  if (!rows.length) ul.innerHTML = '<li class="dim">No contacts yet. Add one from their contact card below, or after a chat use “＋ contact”.</li>';
 }
 
 // After a change of contacts or nickname: re-encrypt (the file key stays in wasm memory, §7.3),
@@ -1316,6 +1316,7 @@ function addCard(text) {
   if (app.add_card(text, name) !== 0) return;
   persist();
   $('t-code').value = '';
+  $('t-card').value = '';
   status(TOR ? 'contact added: Connect to chat' : 'contact added');
   show('v-start');
 }
@@ -1422,6 +1423,9 @@ async function main() {
   }
   $('b-invite').onclick = () => { applyPrefs(); app.create_invite(Number($('s-ttl').value)); };
   $('b-apply').onclick = () => applyCode($('t-code').value, false);
+  const cardOnly = (t) => (app.card_nick(t.trim()) !== undefined ? addCard(t.trim()) : error('That is not a contact card. Cards are links with #k=; invites go in “Got a code?”.'));
+  $('b-add-card').onclick = () => cardOnly($('t-card').value);
+  $('b-scan-card').onclick = () => scan(cardOnly);
   $('b-scan').onclick = () => scan((t) => applyCode(t, true));
   $('b-answer').onclick = () => applyCode($('t-answer').value, false);
   $('b-scan-answer').onclick = () => scan((t) => applyCode(t, true));

@@ -7,13 +7,13 @@ use arti_client::config::TorClientConfigBuilder;
 use arti_client::TorClientConfig;
 
 /// Builds the client configuration. `bridge_fps`: the Snowflake bridges' RSA fingerprints
-/// (one or two; bridge `i` is dialled at `BRIDGE_ADDRS[i]`).
+/// (1 to 4; bridge `i` is dialled at `BRIDGE_ADDRS[i]`).
 /// `network_toml`: extra TOML (the lab's `[tor_network]`, `[path_rules]`, `[address_filter]`),
 /// empty for the real Tor network. `storage_root`: only native test builds touch it (their
 /// directory cache is SQLite); in the browser the patched stores keep everything in memory.
 pub fn build(bridge_fps: &[String], network_toml: &str, storage_root: &str) -> Result<TorClientConfig, String> {
     if bridge_fps.is_empty() || bridge_fps.len() > BRIDGE_ADDRS.len() {
-        return Err("config: one or two Snowflake bridges".into());
+        return Err("config: 1 to 4 Snowflake bridges".into());
     }
     let bridges: Vec<String> = bridge_fps.iter().zip(BRIDGE_ADDRS).map(|(fp, a)| format!("\"{a} ${fp}\"")).collect();
     let base = format!(

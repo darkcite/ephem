@@ -56,13 +56,18 @@ try {
   await t.waitForSelector('#error:not([hidden])');
   check('a temporary identity cannot add from a card', /saved identity/.test(await t.textContent('#error')));
 
-  // Bob pastes the link: asked for a name (suggested: Alice's nickname).
+  // Bob uses "Add from a contact card" in his contacts: an invite there is refused with a hint,
+  // the card asks for a name (suggested: Alice's nickname).
+  await b.fill('#t-card', 'https://example.org/app/#i=AAAA');
+  await b.click('#b-add-card');
+  await b.waitForSelector('#error:not([hidden])');
+  check('the contacts card field refuses what is not a card', /not a contact card/.test(await b.textContent('#error')));
   b.answers.push('Alice from the card');
-  await b.fill('#t-code', card);
-  await b.click('#b-apply');
+  await b.fill('#t-card', card);
+  await b.click('#b-add-card');
   await b.waitForFunction(() => /Alice from the card/.test(document.querySelector('#contacts').textContent), null, { timeout: 10_000 });
   const row = await b.textContent('#contacts');
-  check('Bob adds Alice from her card: an unverified contact', !/✔/.test(row) && !/Connect/.test(row), row.trim());
+  check('Bob adds Alice from her card in Contacts: an unverified contact', !/✔/.test(row) && !/Connect/.test(row), row.trim());
 
   // Direct mode: a card pins the key and name; a chat still needs invite and answer.
   await connect(b, a);

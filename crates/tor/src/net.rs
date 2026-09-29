@@ -17,9 +17,11 @@ use tor_rtcompat::{NetStreamListener, NetStreamProvider, UdpProvider, UdpSocket}
 
 /// The Snowflake bridges' placeholder addresses (TEST-NET-1, never routed): bridge `i` is
 /// reached at `BRIDGE_ADDRS[i]`.
-pub const BRIDGE_ADDRS: [SocketAddr; 2] = [
+pub const BRIDGE_ADDRS: [SocketAddr; 4] = [
     SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 0, 2, 3), 80)),
     SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 0, 2, 4), 80)),
+    SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 0, 2, 5), 80)),
+    SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 0, 2, 6), 80)),
 ];
 
 fn refused(what: &str) -> io::Error {
@@ -40,7 +42,7 @@ pub struct BridgeNet {
 
 impl BridgeNet {
     pub fn new(dialers: Vec<Arc<dyn Dialer>>) -> Self {
-        assert!(!dialers.is_empty() && dialers.len() <= BRIDGE_ADDRS.len(), "1 or 2 Snowflake bridges");
+        assert!(!dialers.is_empty() && dialers.len() <= BRIDGE_ADDRS.len(), "1 to 4 Snowflake bridges");
         Self { dialers: dialers.into() }
     }
 }
