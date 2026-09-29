@@ -362,24 +362,10 @@ function fitViewport() {
   if (kbd) document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
   else document.documentElement.style.removeProperty('--vvh');
   document.body.classList.toggle('kbd', kbd);
-  if (window.scrollY || vv.offsetTop) window.scrollTo(0, 0);
+  // Only with the keyboard: iOS then slides the page up to show the field.
+  if (kbd && (window.scrollY || vv.offsetTop)) window.scrollTo(0, 0);
   if (follow || (kbd && document.activeElement.closest('.composer'))) toBottom();
 }
-/** iPhone Home Screen app: the layout viewport ends short of the screen's bottom by the status
- *  bar's height; the frame is stretched over that gap (0 in a browser tab, or once iOS fixes it). */
-function fitStandalone() {
-  const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
-  const portrait = innerHeight >= innerWidth;
-  const full = portrait ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
-  const gap = standalone ? full - innerHeight : 0;
-  // Only a gap the size of a status bar; anything else is not this quirk.
-  if (gap > 0 && gap <= 80) document.documentElement.style.setProperty('--standalone-gap', `${gap}px`);
-  else document.documentElement.style.removeProperty('--standalone-gap');
-}
-fitStandalone();
-addEventListener('resize', fitStandalone);
-addEventListener('orientationchange', () => setTimeout(fitStandalone, 300));
-
 if (window.visualViewport) {
   visualViewport.addEventListener('resize', fitViewport);
   visualViewport.addEventListener('scroll', fitViewport);
