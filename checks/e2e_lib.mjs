@@ -63,9 +63,28 @@ export function finish() {
 }
 
 export const msgWith = (page, cls, t) => page.locator(`#log li.${cls}`, { hasText: t }).first();
+// The app's tabs (Appendix F.3): identity, contacts and connection settings live in Settings;
+// invites, rooms and codes on the Chats tab's New chat pane; a chat on screen under Chats.
+// Each waits until the app is up first (right after a load its controls are not wired yet).
+const ready = (page) => page.waitForFunction(() => document.querySelector('#me')?.textContent !== '…', null, { timeout: 30_000 });
+export const toSettings = async (page) => {
+  await ready(page);
+  await page.click('#tab-settings');
+};
+export const toChats = async (page) => {
+  await ready(page);
+  await page.click('#tab-chats');
+};
+export const toHome = async (page) => {
+  await toChats(page);
+  await page.click('#b-new');
+};
+
+/** Max-connectivity codes (raw local IPs: CI has no mDNS), then back to New chat. */
 export const openSettings = async (page) => {
-  await page.$eval('#v-start details', (d) => { d.open = true; });
+  await toSettings(page);
   await page.selectOption('#s-privacy', '2');
+  await toHome(page);
 };
 
 /** Invite by Alice, answer by Bob (links pasted both ways); resolves when both chats are open. */

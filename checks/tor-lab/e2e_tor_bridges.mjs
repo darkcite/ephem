@@ -6,7 +6,7 @@
 // file, a reload waits for them until sign-in, and they travel as a `#b=` link.
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`. Lab only (LIVE has no bridges of ours).
-import { PASS, check, finish, launch, problems, watch } from '../e2e_lib.mjs';
+import { check, finish, launch, PASS, problems, toHome, toSettings, watch } from '../e2e_lib.mjs';
 import { LIVE, dumpLogs, labBridges, record, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 if (LIVE) {
@@ -36,6 +36,7 @@ async function open(who, extra, wait, hash = '') {
 
 async function useBridges(p, lines) {
   await p.evaluate(() => { document.querySelector('#settings').open = true; });
+  await toSettings(p);
   await p.check('#r-br-custom');
   await p.fill('#t-bridges', lines);
   await p.click('#b-br-apply');
@@ -60,6 +61,7 @@ try {
   check('with "my own bridges" chosen, Tor waits for them', await a.evaluate(() => !/Snowflake:/.test(document.querySelector('#tor-state')?.textContent)));
 
   await useBridges(a, OBFS4);
+  await toSettings(a);
   await a.waitForSelector('#br-problems:not([hidden])');
   const why = await a.textContent('#br-problems');
   check('an obfs4 line is refused with its reason; Tor does not start', /Line 1: not used: obfs4 needs a direct TCP connection/.test(why) && /No usable snowflake bridge/.test(why), why.slice(0, 90));
@@ -83,6 +85,7 @@ try {
   const key = await a.inputValue('#t-keytext');
   await a.reload();
   await a.waitForFunction(() => /waiting for your own bridges/.test(document.querySelector('#tor-state')?.textContent), null, { timeout: 20_000 });
+  await toSettings(a);
   await a.click('#b-id-load');
   await a.fill('#t-keyin', key);
   await a.fill('#i-pass-in', PASS);
@@ -98,8 +101,10 @@ try {
   await torReady(b, 'bob');
 
   // And the Tor that started from pasted lines carries a chat.
+  await toHome(a);
   await a.click('#b-invite');
   await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#t='), null, { timeout: 10_000 });
+  await toHome(b);
   await b.fill('#t-code', await a.inputValue('#v-code .link'));
   await b.click('#b-apply');
   await Promise.all([a, b].map((p) => p.waitForSelector('#v-chat:not([hidden])', { timeout: 120_000 })));

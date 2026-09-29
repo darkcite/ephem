@@ -190,6 +190,12 @@ impl Tor {
         Ok(onion)
     }
 
+    /// Whether clients can reach the chat's onion service yet (`Service::reach`); empty before
+    /// it is hosted.
+    pub fn chat_reach(&self) -> &'static str {
+        self.chat.borrow().as_ref().map_or("", |s| s.reach())
+    }
+
     /// The next incoming stream of the chat's onion service. The current service is looked up
     /// on every poll: after [`Self::host`] replaced it, streams of the new one are taken (and
     /// no reference keeps the old one alive).
@@ -230,6 +236,20 @@ impl Service {
     /// An incoming stream, if one is waiting.
     pub fn try_accept(&self) -> Option<DataStream> {
         self.incoming.borrow_mut().pop_front()
+    }
+
+    /// Whether clients can reach the service yet, from arti's status: `"publishing"` (building
+    /// introduction points, publishing its descriptor: usually under a minute after launch),
+    /// `"reachable"`, `"degraded"` (reachable, with problems), `"unreachable"` or `"down"`.
+    pub fn reach(&self) -> &'static str {
+        use tor_hsservice::status::State;
+        match self._running.status().state() {
+            State::Running => "reachable",
+            State::DegradedReachable => "degraded",
+            State::Bootstrapping | State::Recovering => "publishing",
+            State::DegradedUnreachable | State::Broken => "unreachable",
+            _ => "down",
+        }
     }
 }
 

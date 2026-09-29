@@ -16,14 +16,20 @@ html[data-mode="tor"] .direct-only, html:not([data-mode="tor"]) .tor-only { disp
 html[data-mode="tor"] .brand::after { content: " · Tor"; color: var(--ok); }
 html, body { margin: 0; background: var(--bg); color: var(--fg); }
 body { min-height: 100dvh; display: flex; flex-direction: column; font: 14px/1.45 var(--mono); }
-/* ---- shell (Appendix F.3.1): the tab lists beside the pane (desktop), or one then the other ---- */
-.shell { flex: 1; display: grid; grid-template-columns: 300px minmax(0, 1fr); width: 100%; max-width: 1180px; margin: 0 auto; }
-.side { position: sticky; top: 42px; align-self: start; height: calc(100dvh - 42px); overflow-y: auto; border-right: 1px solid var(--line);
-  padding: 0 10px 12px; background: var(--bg); }
-.pane { min-width: 0; width: 100%; max-width: 720px; margin: 0 auto; padding: 12px; }
-.tabs { display: flex; gap: 4px; position: sticky; top: 0; background: var(--bg); padding: 8px 0 6px; z-index: 1; }
-.tabs button { flex: 1; margin: 0; padding: 6px 4px; font-size: 12px; background: transparent; border-color: transparent; color: var(--dim);
-  border-bottom: 2px solid transparent; border-radius: 0; }
+/* ---- shell (Appendix F.3.1): a fixed full-screen frame (the page itself never scrolls, also as
+   an iPhone Home Screen app); the tab list and the pane scroll inside it. Desktop: tabs and list
+   beside the pane. Phones: the list or the pane, with the tab bar always at the bottom. ---- */
+html, body { height: 100%; overscroll-behavior: none; }
+body { height: 100dvh; overflow: hidden; }
+.shell { flex: 1; min-height: 0; display: grid; width: 100%; max-width: 1180px; margin: 0 auto;
+  grid-template-columns: 300px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "tabs pane" "side pane"; }
+.tabs { grid-area: tabs; display: flex; gap: 2px; padding: 8px 10px 6px; border-right: 1px solid var(--line); background: var(--bg); }
+.side { grid-area: side; min-height: 0; overflow-y: auto; border-right: 1px solid var(--line); padding: 0 10px 12px; }
+.pane { grid-area: pane; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 12px max(12px, calc((100% - 720px) / 2)) 0; }
+.pane > .view { padding-bottom: 12px; }
+.tabs button { flex: 1; margin: 0; padding: 6px 2px; font-size: 12px; background: transparent; border-color: transparent; color: var(--dim);
+  border-bottom: 2px solid transparent; border-radius: 0; white-space: nowrap; }
 .tabs button[aria-selected="true"] { color: var(--acc); border-bottom-color: var(--acc); font-weight: 600; }
 .badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--acc); color: var(--bg);
   font-size: 11px; font-weight: 700; text-align: center; line-height: 18px; }
@@ -39,24 +45,16 @@ button.wide { width: 100%; }
 .rows .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
 .rows li.ok .dot { background: var(--ok); }
 .rows li.bad .dot { background: var(--bad); }
-.rows .avatar { width: 30px; height: 30px; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #fff;
-  background: hsl(var(--hue, 210) 45% 38%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--line); }
-.rows li.ok .avatar { background: hsl(var(--hue, 210) 45% 38%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ok); }
-.rows li.bad .avatar { background: hsl(var(--hue, 210) 20% 30%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--bad); }
 .back { margin: 0; padding: 2px 10px; font-size: 16px; }
 @media (min-width: 900px) { .back { display: none; } }
-/* Phones: the list, or (after a tap) the pane with a Back button. */
 @media (max-width: 899px) {
-  .shell { grid-template-columns: minmax(0, 1fr); }
-  .side { position: static; height: auto; border-right: 0; padding-bottom: 72px; }
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; grid-template-areas: "side" "tabs"; }
+  body.pane-open .shell { grid-template-areas: "pane" "tabs"; }
   body.pane-open .side { display: none; }
   body:not(.pane-open) .pane { display: none; }
-  .tabs { position: fixed; bottom: 0; left: 0; right: 0; top: auto; z-index: 4; background: var(--panel); border-top: 1px solid var(--line);
-    padding: 4px 6px max(6px, env(safe-area-inset-bottom)); }
-  body.pane-open .tabs { display: none; }
+  .side { border-right: 0; }
+  .tabs { border-right: 0; border-top: 1px solid var(--line); background: var(--panel); padding: 4px 6px max(6px, env(safe-area-inset-bottom)); }
 }
-a { color: var(--acc); }
-::selection { background: var(--acc); color: var(--bg); }
 
 h1 { font-size: 15px; margin: 6px 0 4px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg); }
 h2 { margin: 0 0 6px; font-size: 13px; color: var(--acc); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
@@ -66,7 +64,7 @@ h2 { margin: 0 0 6px; font-size: 13px; color: var(--acc); font-weight: 600; lett
 #error.warn { color: var(--bad); background: var(--bad-bg); border-color: rgba(226, 91, 76, .4); }
 
 /* ---- top bar: brand + chips (as the dashboard header) ---- */
-.bar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center;
+.bar { flex: none; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center;
   background: var(--panel); border-bottom: 1px solid var(--line); padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); }
 .brand { font-weight: 700; color: var(--acc); text-decoration: none; margin-right: auto; letter-spacing: .08em; text-transform: uppercase; }
 .brand::before { content: "● "; color: var(--ok); }
@@ -112,7 +110,8 @@ button:disabled { opacity: .5; cursor: default; }
 #expiry { text-align: center; color: var(--warn); }
 
 /* ---- chat ---- */
-.chat { display: flex; flex-direction: column; min-height: calc(100dvh - 150px); }
+.chat { display: flex; flex-direction: column; min-height: 100%; }
+#chat-slot, .chatroot { min-height: 100%; }
 .chat > .log { flex: 1 1 auto; min-height: 40dvh; }
 .sas { background: var(--warn-bg); border: 1px solid rgba(226, 177, 60, .35); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; }
 .sas strong { color: var(--warn); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; }
@@ -122,7 +121,7 @@ button:disabled { opacity: .5; cursor: default; }
 .sas.optional p, .sas.optional .actions { display: none; }
 .sas.optional { padding: 4px 10px; }
 .peer { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 0 8px; border-bottom: 1px solid var(--line);
-  position: sticky; top: 42px; background: var(--bg); z-index: 2; }
+  position: sticky; top: 0; background: var(--bg); z-index: 2; }
 .peer #peer { color: var(--acc); font-weight: 600; }
 .peer #peer::before { content: "↔ "; color: var(--dim); }
 #peer-state { color: var(--warn); }
@@ -166,7 +165,6 @@ button:disabled { opacity: .5; cursor: default; }
   border-bottom: 1px solid rgba(226, 177, 60, .35); font-size: 12px; }
 .update span { flex: 1; }
 .update button { margin: 0; padding: 2px 10px; }
-.foot { color: var(--dim); font-size: 11px; text-align: center; padding: 8px 16px 14px; border-top: 1px solid var(--line); }
 #build { color: var(--acc); }
 
 /* ---- MVP-2: slots, contacts, reactions ---- */

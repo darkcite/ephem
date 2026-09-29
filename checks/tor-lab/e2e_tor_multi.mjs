@@ -7,7 +7,7 @@
 // appears in Alice's list (not on screen, since she is in another chat) and opens on a tap.
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network.
-import { PASS, check, finish, launch, msgWith, problems, watch } from '../e2e_lib.mjs';
+import { check, finish, launch, msgWith, PASS, problems, toChats, toHome, toSettings, watch } from '../e2e_lib.mjs';
 import { T, dumpLogs, record, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
@@ -27,6 +27,7 @@ async function open(who) {
 }
 
 async function saveIdentity(p, label) {
+  await toSettings(p);
   await p.click('#b-id-save');
   await p.fill('#i-label', label);
   await p.fill('#i-pass', PASS);
@@ -35,7 +36,7 @@ async function saveIdentity(p, label) {
 }
 
 async function invite(a) {
-  await a.click('#b-new');
+  await toHome(a);
   await a.click('#b-invite');
   await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#t='), null, { timeout: 10_000 });
   return a.inputValue('#v-code .link');
@@ -53,8 +54,10 @@ try {
   await saveIdentity(a, 'A');
   await saveIdentity(c, 'C');
   for (const [p, n] of [[a, 'Alice'], [b, 'Bob'], [c, 'Carol']]) {
+    await toSettings(p);
     await p.fill('#i-nick', n);
     await p.dispatchEvent('#i-nick', 'change');
+    await toHome(p);
   }
 
   // Two invites of one onion, open at the same time; each dial finds its own chat.
@@ -96,7 +99,9 @@ try {
   await c.click('#b-again');
   await pick(a, 'Bob');
   const before = await a.$$eval('#chats li', (l) => l.length);
+  await toSettings(c);
   await c.locator('#contacts li', { hasText: 'Alice' }).locator('button', { hasText: 'Connect' }).click();
+  await toChats(c);
   await c.waitForSelector('#v-chat:not([hidden])', { timeout: T });
   await a.waitForFunction((n) => document.querySelectorAll('#chats li').length > n - 1 && [...document.querySelectorAll('#chats li')].some((l) => /Carol/.test(l.textContent) && /connected/.test(l.textContent)), before, { timeout: T });
   check('a contact dials while Alice is in another chat: a new chat in her list, Bob\'s stays on screen',

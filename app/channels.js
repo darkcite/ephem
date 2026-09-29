@@ -33,6 +33,7 @@ let owned = [];                      // [{ i, n, t, onion }]
 let current = null;                  // on screen: { read: name } | { own: index }
 const readings = new Map();          // name → the latest verified Reading
 const sessionHw = new Map();         // name → sequence seen this session (channels not followed)
+const signedMirrors = new Map();     // name → the mirror onions its last verified manifest names
 let refreshing = false;
 
 export function init(c) {
@@ -55,8 +56,13 @@ export function torReady() {
 }
 
 /** The chat identity changed (sign-in, sign-out, a new saved identity). */
+let boundTo = null;                  // the chat identity last handed to the channels
 export function onIdentity() {
   if (!ctx) return;
+  // Called on every return to the Chats tab: act only when the identity really changed.
+  const who = ctx.app.identity_label() ? ctx.app.lock_name() : '';
+  if (who === boundTo) return;
+  boundTo = who;
   if (ctx.TOR && ch) ctx.app.bind_channels(ch);
   loadFollows();
   renderFollows();
@@ -140,6 +146,13 @@ async function startAll() {
   for (const o of owned) if (!o.onion) serveOwned(o);
   if (running) return;
   running = true;
+  // Reachability of owned channels changes on its own (publication, network changes).
+  setInterval(() => {
+    if (!owned.length) return;
+    renderOwned();
+    const o = owned.find((x) => x.i === current?.own);
+    if (o && !$('v-own').hidden) renderServing(o);
+  }, 3000);
   for (const f of follows) if (f.m) resumeMirror(f);
   refreshAll();
   setInterval(refreshAll, REFRESH_MS);
@@ -265,6 +278,9 @@ async function refreshAll() {
 function take(f, r) {
   readings.set(f.n, r);
   const v = JSON.parse(r.json);
+  // Mirrors the owner signed into the channel become addresses to read from (§D.7.1): the
+  // channel stays readable while its owner is offline, even from an old link.
+  f.o = [...new Set([...f.o, ...v.mirrors])];
   const before = f.s || 0;
   f.s = r.sequence;
   f.t = v.title;
@@ -318,7 +334,10 @@ async function read(n, onions) {
   }
   try {
     await torUp;
-    const r = await ch.read(n, onions.join(','), highWater(n));
+    // The link's addresses, those the follow list learnt, and the signed mirrors seen last.
+    const known = [...new Set([...onions, ...(follows.find((x) => x.n === n)?.o || []), ...(signedMirrors.get(n) || [])])];
+    const r = await ch.read(n, known.join(','), highWater(n));
+    signedMirrors.set(n, JSON.parse(r.json).mirrors);
     const f = follows.find((x) => x.n === n);
     if (f) {
       take(f, r);
@@ -460,10 +479,13 @@ const linkFor = (o, v) => `${linkBase()}#c=${o.n}&o=${[o.onion, ...(v?.mirrors |
 
 // The channels this identity owns: every index whose channel is in the store (no list to keep).
 async function scanOwned() {
-  owned = [];
+  const found = [];
   let label = '';
   try { label = ch.label(); } catch { /* not signed in */ }
-  if (!label) return renderOwned();
+  if (!label) {
+    owned = found;
+    return renderOwned();
+  }
   for (let i = 0; i < MAX_OWNED; i++) {
     let n;
     try { n = ch.channel_name(i); } catch { break; }
@@ -472,24 +494,32 @@ async function scanOwned() {
     try {
       ch.open(i, saved.car, saved.record);
       await store('channels', n, ch.car(i), ch.record(i)); // a record older than 7 days was re-signed
-      owned.push({ i, n, t: JSON.parse(ch.view(i)).title, onion: '' });
+      // A channel already online keeps its address (serving is idempotent in Rust).
+      found.push({ i, n, t: JSON.parse(ch.view(i)).title, onion: owned.find((o) => o.n === n)?.onion || '' });
     } catch (e) {
       ctx.error(`Your channel ${i} could not be opened: ${e?.message || e}`);
     }
   }
+  owned = found;
   renderOwned();
 }
+
+// Online means reachable: arti has published the onion's descriptor (usually under a minute
+// after launch); before that, readers' dials fail.
+const reachOf = (o) => (o.onion ? ch.reach(o.i) : '');
+const REACH = { reachable: 'online through Tor', degraded: 'online through Tor', publishing: 'online, still publishing its address', unreachable: 'online, still publishing its address' };
 
 function renderOwned() {
   const ul = $('owns');
   ul.replaceChildren();
   for (const o of owned) {
     const li = document.createElement('li');
+    const r = reachOf(o);
     li.className = (current?.own === o.i ? 'active ' : '') + (o.onion ? 'ok' : '');
     li.innerHTML = '<span class="dot"></span><span class="grow"><b></b><span class="sub"></span></span>';
     li.querySelector('b').textContent = o.t || `Channel ${o.i}`;
     avatar(li, o.t || o.n);
-    li.querySelector('.sub').textContent = o.onion ? 'online through Tor' : 'offline';
+    li.querySelector('.sub').textContent = REACH[r] || 'offline';
     li.onclick = () => { ctx.setTab('own'); showOwner(o.i); };
     ul.append(li);
   }
@@ -521,11 +551,18 @@ function renderOwn(o) {
   o.t = v.title;
   $('o-title').textContent = v.title;
   $('o-about').textContent = v.about;
-  $('o-serving').textContent = o.onion ? `Online through Tor while this tab is open (${o.onion.slice(0, 8)}….onion).` : 'Not online yet: waiting for Tor.';
+  renderServing(o);
   $('i-mirrors').value = v.mirrors.join(', ');
   $('o-link').value = o.onion ? linkFor(o, v) : '';
   $('publish-state').textContent = '';
   renderPosts($('o-posts'), v, o);
+}
+
+function renderServing(o) {
+  const r = reachOf(o);
+  const at = o.onion ? `${o.onion.slice(0, 8)}….onion` : '';
+  $('o-serving').textContent = !o.onion ? 'Not online yet: waiting for Tor.'
+    : `Online through Tor while this tab is open (${at}).${r === 'reachable' || r === 'degraded' ? '' : ' Tor is still publishing its address: some readers may not reach it for a minute or two.'}`;
 }
 
 // Every change: Rust rebuilds and re-signs; the page stores the new CAR and record at once.

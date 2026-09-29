@@ -6,19 +6,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-eEzLvBbpvAaNnLZxEYdwuJauSlbzKOjX8PqpsQZrPxU='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="840e8419406c">
-<meta name="ephem-wasm" content="sha384-z1g8tt8aBh2a0p+8ThnN1xh1QrMhA0YXt8J8INI3yrrWiKyGj4S8V0J5+9BAfxlR">
-<meta name="ephem-tor-wasm" content="sha384-z1g8tt8aBh2a0p+8ThnN1xh1QrMhA0YXt8J8INI3yrrWiKyGj4S8V0J5+9BAfxlR">
-<link rel="stylesheet" href="app.css" integrity="sha384-Zix8ymjjNWR8jB489Fala218TMNSehchE6RbBZDHR7z+vnaKZgY87YOuJWloOgHV">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-/A8XuTX2o+jjAaA/+zPpXeGASuXJXdhTg8Z+jEsk82yFITEW4+nR+gNhaEiBwQDJ","./slots.js":"sha384-IlHgZ/G7YQmb6j7JCXNAbe997AcQ0jgf9kFcPNaROP0AcYmGBAzZ9Okdm4ch/5yC","./bridges.js":"sha384-XinMCx7qqD+BIl3mImyuYX0YNpqx/XA/fy1rBXFb3VrD/Hp62Vg7zBWO5+v1qTAV","./channels.js":"sha384-xeIXIDZtnDOYe0LpdL5bklv2GzB13cU/kVfrjK6rMFtUlClLyZLgWCQr/qXk2aYc","./ui.js":"sha384-Dg5+MKtdFNG4n1QschjGOvWfALXvB+/c+rOXQZOFRC3N7R0ouVLg7exIRd33Txvx","./pkg/ephem_tor.js":"sha384-8BA7UDpDRIpA6Qec7xfg8kFkQiz7hSxO6iiwYrecP1SpgbO/39jqw6DtPTEP+yFE"}}</script>
-<script type="module" src="app.js" integrity="sha384-/A8XuTX2o+jjAaA/+zPpXeGASuXJXdhTg8Z+jEsk82yFITEW4+nR+gNhaEiBwQDJ"></script>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-nKHvSWsABQoncpnY/MiNeGhPHquytJO1sVSjNqeQ2K8='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="db08a2af736f">
+<meta name="ephem-wasm" content="sha384-huiTBDRwYI65mCbbJnkfbLixVB91P3qIb7ZwWcVgki8reqLq7ksGIlRaf6a6WRtp">
+<meta name="ephem-tor-wasm" content="sha384-huiTBDRwYI65mCbbJnkfbLixVB91P3qIb7ZwWcVgki8reqLq7ksGIlRaf6a6WRtp">
+<link rel="stylesheet" href="app.css" integrity="sha384-2wUUgtgzC3bEtmkuh8nj/g/WvkCL5LNQZWBM3RbYTSLw05SvGy8/m098QDVysiJu">
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-VurKggt0HxEsTre1S3ns3D9vLmDRXtxQnl4A3ABp+4tW+3YzgtJLkytheaklsX/O","./slots.js":"sha384-IlHgZ/G7YQmb6j7JCXNAbe997AcQ0jgf9kFcPNaROP0AcYmGBAzZ9Okdm4ch/5yC","./bridges.js":"sha384-XinMCx7qqD+BIl3mImyuYX0YNpqx/XA/fy1rBXFb3VrD/Hp62Vg7zBWO5+v1qTAV","./channels.js":"sha384-Hqqw/ywA5WXJnNdpuHdPhzeCxM8kq/y8biPdooOY5VixCk3WdnylHWlknEon2db4","./ui.js":"sha384-Dg5+MKtdFNG4n1QschjGOvWfALXvB+/c+rOXQZOFRC3N7R0ouVLg7exIRd33Txvx","./pkg/ephem_tor.js":"sha384-vGENgBZ23ZMgijevNvmDtPf0WyLfnFz6Xu3y0nPL8JAulbrmVabR6a6zojsgMvCs"}}</script>
+<script type="module" src="app.js" integrity="sha384-VurKggt0HxEsTre1S3ns3D9vLmDRXtxQnl4A3ABp+4tW+3YzgtJLkytheaklsX/O"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#171a21">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Ephem">
 <title>Ephem · Tor</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -39,12 +40,13 @@
 </header>
 
 <div class="shell">
+  <nav class="tabs" role="tablist" aria-label="Ephem">
+    <button id="tab-chats" role="tab" aria-selected="true" data-tab="chats">Chats <span id="badge-chats" class="badge" hidden></span></button>
+    <button id="tab-follow" role="tab" aria-selected="false" data-tab="follow">Following <span id="badge-follow" class="badge" hidden></span></button>
+    <button id="tab-own" role="tab" aria-selected="false" data-tab="own">My channels</button>
+    <button id="tab-settings" role="tab" aria-selected="false" data-tab="settings">Settings</button>
+  </nav>
   <aside id="side" class="side">
-    <nav class="tabs" role="tablist" aria-label="Ephem">
-      <button id="tab-chats" role="tab" aria-selected="true" data-tab="chats">Chats <span id="badge-chats" class="badge" hidden></span></button>
-      <button id="tab-follow" role="tab" aria-selected="false" data-tab="follow">Following <span id="badge-follow" class="badge" hidden></span></button>
-      <button id="tab-own" role="tab" aria-selected="false" data-tab="own">My channels</button>
-    </nav>
     <div id="list-chats" class="list" role="tabpanel" aria-labelledby="tab-chats">
       <button id="b-new" class="primary wide">＋ New chat</button>
       <ul id="chats" class="rows" aria-label="Open chats"></ul>
@@ -56,6 +58,14 @@
       <button id="b-follow-new" class="primary wide">＋ Follow a channel</button>
       <ul id="follows" class="rows" aria-label="Channels you follow"></ul>
       <p id="follows-empty" class="note">You follow no channel yet. Open a channel link, then “Follow”.</p>
+    </div>
+    <div id="list-settings" class="list" role="tabpanel" aria-labelledby="tab-settings" hidden>
+      <ul class="rows" aria-label="Settings">
+        <li data-go="identity-card"><span class="grow"><b>Your identity</b><span class="sub">save, sign in, contact card</span></span></li>
+        <li data-go="contacts-card"><span class="grow"><b>Contacts</b><span class="sub">add from a card, rename, remove</span></span></li>
+        <li data-go="settings"><span class="grow"><b>Connection and privacy</b><span class="sub"><span class="tor-only">Tor bridges, </span>receipts, typing, codes</span></span></li>
+        <li data-go="about"><span class="grow"><b>About</b><span class="sub">what is protected, license, build</span></span></li>
+      </ul>
     </div>
     <div id="list-own" class="list" role="tabpanel" aria-labelledby="tab-own" hidden>
       <button id="b-own-new" class="primary wide">＋ New channel</button>
@@ -83,16 +93,6 @@
       <p>Up to 16 people, each connected <span class="direct-only">directly</span><span class="tor-only">through Tor</span> to every other one. You own the room: you invite members (or read-only observers) and can remove them. When you leave, the room is gone.</p>
       <button id="b-room">Create room</button>
     </div>
-    <div class="card tor-only">
-      <h2>Tor</h2>
-      <p id="tor-state">Connecting to Tor through Snowflake…</p>
-      <p class="note">Your peers see an onion address, never your IP address. The Snowflake volunteer proxy and broker see your IP address and that you use Tor, not whom you talk to. Messages take 0.5–2 s. Keep this tab open, and visible in Safari, to stay reachable. For faster starts, the public Tor directory is kept on this device (no chats, peers or keys).</p>
-      <p class="note"><a href="./">Switch to direct mode</a> (ends this Tor session).</p>
-    </div>
-    <div class="card direct-only">
-      <h2>Hide your IP address</h2>
-      <p>In direct mode your peer sees your IP address. <a href="tor.html">Tor mode</a> connects you through Tor instead: slower, text only, and your peer must use Tor mode too.</p>
-    </div>
     <div class="card">
       <h2>Got a code?</h2>
       <p>Scan it, paste an invite link to answer it, paste the answer to your own invite, or paste someone's contact card to add them.</p>
@@ -102,114 +102,132 @@
         <button id="b-scan" class="scan">Scan QR code</button>
       </div>
     </div>
+  </section>
 
-    <div class="card identity">
-      <h2>Your identity</h2>
-      <p id="id-desc"></p>
-      <ul id="slots" class="slots" hidden></ul>
-      <p id="backup-stale" class="warn" hidden>Backup out of date: your contacts or nickname changed since you downloaded the key file. <button id="b-backup">Download again</button></p>
-      <label>Nickname (shown to peers, optional) <input id="i-nick" maxlength="32" autocomplete="off" placeholder="e.g. Alice"></label>
-      <div class="actions">
-        <button id="b-id-save">Save this identity…</button>
-        <button id="b-id-load">Use a saved identity…</button>
-        <button id="b-id-receive" class="direct-only">Receive identity from another device</button>
-        <button id="b-id-temp" hidden>Switch to a temporary identity</button>
-        <button id="b-card" hidden>My contact card</button>
+    <section id="v-settings" class="view" hidden>
+      <h1>Settings</h1>
+      <div class="card tor-only">
+        <h2>Tor</h2>
+        <p id="tor-state">Connecting to Tor through Snowflake…</p>
+        <p class="note">Your peers see an onion address, never your IP address. The Snowflake volunteer proxy and broker see your IP address and that you use Tor, not whom you talk to. Messages take 0.5–2 s. Keep this tab open, and visible in Safari, to stay reachable. For faster starts, the public Tor directory is kept on this device (no chats, peers or keys).</p>
+        <p class="note"><a href="./">Switch to direct mode</a> (ends this Tor session).</p>
       </div>
-      <div id="card" class="sub" hidden>
-        <p class="note">Anyone with this card can add you as a contact without chatting first. <span class="tor-only">In Tor mode they can also connect to you once with it; you are asked before the chat starts.</span><span class="direct-only">In direct mode a card only pins your key and nickname: a chat still needs an invite.</span></p>
-        <div class="codebox">
-          <div class="qr" aria-label="QR code"></div>
-          <textarea class="link" rows="2" readonly spellcheck="false"></textarea>
-          <div class="actions">
-            <button class="primary copy">Copy link</button>
-            <button class="share">Share…</button>
+      <div class="card direct-only">
+        <h2>Hide your IP address</h2>
+        <p>In direct mode your peer sees your IP address. <a href="tor.html">Tor mode</a> connects you through Tor instead: slower, text only, and your peer must use Tor mode too.</p>
+      </div>
+      <div id="identity-card" class="card identity">
+        <h2>Your identity</h2>
+        <p id="id-desc"></p>
+        <ul id="slots" class="slots" hidden></ul>
+        <p id="backup-stale" class="warn" hidden>Backup out of date: your contacts or nickname changed since you downloaded the key file. <button id="b-backup">Download again</button></p>
+        <label>Nickname (shown to peers, optional) <input id="i-nick" maxlength="32" autocomplete="off" placeholder="e.g. Alice"></label>
+        <div class="actions">
+          <button id="b-id-save">Save this identity…</button>
+          <button id="b-id-load">Use a saved identity…</button>
+          <button id="b-id-receive" class="direct-only">Receive identity from another device</button>
+          <button id="b-id-temp" hidden>Switch to a temporary identity</button>
+          <button id="b-card" hidden>My contact card</button>
+        </div>
+        <div id="card" class="sub" hidden>
+          <p class="note">Anyone with this card can add you as a contact without chatting first. <span class="tor-only">In Tor mode they can also connect to you once with it; you are asked before the chat starts.</span><span class="direct-only">In direct mode a card only pins your key and nickname: a chat still needs an invite.</span></p>
+          <div class="codebox">
+            <div class="qr" aria-label="QR code"></div>
+            <textarea class="link" rows="2" readonly spellcheck="false"></textarea>
+            <div class="actions">
+              <button class="primary copy">Copy link</button>
+              <button class="share">Share…</button>
+            </div>
+          </div>
+          <p id="card-expiry" class="note"></p>
+          <label>Validity of a new card
+            <select id="s-card-ttl">
+              <option value="30" selected>30 days</option>
+              <option value="0">Never expires</option>
+            </select>
+          </label>
+          <button id="b-card-reset" class="danger">Reset my contact card</button>
+          <p class="note">Resetting makes every card you shared unusable for a first contact. Contacts you already have are not affected.</p>
+        </div>
+        <div id="id-save" class="sub" hidden>
+          <p class="note">Saving gives you the same identity every time, so peers can recognise you, and can link your sessions. The file is encrypted with your passphrase (Argon2id). The label is <strong>not</strong> secret.</p>
+          <label>Label <input id="i-label" maxlength="32" placeholder="e.g. Work" autocomplete="off"></label>
+          <label>Passphrase (12+ characters) <input id="i-pass" type="password" autocomplete="new-password"></label>
+          <label>Repeat passphrase <input id="i-pass2" type="password" autocomplete="new-password"></label>
+          <label class="row"><input id="c-remember" type="checkbox" checked> Remember on this device (still needs the passphrase)</label>
+          <button id="b-id-do-save" class="primary">Encrypt and download</button>
+          <div id="id-saved" hidden>
+            <p class="note">Saved. Keep the file (or this text) safe: a lost file or passphrase cannot be recovered.</p>
+            <textarea id="t-keytext" rows="3" readonly spellcheck="false"></textarea>
           </div>
         </div>
-        <p id="card-expiry" class="note"></p>
-        <label>Validity of a new card
-          <select id="s-card-ttl">
-            <option value="30" selected>30 days</option>
-            <option value="0">Never expires</option>
+        <div id="id-load" class="sub" hidden>
+          <label>Key file <input id="i-file" type="file" accept=".p2pkey,application/octet-stream"></label>
+          <label>…or key text <textarea id="t-keyin" rows="2" spellcheck="false" autocomplete="off"></textarea></label>
+          <label>Passphrase <input id="i-pass-in" type="password" autocomplete="current-password"></label>
+          <label class="row"><input id="c-remember-in" type="checkbox" checked> Remember on this device</label>
+          <button id="b-id-do-load" class="primary">Sign in</button>
+        </div>
+      </div>
+
+      <div id="contacts-card" class="card" hidden>
+        <h2>Contacts <small id="contacts-count"></small></h2>
+        <p class="note">Only in your encrypted key file. ✔ = safety code compared. No history, no last-seen times.</p>
+        <ul id="contacts" class="contacts"></ul>
+        <div class="sub">
+          <label>Add from a contact card <textarea id="t-card" rows="2" placeholder="https://…/app/#k=…" spellcheck="false" autocomplete="off"></textarea></label>
+          <div class="actions">
+            <button id="b-add-card">Add contact</button>
+            <button id="b-scan-card">Scan card</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="settings" class="card">
+        <h2>Connection and privacy</h2>
+        <label class="direct-only">Addresses in my codes
+          <select id="s-privacy">
+            <option value="1" selected>Default: local name + public address (STUN)</option>
+            <option value="0">LAN only: same network, no STUN</option>
+            <option value="2">Max connectivity: also raw local IPs</option>
           </select>
         </label>
-        <button id="b-card-reset" class="danger">Reset my contact card</button>
-        <p class="note">Resetting makes every card you shared unusable for a first contact. Contacts you already have are not affected.</p>
-      </div>
-      <div id="id-save" class="sub" hidden>
-        <p class="note">Saving gives you the same identity every time, so peers can recognise you, and can link your sessions. The file is encrypted with your passphrase (Argon2id). The label is <strong>not</strong> secret.</p>
-        <label>Label <input id="i-label" maxlength="32" placeholder="e.g. Work" autocomplete="off"></label>
-        <label>Passphrase (12+ characters) <input id="i-pass" type="password" autocomplete="new-password"></label>
-        <label>Repeat passphrase <input id="i-pass2" type="password" autocomplete="new-password"></label>
-        <label class="row"><input id="c-remember" type="checkbox" checked> Remember on this device (still needs the passphrase)</label>
-        <button id="b-id-do-save" class="primary">Encrypt and download</button>
-        <div id="id-saved" hidden>
-          <p class="note">Saved. Keep the file (or this text) safe: a lost file or passphrase cannot be recovered.</p>
-          <textarea id="t-keytext" rows="3" readonly spellcheck="false"></textarea>
+        <label class="row direct-only"><input id="c-v6" type="checkbox"> Drop IPv6 addresses</label>
+        <label class="row"><input id="c-read" type="checkbox" checked> Send read receipts (and see the peer's)</label>
+        <label class="row"><input id="c-typing" type="checkbox" checked> Send typing notifications (and see the peer's)</label>
+        <label>Code lifetime
+          <select id="s-ttl">
+            <option value="300" selected>5 minutes</option>
+            <option value="900">15 minutes</option>
+            <option value="1800">30 minutes</option>
+          </select>
+        </label>
+        <p class="note direct-only">STUN servers: Google and Cloudflare. They learn your public IP address, as does your peer. No relay is ever used.</p>
+        <label class="row"><input id="c-notify" type="checkbox"> Notify me of new messages and posts while Ephem is in the background (the notification never shows their text)</label>
+        <div id="bridges-box" class="sub tor-only">
+          <h3>Tor connection</h3>
+          <label class="row"><input id="r-br-auto" type="radio" name="bridges" checked> Automatic: the Tor Project's Snowflake</label>
+          <label class="row"><input id="r-br-custom" type="radio" name="bridges"> My own bridges</label>
+          <div id="br-custom" hidden>
+            <textarea id="t-bridges" rows="4" placeholder="snowflake 192.0.2.3:80 <fingerprint> url=https://… ice=stun:…:3478" spellcheck="false" autocomplete="off"></textarea>
+            <label class="row"><input id="c-br-fallback" type="checkbox"> Also use the Tor Project's Snowflake when mine cannot be reached</label>
+            <p class="note">Only <strong>snowflake</strong> bridge lines work in a web page: obfs4, WebTunnel and meek need connections a page cannot open. Get lines from whoever runs the bridge, or from bridges.torproject.org (choose snowflake). Signed in, they are kept in your encrypted key file; with a temporary identity, only in this tab.</p>
+          </div>
+          <ul id="br-problems" class="note problems" hidden></ul>
+          <div class="actions">
+            <button id="b-br-apply">Use this setting</button>
+            <button id="b-br-share" hidden>Share my bridges</button>
+          </div>
+          <textarea id="br-link" class="link" rows="2" readonly spellcheck="false" hidden></textarea>
+          <p id="br-state" class="note"></p>
         </div>
       </div>
-      <div id="id-load" class="sub" hidden>
-        <label>Key file <input id="i-file" type="file" accept=".p2pkey,application/octet-stream"></label>
-        <label>…or key text <textarea id="t-keyin" rows="2" spellcheck="false" autocomplete="off"></textarea></label>
-        <label>Passphrase <input id="i-pass-in" type="password" autocomplete="current-password"></label>
-        <label class="row"><input id="c-remember-in" type="checkbox" checked> Remember on this device</label>
-        <button id="b-id-do-load" class="primary">Sign in</button>
+      <div id="about" class="card">
+        <h2>About</h2>
+        <p class="note">Security depends on the codes reaching the right person and on the code this site serves. In direct mode your peer can see your IP address; Tor mode and channels go through Tor.</p>
+        <p class="note">Ephem is free for noncommercial use under the <a href="https://polyformproject.org/licenses/noncommercial/1.0.0/" rel="noreferrer">PolyForm Noncommercial License 1.0.0</a>. <a href="https://github.com/darkcite/ephem" rel="noreferrer">Source</a>. <span id="build"></span></p>
       </div>
-    </div>
-
-    <div id="contacts-card" class="card" hidden>
-      <h2>Contacts <small id="contacts-count"></small></h2>
-      <p class="note">Only in your encrypted key file. ✔ = safety code compared. No history, no last-seen times.</p>
-      <ul id="contacts" class="contacts"></ul>
-      <div class="sub">
-        <label>Add from a contact card <textarea id="t-card" rows="2" placeholder="https://…/app/#k=…" spellcheck="false" autocomplete="off"></textarea></label>
-        <div class="actions">
-          <button id="b-add-card">Add contact</button>
-          <button id="b-scan-card">Scan card</button>
-        </div>
-      </div>
-    </div>
-
-    <details id="settings" class="card">
-      <summary>Connection and privacy settings</summary>
-      <label class="direct-only">Addresses in my codes
-        <select id="s-privacy">
-          <option value="1" selected>Default: local name + public address (STUN)</option>
-          <option value="0">LAN only: same network, no STUN</option>
-          <option value="2">Max connectivity: also raw local IPs</option>
-        </select>
-      </label>
-      <label class="row direct-only"><input id="c-v6" type="checkbox"> Drop IPv6 addresses</label>
-      <label class="row"><input id="c-read" type="checkbox" checked> Send read receipts (and see the peer's)</label>
-      <label class="row"><input id="c-typing" type="checkbox" checked> Send typing notifications (and see the peer's)</label>
-      <label>Code lifetime
-        <select id="s-ttl">
-          <option value="300" selected>5 minutes</option>
-          <option value="900">15 minutes</option>
-          <option value="1800">30 minutes</option>
-        </select>
-      </label>
-      <p class="note direct-only">STUN servers: Google and Cloudflare. They learn your public IP address, as does your peer. No relay is ever used.</p>
-      <label class="row"><input id="c-notify" type="checkbox"> Notify me of new messages and posts while Ephem is in the background (the notification never shows their text)</label>
-      <div id="bridges-box" class="sub tor-only">
-        <h3>Tor connection</h3>
-        <label class="row"><input id="r-br-auto" type="radio" name="bridges" checked> Automatic: the Tor Project's Snowflake</label>
-        <label class="row"><input id="r-br-custom" type="radio" name="bridges"> My own bridges</label>
-        <div id="br-custom" hidden>
-          <textarea id="t-bridges" rows="4" placeholder="snowflake 192.0.2.3:80 <fingerprint> url=https://… ice=stun:…:3478" spellcheck="false" autocomplete="off"></textarea>
-          <label class="row"><input id="c-br-fallback" type="checkbox"> Also use the Tor Project's Snowflake when mine cannot be reached</label>
-          <p class="note">Only <strong>snowflake</strong> bridge lines work in a web page: obfs4, WebTunnel and meek need connections a page cannot open. Get lines from whoever runs the bridge, or from bridges.torproject.org (choose snowflake). Signed in, they are kept in your encrypted key file; with a temporary identity, only in this tab.</p>
-        </div>
-        <ul id="br-problems" class="note problems" hidden></ul>
-        <div class="actions">
-          <button id="b-br-apply">Use this setting</button>
-          <button id="b-br-share" hidden>Share my bridges</button>
-        </div>
-        <textarea id="br-link" class="link" rows="2" readonly spellcheck="false" hidden></textarea>
-        <p id="br-state" class="note"></p>
-      </div>
-    </details>
-  </section>
+    </section>
 
     <section id="v-handoff" class="view" hidden>
       <h1 id="handoff-title"></h1>
@@ -507,8 +525,5 @@
   <button id="b-scan-cancel">Cancel</button>
 </div>
 
-<footer class="foot">
-  <p>Security depends on the codes reaching the right person and on the code this site serves. In direct mode your peer can see your IP address; channels always go through Tor. <span id="build"></span></p>
-</footer>
 </body>
 </html>

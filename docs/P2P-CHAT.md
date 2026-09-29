@@ -1988,3 +1988,14 @@ A counter on each tab shows the unread total, from this tab's RAM and the follow
 | UI-6 | Identicon avatars (a colour and a letter from the name, not an identity), keyboard shortcuts (Alt+1/2/3 tabs, Alt+↑/↓ chats, Escape back on phones), empty states. **Not done:** moving every UI string into one table for translation (error messages already are) | visual check; APP-E2E-MULTI (ARIA) |
 
 **Open:** live runs of bridges, several chats and the channel tabs on the real Tor network and on the iPhone; BR-4; the string table for translation.
+
+### F.6 After the owner's first v1.2 runs (2026-09-29)
+
+| Report | Change |
+|---|---|
+| iPhone Home Screen app scrolled as a whole | The app is a fixed full-screen frame (`100dvh`, no page scroll, no overscroll bounce); only the tab lists and the pane scroll; the status bar area is kept clear (`black-translucent`, safe-area insets). Checked at 390 px (APP-E2E-MULTI) |
+| The bottom tab bar disappeared on phones when a pane opened | The tab bar is a row of its own in the frame, always visible |
+| Settings and identity management mixed into New chat | A fourth tab, **Settings**: Tor status and bridges, identity (save, sign in, transfer, contact card), contacts, connection and privacy, About (protection limits, license, build). New chat keeps invite, room and "Got a code?" |
+| My channels asked to sign in again after switching tabs | Two causes: every return to Chats re-bound the chat identity to the channels, which dropped a separate channel sign-in (now `bind` never replaces an explicit `sign_in`, and the page re-binds only when the identity really changed); and the owned list was emptied while being rescanned (now swapped in whole) |
+| A reader on the iPhone could not reach a channel the laptop showed "online" | "Online" came right after launch, before arti had published the onion's descriptor. Readers whose clock or consensus picks the HSDir ring without the descriptor fail ("Failed to obtain hidden service circuit"). The page now shows arti's state: until it reports the service fully published (both rings), chats and channels say "Tor is still publishing your address: some peers/readers may not reach you for a minute or two" (`Service::reach`, `App::tor_reach`, `ChannelApp::reach`). Followers also add the mirrors the owner signed to the addresses they read from |
+| License | PolyForm Noncommercial 1.0.0 (LICENSE, NOTICE); SPDX headers on every source file, stamped before each commit (`tools/spdx.py`, `.githooks/pre-commit`, a Claude Code hook) |

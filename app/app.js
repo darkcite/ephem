@@ -210,6 +210,15 @@ function setTab(t) {
   $('list-chats').hidden = t !== 'chats';
   $('list-follow').hidden = t !== 'follow';
   $('list-own').hidden = t !== 'own';
+  $('list-settings').hidden = t !== 'settings';
+}
+
+/** The Settings tab (identity, contacts, connection, about), at section `id` if given. */
+function openSettings(id) {
+  setTab('settings');
+  showPane('v-settings');
+  renderIdentity();
+  if (id) $(id).scrollIntoView({ block: 'start' });
 }
 
 function showPane(id) {
@@ -289,9 +298,10 @@ function renderExposure(c) {
 }
 
 // ---- messages ------------------------------------------------------------------------------
-// The page scrolls (composer is sticky): follow new messages only if the reader is at the bottom.
-const atBottom = () => innerHeight + scrollY >= document.documentElement.scrollHeight - 160;
-const toBottom = () => scrollTo(0, document.documentElement.scrollHeight);
+// The pane scrolls (the page never does; the composer is sticky): follow new messages only if the
+// reader is at the bottom.
+const atBottom = () => { const p = $('pane'); return p.scrollTop + p.clientHeight >= p.scrollHeight - 160; };
+const toBottom = () => { const p = $('pane'); p.scrollTop = p.scrollHeight; };
 
 function sysLine(c, t) {
   const follow = c === shown && atBottom();
@@ -734,12 +744,24 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
   }
 };
 
+// Our onion is fully reachable once arti has its descriptor on both HSDir rings (current and next
+// time period); until then peers whose clock or consensus picks the other ring cannot reach it.
+let torOnion = '';
+function renderReach() {
+  if (!torOnion) return;
+  const r = app.tor_reach();
+  const at = `${torOnion.slice(0, 8)}….onion`;
+  const full = r === 'reachable' || r === 'degraded';
+  $('tor-state').textContent = `Reachable through Tor while this tab is open (${at}): by your invites, and by your contacts when you are signed in.${full ? '' : ' Tor is still publishing your address: some peers may not reach you for a minute or two.'}`;
+}
+
 function torEvent(num, t) {
   if (num === 2) {
     torReady = true;
     later(saveTorCache);
     later(() => channels.torReady());
-    $('tor-state').textContent = `Reachable through Tor while this tab is open (${t.slice(0, 8)}….onion): by your invites, and by your contacts when you are signed in.`;
+    torOnion = t;
+    renderReach();
     if (!shown && !$('v-start').hidden) setStatus('Tor ready', 'ok');
   } else if (num === 3) {
     $('tor-state').textContent = `Tor failed: ${t}`;
@@ -1571,7 +1593,6 @@ function addCard(text) {
   persist();
   $('t-code').value = '';
   $('t-card').value = '';
-  home();
   setStatus(TOR ? 'contact added: Connect to chat' : 'contact added');
 }
 
@@ -1707,7 +1728,7 @@ async function applyBridges() {
 function openBridgeLink(frag) {
   const lines = bridges.fromLink(frag);
   if (lines === null) return error('This bridge link is damaged.');
-  $('settings').open = true;
+  openSettings('settings');
   $('r-br-custom').checked = true;
   $('br-custom').hidden = false;
   $('t-bridges').value = lines;
@@ -1791,10 +1812,12 @@ async function main() {
     b.onclick = () => {
       setTab(b.dataset.tab);
       if (b.dataset.tab === 'chats') return shown ? display(shown) : home();
+      if (b.dataset.tab === 'settings') return openSettings();
       channels.openTab(b.dataset.tab);
     };
   }
   $('b-back').onclick = backToList;
+  for (const li of document.querySelectorAll('#list-settings [data-go]')) li.onclick = () => openSettings(li.dataset.go);
   $('b-new').onclick = home;
   $('b-invite').onclick = () => {
     applyPrefs();
@@ -1892,10 +1915,10 @@ async function main() {
     app.tick(document.hidden);
     const c = shown;
     if (c && !c.$('diag').hidden) c.$('diag-core').textContent = A(c).diag();
-    if (TOR && !torReady && !shown && !$('v-start').hidden) {
+    if (TOR && !torReady) {
       const t = app.tor_status();
       if (t) $('tor-state').textContent = `Connecting to Tor through Snowflake: ${t}`;
-    }
+    } else if (TOR) renderReach();
     if (c) {
       const s = c.codeExpires ? Math.max(0, Math.round((c.codeExpires - Date.now()) / 1000)) : -1;
       c.$('expiry').textContent = s >= 0 && !c.$('v-code').hidden ? `Code expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : '';

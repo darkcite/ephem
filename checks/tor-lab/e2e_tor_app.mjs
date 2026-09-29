@@ -8,7 +8,7 @@
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 runs it on the real Tor network
 // instead (tor_env.mjs).
-import { PASS, check, finish, launch, msgWith, problems, watch } from '../e2e_lib.mjs';
+import { check, finish, launch, msgWith, PASS, problems, toChats, toHome, toSettings, watch } from '../e2e_lib.mjs';
 import { T, dumpLogs, record, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
@@ -17,6 +17,7 @@ const browsers = [];
 
 /** Saves the tab's identity (contacts need one, §7.5); returns the key text. */
 async function saveIdentity(p, label) {
+  await toSettings(p);
   await p.click('#b-id-save');
   await p.fill('#i-label', label);
   await p.fill('#i-pass', PASS);
@@ -65,13 +66,16 @@ try {
   // her onion service follows the identity (hosted again).
   const keyA = await saveIdentity(a, 'A');
   await saveIdentity(b, 'B');
+  await toHome(b);
   const handleA = await a.textContent('#me');
+  await toSettings(a);
   await a.click('#b-id-temp');
   await a.click('#b-id-load');
   await a.fill('#t-keyin', keyA);
   await a.fill('#i-pass-in', PASS);
   await a.click('#b-id-do-load');
   await a.waitForFunction((h) => document.querySelector('#me')?.textContent === h, handleA, { timeout: 10_000 });
+  await toHome(a);
   await a.click('#b-invite');
   await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#t='), null, { timeout: 10_000 });
   const link = await a.inputValue('#v-code .link');
@@ -141,11 +145,13 @@ try {
   await b.click('#b-leave');
   await a.waitForSelector('#v-note:not([hidden])', { timeout: T });
   await b.click('#b-again');
+  await toSettings(b);
   const connect = b.locator('#contacts li', { hasText: 'Alice' }).locator('button', { hasText: 'Connect' });
   check('contact saved from a Tor chat offers "Connect"', await connect.isVisible());
   const t3 = Date.now();
   await connect.click();
   await Promise.all([a, b].map((p) => p.waitForSelector('#v-chat:not([hidden])', { timeout: T })));
+  await toChats(b);
   await b.fill('#t-msg', 'called you');
   await b.press('#t-msg', 'Enter');
   await msgWith(a, 'them', 'called you').waitFor({ timeout: 60_000 });

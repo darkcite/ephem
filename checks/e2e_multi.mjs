@@ -7,7 +7,7 @@
 // chat with a Back button; the tabs and lists carry their ARIA roles.
 //
 // Usage: node checks/e2e_multi.mjs   (build first with ./build.sh)
-import { check, connect, finish, launch, msgWith, problems, serve, watch } from './e2e_lib.mjs';
+import { check, connect, finish, launch, msgWith, problems, serve, toSettings, watch } from './e2e_lib.mjs';
 
 const srv = await serve();
 const base = `http://127.0.0.1:${srv.address().port}`;
@@ -35,6 +35,7 @@ const pick = (p, text) => p.locator('#chats li', { hasText: text }).click();
 try {
   const [a, b, c] = await Promise.all([open('alice'), open('bob'), open('carol')]);
   for (const [p, n] of [[a, 'Alice'], [b, 'Bob'], [c, 'Carol']]) {
+    await toSettings(p);
     await p.fill('#i-nick', n);
     await p.dispatchEvent('#i-nick', 'change');
   }
@@ -84,13 +85,18 @@ try {
     panels: document.querySelectorAll('[role=tabpanel]').length,
     live: document.querySelector('#log')?.getAttribute('aria-live'),
   }));
-  check('tabs, tab panels and the live message log carry their ARIA roles', roles.tablist === 3 && roles.selected === 'tab-chats' && roles.panels === 3 && roles.live === 'polite', JSON.stringify(roles));
+  check('tabs, tab panels and the live message log carry their ARIA roles', roles.tablist === 4 && roles.selected === 'tab-chats' && roles.panels === 4 && roles.live === 'polite', JSON.stringify(roles));
 
   // Phone-sized window: the list first; a chat opens full screen with Back.
   const ph = await open('phone', { width: 390, height: 800 });
   check('phone: the list (and the tab bar) first, no pane', await ph.isVisible('#b-new') && await ph.isVisible('#tab-follow') && await ph.isHidden('#pane'));
   await ph.click('#b-new');
-  check('phone: “New chat” opens the pane full screen, with Back', await ph.isVisible('#b-invite') && await ph.isHidden('#side') && await ph.isVisible('#b-back'));
+  check('phone: “New chat” opens the pane full screen, with Back; the tab bar stays', await ph.isVisible('#b-invite') && await ph.isHidden('#side') && await ph.isVisible('#b-back') && await ph.isVisible('#tab-settings'));
+  await ph.click('#tab-settings');
+  check('phone: Settings is a tab of its own (identity, contacts, connection); the tab bar stays', await ph.isVisible('#b-id-save') && await ph.isVisible('#s-ttl') && await ph.isVisible('#tab-chats'));
+  const frame = await ph.evaluate(() => ({ page: document.scrollingElement.scrollHeight - innerHeight, pane: document.querySelector('#pane').scrollHeight > document.querySelector('#pane').clientHeight }));
+  check('phone: the page itself never scrolls (full screen), only the pane', frame.page <= 0 && frame.pane, JSON.stringify(frame));
+  await ph.click('#tab-chats');
   await ph.click('#b-back');
   check('phone: Back returns to the list', await ph.isVisible('#b-new') && await ph.isHidden('#pane'));
   const overflow = await ph.evaluate(() => document.documentElement.scrollWidth > innerWidth);

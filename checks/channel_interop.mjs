@@ -17,7 +17,7 @@ import { CID } from 'multiformats/cid';
 import { base36 } from 'multiformats/bases/base36';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { decode as cborDecode } from 'cborg';
-import { ROOT, check, finish } from './e2e_lib.mjs';
+import { check, finish, ROOT } from './e2e_lib.mjs';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ephem-channel-'));
 execFileSync('cargo', ['run', '-q', '-p', 'ephem-channel', '--example', 'vectors', '--', dir], { cwd: ROOT, stdio: 'inherit' });

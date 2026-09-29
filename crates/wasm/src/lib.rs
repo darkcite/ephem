@@ -628,6 +628,12 @@ impl App {
         tor::status(&self.inner.borrow())
     }
 
+    /// Whether peers can reach our onion yet: `publishing`, `reachable`, `degraded`,
+    /// `unreachable`, `down`, or empty before it is hosted.
+    pub fn tor_reach(&self) -> String {
+        self.inner.borrow().tor.get().map_or_else(String::new, |t| t.chat_reach().to_owned())
+    }
+
     /// Our `.onion` address (empty until the service is up).
     pub fn onion(&self) -> String {
         self.inner.borrow().tor.onion.clone()

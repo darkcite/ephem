@@ -8,7 +8,7 @@
 //   the SAS is still prompted, then ✔ → Alice resets her card (new secret, the link changes).
 //
 // Usage: node checks/e2e_cards.mjs   (build first with ./build.sh)
-import { PASS, check, connect, finish, launch, problems, serve, watch } from './e2e_lib.mjs';
+import { check, connect, finish, launch, PASS, problems, serve, toSettings, watch } from './e2e_lib.mjs';
 
 const srv = await serve();
 const base = `http://127.0.0.1:${srv.address().port}/app/`;
@@ -32,6 +32,7 @@ async function open(who) {
 }
 
 async function saveIdentity(p, label, nick) {
+  await toSettings(p);
   await p.fill('#i-nick', nick);
   await p.dispatchEvent('#i-nick', 'change');
   await p.click('#b-id-save');
@@ -45,6 +46,7 @@ try {
   const [a, b, t] = await Promise.all([open('alice'), open('bob'), open('temp')]);
   await saveIdentity(a, 'A', 'Alice');
   await saveIdentity(b, 'B', 'Bob');
+  await toSettings(a);
   check('"My contact card" only for a saved identity', await a.isVisible('#b-card') && await t.isHidden('#b-card'));
 
   await a.click('#b-card');
@@ -60,6 +62,7 @@ try {
 
   // Bob uses "Add from a contact card" in his contacts: an invite there is refused with a hint,
   // the card asks for a name (suggested: Alice's nickname).
+  await toSettings(b);
   await b.fill('#t-card', 'https://example.org/app/#i=AAAA');
   await b.click('#b-add-card');
   await b.waitForSelector('#error:not([hidden])');
@@ -84,6 +87,7 @@ try {
 
   a.answers.push(true); // confirm the reset
   await a.click('#b-again');
+  await toSettings(a);
   await a.click('#b-card');
   if (await a.isHidden('#card')) await a.click('#b-card');
   await a.click('#b-card-reset');

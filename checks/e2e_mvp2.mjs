@@ -8,7 +8,7 @@
 //   identity transfer to a new device (SAS on both, encrypted key file incl. contacts).
 //
 // Usage: node checks/e2e_mvp2.mjs   (build first with ./build.sh; E2E_BROWSER=chrome for installed Chrome)
-import { PASS, check, connect, finish, launch, msgWith, problems, serve, watch } from './e2e_lib.mjs';
+import { check, connect, finish, launch, msgWith, PASS, problems, serve, toChats, toSettings, watch } from './e2e_lib.mjs';
 
 const srv = await serve();
 const base = `http://127.0.0.1:${srv.address().port}`;
@@ -26,6 +26,7 @@ try {
   }
 
   // ---- saved identity remembered on this device (§7.2, §7.3) ----
+  await toSettings(a);
   await a.fill('#i-nick', 'Alice');
   await a.dispatchEvent('#i-nick', 'change');
   await a.click('#b-id-save');
@@ -38,6 +39,7 @@ try {
   check('identity remembered in a slot', /Laptop/.test(await a.textContent('#slots')) && /in use/.test(await a.textContent('#slots')));
   await a.reload();
   await a.waitForSelector('#v-start:not([hidden])');
+  await toSettings(a);
   await a.waitForSelector('#slots li button:text("Sign in")');
   await a.click('#slots li button:text("Sign in")');
   await a.fill('#slots li input[type=password]', PASS);
@@ -45,6 +47,7 @@ try {
   await a.waitForFunction((h) => document.querySelector('#me')?.textContent === h, handleA, { timeout: 10000 });
   check('after a reload, sign in from the remembered list', (await a.inputValue('#i-nick')) === 'Alice', 'nickname kept in the key file');
 
+  await toSettings(b);
   await b.fill('#i-nick', 'Bob');
   await b.dispatchEvent('#i-nick', 'change');
 
@@ -84,6 +87,7 @@ try {
   await a.waitForSelector('#v-note:not([hidden])', { timeout: 10000 });
   await a.click('#b-again');
   await b.click('#b-again');
+  await toSettings(a);
   await a.waitForSelector('#backup-stale:not([hidden])');
   check('backup marked out of date after the contact change', /Backup out of date/.test(await a.textContent('#backup-stale')));
   check('contacts list shows the verified contact', /Bobby\s*✔/.test(await a.textContent('#contacts')));
@@ -103,6 +107,7 @@ try {
   await n.goto(`${base}/app/`);
   await n.waitForSelector('#v-start:not([hidden])');
   answer(n, true);
+  await toSettings(n);
   await n.click('#b-id-receive');
   await n.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#i='), null, { timeout: 15000 });
   check('new device shows a transfer invite', (await n.textContent('#code-title')) === 'Receive an identity');
@@ -110,6 +115,7 @@ try {
   answer(a, true);
   await a.click('#b-apply');
   await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#a='), null, { timeout: 15000 });
+  await toChats(n);
   await n.fill('#t-answer', await a.inputValue('#v-code .link'));
   await n.click('#b-answer');
   await Promise.all([n.waitForSelector('#v-transfer:not([hidden])', { timeout: 20000 }), a.waitForSelector('#v-transfer:not([hidden])', { timeout: 20000 })]);

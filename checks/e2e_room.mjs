@@ -9,7 +9,7 @@
 //   closing the room.
 //
 // Usage: node checks/e2e_room.mjs   (build first with ./build.sh; E2E_BROWSER=chrome for installed Chrome)
-import { check, finish, launch, msgWith, openSettings, problems, serve, watch } from './e2e_lib.mjs';
+import { check, finish, launch, msgWith, openSettings, problems, serve, toSettings, watch } from './e2e_lib.mjs';
 
 const srv = await serve();
 const base = `http://127.0.0.1:${srv.address().port}`;
@@ -43,6 +43,7 @@ try {
     watch(p, who);
     await p.goto(`${base}/app/`);
     await p.waitForSelector('#v-start:not([hidden])');
+    await toSettings(p);
     await p.fill('#i-nick', nick);
     await p.dispatchEvent('#i-nick', 'change');
     pages[who] = p;

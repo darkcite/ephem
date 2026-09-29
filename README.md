@@ -48,3 +48,16 @@ Serve the repository root with any static server (for example `python3 -m http.s
 The Tor tests run in an offline lab (a private Tor network with the Go Snowflake broker, proxy and server; `checks/tor-lab/lab.sh up`) and, unless `NET=0`, on the real Tor network: `ONLY=tor ./checks/run_all.sh`.
 
 After editing `app/*.js` or `app/*.css`, run `python3 tools/stamp.py` (or `./build.sh`): the pages pin their hashes, so unstamped edits are refused by the browser.
+
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE): free for any noncommercial purpose; commercial use needs a separate license from the copyright holder. Third-party code in `vendor/` keeps its own license (see [NOTICE](NOTICE)).
+
+Every source file starts with an SPDX header (`SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0` and the copyright line). New files get it before each commit:
+
+```sh
+git config core.hooksPath .githooks   # once per clone: runs tools/spdx.py --staged before every commit
+python3 tools/spdx.py --check         # lists files without the header
+```
+
+Claude Code agents get the same through `.claude/settings.json` (a hook before `git commit`) and the `spdx-stamper` agent.

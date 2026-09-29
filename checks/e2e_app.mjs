@@ -19,7 +19,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import QRCode from 'qrcode';
-import { PASS, ROOT, check, finish, launch, msgWith, openSettings, problems, serve, watch } from './e2e_lib.mjs';
+import { check, finish, launch, msgWith, openSettings, PASS, problems, ROOT, serve, toHome, toSettings, watch } from './e2e_lib.mjs';
 
 // Test hook: when set, sw.js is served with this VERSION (simulates a new release).
 let swVersion = null;
@@ -76,6 +76,7 @@ try {
   check('app boots with a temporary identity', /^anon_[0-9a-f]{6}$/.test(temp1));
 
   // ---- identity key file (§7.3) ----
+  await toSettings(a);
   await a.click('#b-id-save');
   await a.fill('#i-label', 'Laptop');
   await a.fill('#i-pass', PASS);
@@ -101,6 +102,7 @@ try {
   const a3 = await ctxA.newPage(); watch(a3, 'alice-tab3');
   await a3.goto(`${base}/app/`);
   await a3.waitForSelector('#v-start:not([hidden])');
+  await toSettings(a3);
   await a3.click('#b-id-load');
   await a3.fill('#t-keyin', keyText);
   await a3.fill('#i-pass-in', PASS);
@@ -111,6 +113,7 @@ try {
 
   // ---- invite ----
   await openSettings(a);
+  await toHome(a);
   await a.click('#b-invite');
   await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#i='), null, { timeout: 15000 });
   const invite = await a.inputValue('#v-code .link');

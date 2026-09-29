@@ -19,7 +19,7 @@ import * as fs from 'node:fs';
 import * as https from 'node:https';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { PASS, check, finish, launch, problems, watch } from '../e2e_lib.mjs';
+import { check, finish, launch, PASS, problems, toSettings, watch } from '../e2e_lib.mjs';
 import { LIVE, T, dumpLogs, record, serveTor, torContext, unexpected } from './tor_env.mjs';
 
 // A stand-in public IPFS gateway (§D.6.2) for the no-Tor reader: it serves what a follower's
@@ -85,6 +85,7 @@ try {
   const o = await page('owner', { routing: routingCfg });
   await o.goto(`${base}/tor.html`);
   await o.waitForSelector('#v-start:not([hidden])');
+  await toSettings(o);
   await o.click('#b-id-save');
   await o.fill('#i-label', 'Channels');
   await o.fill('#i-pass', PASS);
@@ -190,6 +191,7 @@ try {
   // ---- the owner's channels come back after a reload; the backup exports ----
   await o.reload();
   await o.waitForSelector('#v-start:not([hidden])');
+  await toSettings(o);
   await o.locator('#slots li', { hasText: 'Channels' }).locator('button', { hasText: 'Sign in' }).click();
   await o.locator('#slots li input[type=password]').fill(PASS);
   await o.locator('#slots li', { hasText: 'Channels' }).locator('button', { hasText: 'Sign in' }).click();

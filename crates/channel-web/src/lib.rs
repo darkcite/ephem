@@ -63,6 +63,9 @@ struct Own {
 struct State {
     id: Option<Identity>,
     label: String,
+    /// Signed in here (`sign_in`, a separate identity for channels): the chat app's identity
+    /// (`bind`) no longer replaces it.
+    separate: bool,
     tor: TorSlot,
     /// The owner's open channels.
     own: Vec<Own>,
@@ -105,6 +108,10 @@ impl ChannelApp {
     /// the Tor client they use. A new identity closes the open channels.
     pub fn bind(&self, id: Option<Identity>, label: &str, tor: TorSlot) {
         let mut st = self.st.borrow_mut();
+        st.tor = tor;
+        if st.separate {
+            return;
+        }
         let same = match (&st.id, &id) {
             (Some(a), Some(b)) => a.peer_id() == b.peer_id(),
             (None, None) => true,
@@ -115,7 +122,6 @@ impl ChannelApp {
         }
         st.id = id;
         st.label = label.to_owned();
-        st.tor = tor;
     }
 }
 
@@ -147,6 +153,7 @@ impl ChannelApp {
         let mut st = self.st.borrow_mut();
         st.id = Some(Identity::from_seed(&o.seed));
         st.label = String::from_utf8_lossy(&o.label).into_owned();
+        st.separate = true;
         st.own.clear();
         Ok(())
     }
@@ -355,6 +362,15 @@ impl ChannelApp {
         wasm_bindgen_futures::spawn_local(serve_loop(svc.clone(), hosted.clone()));
         self.st.borrow_mut().served.push(Served { name, onion: onion.clone(), hosted, _svc: svc });
         Ok(onion)
+    }
+
+    /// Whether readers can reach channel `index`'s onion yet (see `Service::reach`): empty if it
+    /// is not served.
+    pub fn reach(&self, index: u32) -> String {
+        let st = self.st.borrow();
+        let Some(o) = st.own.iter().find(|o| o.index == index) else { return String::new() };
+        let name = o.hosted.borrow().name.clone();
+        st.served.iter().find(|s| s.name == name).map_or_else(String::new, |s| s._svc.reach().to_owned())
     }
 
     /// Publishes channel `index`'s record to the IPFS routing network (§D.5.2, optional):
