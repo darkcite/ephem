@@ -357,7 +357,10 @@ function fitViewport() {
   const follow = atBottom();
   const field = document.activeElement?.matches?.('textarea, input:not([type=button]):not([type=checkbox]):not([type=radio]), select');
   const kbd = !!field && phone() && window.innerHeight - vv.height > 120;
-  document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+  // Only while the keyboard is up: otherwise the frame is 100dvh. (An iPhone Home Screen app
+  // reports a visual viewport shorter than the screen, which left a strip under the tab bar.)
+  if (kbd) document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+  else document.documentElement.style.removeProperty('--vvh');
   document.body.classList.toggle('kbd', kbd);
   if (window.scrollY || vv.offsetTop) window.scrollTo(0, 0);
   if (follow || (kbd && document.activeElement.closest('.composer'))) toBottom();
