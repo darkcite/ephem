@@ -432,7 +432,7 @@ impl ChannelApp {
     /// Fetches the vault record through a Tor exit (`GET https://<host>/routing/v1/ipns/<vault
     /// name>`), verifies and opens it. Resolves to the vault as JSON ([`vault_json`]), or to ""
     /// when there is none (404: never published, or forgotten by the DHT). A record older than
-    /// one seen before is ignored (the newer one stays).
+    /// one seen before is ignored (the newer one stays); an equal one replaces ours.
     pub fn vault_fetch(&self, host: &str, extra_root: &[u8]) -> Result<js_sys::Promise, JsValue> {
         let tor = self.tor()?;
         let name = vault::name(&{
@@ -442,9 +442,16 @@ impl ChannelApp {
         });
         let (host, root, st) = (host.to_owned(), extra_root.to_vec(), self.st.clone());
         Ok(wasm_bindgen_futures::future_to_promise(async move {
-            let path = format!("/routing/v1/ipns/{}", name.to_text());
+            // A fresh URL each time: the service caches answers by URL (a takeover would stay
+            // unseen for minutes, §D.11.6).
+            let mut nonce = [0u8; 8];
+            ephem_crypto::random(&mut nonce);
+            let path = format!("/routing/v1/ipns/{}?fresh={:016x}", name.to_text(), u64::from_le_bytes(nonce));
             let (status, body) = with_timeout(FETCH_TIMEOUT_MS, https::request(&tor, "GET", &host, &path, gateway::CT_RECORD, &[], &root)).await.map_err(err)?;
-            if status == 404 {
+            // No vault yet: 404, or (delegated-ipfs.dev, 2026-09-29) 200 with a text body
+            // "delegate error: routing: not found".
+            let missing = std::str::from_utf8(&body).is_ok_and(|t| t.contains("not found"));
+            if status == 404 || (status == 200 && missing) {
                 return Ok(JsValue::from_str(""));
             }
             if status != 200 {
@@ -455,7 +462,9 @@ impl ChannelApp {
             key.fill(0);
             let (v, seq) = opened.map_err(|e| err(format!("vault: {e:?}")))?;
             let mut st = st.borrow_mut();
-            if seq > st.vault_seq {
+            // On a tie the network's record wins: two devices can publish the same sequence at
+            // once (a renewal racing a takeover), and the routing service keeps only one.
+            if seq >= st.vault_seq {
                 st.vault = v;
                 st.vault_seq = seq;
             }

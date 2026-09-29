@@ -36,7 +36,9 @@ pub async fn request(tor: &Tor, method: &str, host: &str, path: &str, content_ty
     let server = ServerName::try_from(name.to_owned()).map_err(|e| e.to_string())?;
     let stream = tor.connect(name, port, false).await?;
     let mut tls = TlsConnector::from(Arc::new(cfg)).connect(server, stream).await.map_err(|e| format!("TLS: {e}"))?;
-    let mut head = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: {content_type}\r\nConnection: close\r\n");
+    // `no-cache`: routing answers are cached by URL for minutes (a newer record stayed invisible
+    // for ~5 min on delegated-ipfs.dev, 2026-09-29); callers that need the newest also vary the URL.
+    let mut head = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: {content_type}\r\nCache-Control: no-cache\r\nConnection: close\r\n");
     if !body.is_empty() {
         head.push_str(&format!("Content-Type: {content_type}\r\nContent-Length: {}\r\n", body.len()));
     }

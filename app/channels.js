@@ -712,6 +712,7 @@ let writer = true;                   // this device writes the identity's channe
 let syncing = false;
 let renewTimer = 0;
 let publishTimer = 0;
+let claimedAt = 0;                   // when this device last took over (ms)
 
 /** A lab stand-in routing host and its test CA, or delegated-ipfs.dev. */
 function routing() {
@@ -758,6 +759,7 @@ async function syncVault(takeover = false) {
     if (leasedElsewhere(vault) && !takeover) return standDown();
     const was = writer;
     writer = true;
+    if (takeover) claimedAt = Date.now();
     if (!was || takeover) {
       await scanOwned(); // Rust released them: reopen from the store
       for (const o of owned) o.away = false;
@@ -773,7 +775,9 @@ async function syncVault(takeover = false) {
   } finally {
     syncing = false;
     clearTimeout(renewTimer);
-    renewTimer = setTimeout(renew, RENEW_MS);
+    // Right after a takeover, look again soon: the other device may have renewed at the same
+    // moment with the same sequence number, and the routing service keeps only one of them.
+    renewTimer = setTimeout(renew, takeover ? Math.min(RENEW_MS, 15_000) : RENEW_MS);
   }
 }
 
@@ -853,7 +857,8 @@ function publishSoon() {
 /** Every third of a lease: a writer checks nobody took over, then renews; a device that stood
  *  down takes over by itself when the other device's lease ran out. */
 async function renew() {
-  renewTimer = setTimeout(renew, RENEW_MS);
+  // While a fresh takeover may still be contested, look every 15 s.
+  renewTimer = setTimeout(renew, Date.now() - claimedAt < LEASE_S * 1000 ? Math.min(RENEW_MS, 15_000) : RENEW_MS);
   if (!ch || !signedIn() || syncing) return;
   try {
     const j = await ch.vault_fetch(...routing());
@@ -862,7 +867,10 @@ async function renew() {
     return console.info('vault:', e?.message || e);
   }
   if (leasedElsewhere(vault)) {
-    if (writer) standDown();
+    // A device that took over within the last lease keeps its claim (a renewal of the other
+    // device raced it); any other writer steps down.
+    if (writer && Date.now() - claimedAt < LEASE_S * 1000) await publishVault();
+    else if (writer) standDown();
   } else if (!writer) {
     syncVault();
   } else {

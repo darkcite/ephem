@@ -48,8 +48,9 @@ const connectTo = async (p, name) => {
   await p.locator('#contacts li', { hasText: name }).locator('button', { hasText: 'Connect' }).click();
 };
 
+let a, b, c;
 try {
-  const [a, b, c] = await Promise.all([open('alice', 'Alice'), open('bob', 'Bob'), open('carol', 'Carol')]);
+  [a, b, c] = await Promise.all([open('alice', 'Alice'), open('bob', 'Bob'), open('carol', 'Carol')]);
   await toSettings(a);
   await a.click('#b-card');
   await a.waitForFunction(() => document.querySelector('#card .link')?.value.includes('#k='));
@@ -112,6 +113,13 @@ try {
 } catch (e) {
   check('tor cards flow', false, e.message.split('\n')[0]);
   dumpLogs();
+  // What each page shows when the flow stops.
+  for (const [p, who] of [[a, 'alice'], [b, 'bob'], [c, 'carol']]) {
+    const st = await p?.evaluate(() => ({ status: document.querySelector('#status')?.textContent, error: document.querySelector('#error:not([hidden])')?.textContent,
+      views: [...document.querySelectorAll('.view:not([hidden])')].map((v) => v.id).join(','), req: document.querySelector('#card-req:not([hidden])')?.textContent?.trim().slice(0, 80),
+      contacts: [...document.querySelectorAll('#contacts li')].map((l) => l.textContent.trim().slice(0, 40)), chats: [...document.querySelectorAll('#chats li')].map((l) => l.textContent.trim().slice(0, 40)) })).catch((x) => x.message);
+    console.log(`  state ${who}:`, JSON.stringify(st));
+  }
 } finally {
   for (const b of browsers) await b.close();
   srv.close();

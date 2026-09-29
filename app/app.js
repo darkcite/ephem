@@ -636,6 +636,7 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       }
       c.peerNick = text(ptr, len);
       if (c.cardRequest) later(() => showCardRequest(c));
+      later(() => fillContactNick(c));
       // Both codes scanned in person: the SAS is shown but not prompted (§10.4).
       if (num === 1 && c.$('verified').textContent === 'unverified') {
         c.$('sas').classList.add('optional');
@@ -1666,13 +1667,23 @@ function showCardRequest(c) {
   c.$('log').hidden = true;
 }
 
+/** A contact saved before the peer's HELLO has no name yet: give it the nickname it sent. */
+function fillContactNick(c) {
+  const handle = c.$('peer')?.dataset.handle;
+  if (!c.peerNick || !handle || !app.identity_label()) return;
+  const row = app.contacts().split('\n').map((l) => l.split('\t')).find((r) => r[3] === handle);
+  if (row && !row[2] && app.rename_contact(row[0], c.peerNick) === 0) persist();
+}
+
 function answerCardRequest(c, accept) {
   c.cardRequest = false;
   c.$('card-req').hidden = true;
   if (!accept) return c.$('b-leave').click();
   c.$('f-send').hidden = false;
   c.$('log').hidden = false;
-  if (A(c).save_contact(c.peerNick || c.$('peer').dataset.handle || '') === 0) persist().then(() => renderPeer(c));
+  // Their nickname may not have arrived yet (the request can come before HELLO over a slow
+  // Tor path): saved without one, it is filled in when HELLO comes (fillContactNick).
+  if (A(c).save_contact(c.peerNick || '') === 0) persist().then(() => renderPeer(c));
 }
 
 // ---- Tor mode (§28) --------------------------------------------------------------------------

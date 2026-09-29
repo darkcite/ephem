@@ -187,8 +187,9 @@ export async function routingStandIn() {
     q.on('end', () => {
       const b = Buffer.concat(body);
       routed.push({ method: q.method, url: q.url, type: q.headers['content-type'], body: b });
-      if (q.method === 'PUT') kept.set(q.url, b);
-      const got = q.method === 'GET' ? kept.get(q.url) : null;
+      const key = q.url.split('?')[0]; // GETs vary the query to get past caches
+      if (q.method === 'PUT') kept.set(key, b);
+      const got = q.method === 'GET' ? kept.get(key) : null;
       if (q.method === 'GET' && !got) {
         res.writeHead(404);
         return res.end();
