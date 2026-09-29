@@ -54,8 +54,8 @@ try {
 
   const lines = labBridges();
   const a = await open('alice', { bridges: null }, true);
-  await a.waitForFunction(() => /waiting for your own bridges/.test(document.querySelector('#tor-state').textContent), null, { timeout: 20_000 });
-  check('with "my own bridges" chosen, Tor waits for them', await a.evaluate(() => !/Snowflake:/.test(document.querySelector('#tor-state').textContent)));
+  await a.waitForFunction(() => /waiting for your own bridges/.test(document.querySelector('#tor-state')?.textContent), null, { timeout: 20_000 });
+  check('with "my own bridges" chosen, Tor waits for them', await a.evaluate(() => !/Snowflake:/.test(document.querySelector('#tor-state')?.textContent)));
 
   await useBridges(a, OBFS4);
   await a.waitForSelector('#br-problems:not([hidden])');
@@ -80,7 +80,7 @@ try {
   await Promise.all([a.waitForEvent('download'), a.click('#b-id-do-save')]);
   const key = await a.inputValue('#t-keytext');
   await a.reload();
-  await a.waitForFunction(() => /waiting for your own bridges/.test(document.querySelector('#tor-state').textContent), null, { timeout: 20_000 });
+  await a.waitForFunction(() => /waiting for your own bridges/.test(document.querySelector('#tor-state')?.textContent), null, { timeout: 20_000 });
   await a.click('#b-id-load');
   await a.fill('#t-keyin', key);
   await a.fill('#i-pass-in', PASS);
@@ -91,13 +91,13 @@ try {
 
   // Bob opens the link: the setting is filled, not applied (his Tor keeps the lab setup).
   const b = await open('bob', {}, false, link.slice(link.indexOf('#')));
-  await b.waitForFunction(() => document.querySelector('#t-bridges').value.length > 0, null, { timeout: 20_000 });
+  await b.waitForFunction(() => document.querySelector('#t-bridges')?.value.length > 0, null, { timeout: 20_000 });
   check('Bob opens the link: settings filled, not applied', await b.isChecked('#r-br-custom') && /check them/.test(await b.textContent('#br-state')) && (await b.inputValue('#t-bridges')) === `${OBFS4}\n${lines}`);
   await torReady(b, 'bob');
 
   // And the Tor that started from pasted lines carries a chat.
   await a.click('#b-invite');
-  await a.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#t='), null, { timeout: 10_000 });
+  await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#t='), null, { timeout: 10_000 });
   await b.fill('#t-code', await a.inputValue('#v-code .link'));
   await b.click('#b-apply');
   await Promise.all([a, b].map((p) => p.waitForSelector('#v-chat:not([hidden])', { timeout: 120_000 })));

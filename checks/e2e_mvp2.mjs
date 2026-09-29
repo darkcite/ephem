@@ -40,7 +40,7 @@ try {
   await a.click('#slots li button:text("Sign in")');
   await a.fill('#slots li input[type=password]', PASS);
   await a.click('#slots li button:text("Sign in")');
-  await a.waitForFunction((h) => document.querySelector('#me').textContent === h, handleA, { timeout: 10000 });
+  await a.waitForFunction((h) => document.querySelector('#me')?.textContent === h, handleA, { timeout: 10000 });
   check('after a reload, sign in from the remembered list', (await a.inputValue('#i-nick')) === 'Alice', 'nickname kept in the key file');
 
   await b.fill('#i-nick', 'Bob');
@@ -49,13 +49,13 @@ try {
   // ---- chat with nicknames, contact, reactions ----
   await connect(a, b);
   await Promise.all([a.waitForSelector('#v-chat:not([hidden])', { timeout: 20000 }), b.waitForSelector('#v-chat:not([hidden])', { timeout: 20000 })]);
-  await b.waitForFunction(() => document.querySelector('#peer').textContent.includes('“Alice”'));
+  await b.waitForFunction(() => document.querySelector('#peer')?.textContent.includes('“Alice”'));
   check('peer nickname shown, marked as self-chosen', (await b.textContent('#peer')) === `${handleA} “Alice”`);
   check('"+ contact" only for saved identities', (await a.isVisible('#b-save-contact')) && !(await b.isVisible('#b-save-contact')));
   await a.click('#b-sas-ok');
   answer(a, 'Bobby');
   await a.click('#b-save-contact');
-  await a.waitForFunction(() => document.querySelector('#peer').textContent === 'Bobby ✔');
+  await a.waitForFunction(() => document.querySelector('#peer')?.textContent === 'Bobby ✔');
   check('contact saved, verified by the SAS', (await a.textContent('#verified')) === 'verified contact');
 
   await a.fill('#t-msg', 'react to this');
@@ -68,10 +68,10 @@ try {
 
   // ---- diagnostics and in-band ICE restart (§13 T1, §18) ----
   await a.click('#b-info');
-  await a.waitForFunction(() => /Noise KK/.test(document.querySelector('#diag-core').textContent), null, { timeout: 5000 });
+  await a.waitForFunction(() => /Noise KK/.test(document.querySelector('#diag-core')?.textContent), null, { timeout: 5000 });
   check('diagnostics show crypto and connection state', /ice connected/.test(await a.textContent('#diag-core')), (await a.textContent('#diag-core')).replace(/\n/g, ' | '));
   await a.click('#b-restart');
-  await a.waitForFunction(() => /ICE restarts 1/i.test(document.querySelector('#diag-core').textContent), null, { timeout: 8000 });
+  await a.waitForFunction(() => /ICE restarts 1/i.test(document.querySelector('#diag-core')?.textContent), null, { timeout: 8000 });
   await a.waitForTimeout(4000); // re-offer, gathering, re-answer
   await b.fill('#t-msg', 'after the ICE restart');
   await b.press('#t-msg', 'Enter');
@@ -89,7 +89,7 @@ try {
   // A verified contact skips the SAS prompt (§10.4).
   await connect(a, b);
   await a.waitForSelector('#v-chat:not([hidden])', { timeout: 20000 });
-  await a.waitForFunction(() => document.querySelector('#verified').textContent === 'verified contact', null, { timeout: 5000 });
+  await a.waitForFunction(() => document.querySelector('#verified')?.textContent === 'verified contact', null, { timeout: 5000 });
   check('verified contact: no SAS prompt', await a.isHidden('#sas'));
   await a.click('#b-leave');
   await b.waitForSelector('#v-note:not([hidden])', { timeout: 10000 });
@@ -102,12 +102,12 @@ try {
   await n.waitForSelector('#v-start:not([hidden])');
   answer(n, true);
   await n.click('#b-id-receive');
-  await n.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#i='), null, { timeout: 15000 });
+  await n.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#i='), null, { timeout: 15000 });
   check('new device shows a transfer invite', (await n.textContent('#code-title')) === 'Receive an identity');
   await a.fill('#t-code', await n.inputValue('#v-code .link'));
   answer(a, true);
   await a.click('#b-apply');
-  await a.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#a='), null, { timeout: 15000 });
+  await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#a='), null, { timeout: 15000 });
   await n.fill('#t-answer', await a.inputValue('#v-code .link'));
   await n.click('#b-answer');
   await Promise.all([n.waitForSelector('#v-transfer:not([hidden])', { timeout: 20000 }), a.waitForSelector('#v-transfer:not([hidden])', { timeout: 20000 })]);
@@ -120,7 +120,7 @@ try {
   await n.fill('#i-xfer-pass', PASS);
   answer(n, false); // no backup download now
   await n.click('#b-xfer-unlock');
-  await n.waitForFunction((h) => document.querySelector('#me').textContent === h, handleA, { timeout: 10000 });
+  await n.waitForFunction((h) => document.querySelector('#me')?.textContent === h, handleA, { timeout: 10000 });
   await n.waitForSelector('#v-start:not([hidden])');
   check('new device signed in as the same identity', /Laptop/.test(await n.textContent('#id-desc')));
   check('contacts moved with the identity', /Bobby\s*✔/.test(await n.textContent('#contacts')) && (await n.inputValue('#i-nick')) === 'Alice');

@@ -9,12 +9,14 @@ license.workspace = true
 crate-type = ["cdylib"]
 
 [features]
-# Tor mode build (app/pkg/ephem_tor*, loaded only by tor.html, §28.2): chat links over Tor
-# streams; the WebRTC chat transport is refused (§28.5).
-tor = ["dep:ephem-tor", "dep:futures", "dep:tracing"]
+# Tor build (app/pkg/ephem_tor*, §28.2): chat links over Tor streams (the WebRTC chat transport
+# is refused, §28.5), and public channels (ChannelApp, Appendix F.3.3), which the direct page
+# also loads for its channel tabs.
+tor = ["dep:ephem-tor", "dep:ephem-channel-web", "dep:futures", "dep:tracing"]
 
 [dependencies]
 ephem-tor = { path = "../tor", default-features = false, optional = true }
+ephem-channel-web = { path = "../channel-web", optional = true }
 futures = { version = "0.3", optional = true }
 tracing = { version = "0.1", optional = true }
 ephem-proto = { path = "../proto" }

@@ -44,7 +44,7 @@ const connectTo = (p, name) => p.locator('#contacts li', { hasText: name }).loca
 try {
   const [a, b, c] = await Promise.all([open('alice', 'Alice'), open('bob', 'Bob'), open('carol', 'Carol')]);
   await a.click('#b-card');
-  await a.waitForFunction(() => document.querySelector('#card .link').value.includes('#k='));
+  await a.waitForFunction(() => document.querySelector('#card .link')?.value.includes('#k='));
   const card = await a.inputValue('#card .link');
   for (const p of [b, c]) {
     p.answers.push('Alice');

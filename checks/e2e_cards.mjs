@@ -46,7 +46,7 @@ try {
   check('"My contact card" only for a saved identity', await a.isVisible('#b-card') && await t.isHidden('#b-card'));
 
   await a.click('#b-card');
-  await a.waitForFunction(() => document.querySelector('#card .link').value.includes('#k='));
+  await a.waitForFunction(() => document.querySelector('#card .link')?.value.includes('#k='));
   const card = await a.inputValue('#card .link');
   check('Alice shows her card (QR + #k= link, 30 days)', /works until/.test(await a.textContent('#card-expiry')) && (await a.$('#card .qr svg')) !== null, card.length + ' chars');
 
@@ -65,17 +65,17 @@ try {
   b.answers.push('Alice from the card');
   await b.fill('#t-card', card);
   await b.click('#b-add-card');
-  await b.waitForFunction(() => /Alice from the card/.test(document.querySelector('#contacts').textContent), null, { timeout: 10_000 });
+  await b.waitForFunction(() => /Alice from the card/.test(document.querySelector('#contacts')?.textContent), null, { timeout: 10_000 });
   const row = await b.textContent('#contacts');
   check('Bob adds Alice from her card in Contacts: an unverified contact', !/✔/.test(row) && !/Connect/.test(row), row.trim());
 
   // Direct mode: a card pins the key and name; a chat still needs invite and answer.
   await connect(b, a);
   await Promise.all([a, b].map((p) => p.waitForSelector('#v-chat:not([hidden])', { timeout: 20_000 })));
-  await b.waitForFunction(() => /Alice from the card/.test(document.querySelector('#peer').textContent), null, { timeout: 10_000 });
+  await b.waitForFunction(() => /Alice from the card/.test(document.querySelector('#peer')?.textContent), null, { timeout: 10_000 });
   check('Bob sees his contact\'s name; the SAS is still asked', await b.isVisible('#sas') && !(await b.textContent('#peer')).includes('✔'));
   await b.click('#b-sas-ok');
-  await b.waitForFunction(() => document.querySelector('#peer').textContent.includes('✔'), null, { timeout: 5_000 });
+  await b.waitForFunction(() => document.querySelector('#peer')?.textContent.includes('✔'), null, { timeout: 5_000 });
   check('after the SAS the contact is verified', true, await b.textContent('#peer'));
   a.answers.push(true);
   await a.click('#b-leave');
@@ -85,7 +85,7 @@ try {
   await a.click('#b-card');
   if (await a.isHidden('#card')) await a.click('#b-card');
   await a.click('#b-card-reset');
-  await a.waitForFunction((old) => document.querySelector('#card .link').value !== old, card);
+  await a.waitForFunction((old) => document.querySelector('#card .link')?.value !== old, card);
   check('reset: a new card (the old secret is gone)', (await a.inputValue('#card .link')) !== card && /Backup out of date/.test(await a.textContent('#backup-stale')));
   check('no page errors or CSP violations', problems.length === 0, problems.join(' | '));
 } catch (e) {

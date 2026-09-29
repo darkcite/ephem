@@ -1,9 +1,12 @@
-//! `channel.html`'s wasm (§27, Appendix D): public channels in the browser, over the embedded
-//! Tor client. Separate from the chat app: its own page, CSP, build and keys (§D.3).
+//! Public channels in the browser (§27, Appendix D), over the embedded Tor client. Part of the
+//! Tor build of the app (Appendix F.3.3): in Tor mode it shares the chats' Tor client and
+//! identity (`App::bind_channels`); the direct page loads that build only for its channel tabs,
+//! with a Tor client of its own (`tor_start`) and a sign-in of its own (`sign_in`).
 //!
 //! - **Owner** (a saved identity; desktop): channel `index` gets its keys from the identity
-//!   seed; create, post, delete, sign the mirror list; every change rebuilds the blocks and
-//!   signs the next IPNS record. The page stores the CAR and the record (OPFS).
+//!   seed (derived, so unlinkable in public, §D.3); create, post, delete, sign the mirror list;
+//!   every change rebuilds the blocks and signs the next IPNS record. Several channels can be
+//!   open and online at once. The page stores each CAR and record (OPFS).
 //! - **Gateway**: the channel is served on its own onion address as the read-only trustless
 //!   gateway subset ([`ephem_channel::gateway`]); mirrors are served the same way.
 //! - **Reader**: fetches the record and the CAR over Tor from an owner or mirror onion, or is
@@ -23,7 +26,7 @@ use ephem_channel::channel::{self, Channel, View, RECORD_VALIDITY_S};
 use ephem_channel::gateway::{self, Hosted};
 use ephem_channel::{Cid, ipns};
 use ephem_crypto::{Identity, keyfile};
-use ephem_tor::web::{DataStream, Service, Snowflake, Tor, list, sleep_ms, tor_log};
+use ephem_tor::web::{DataStream, Service, Snowflake, Tor, TorSlot, list, sleep_ms, tor_log};
 use futures::{AsyncReadExt, AsyncWriteExt};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -58,16 +61,60 @@ struct Own {
 struct State {
     id: Option<Identity>,
     label: String,
-    tor: Option<Rc<Tor>>,
-    own: Option<Own>,
-    /// Onion services kept alive (the channel's, mirrors'); dropping one stops it.
-    services: Vec<Rc<Service>>,
+    tor: TorSlot,
+    /// The owner's open channels.
+    own: Vec<Own>,
+    /// Owned channels online, by name (a reopened channel keeps its service and cell).
+    served: Vec<Served>,
     mirrors: Vec<Mirror>,
+    /// Onion services launched so far (each needs its own arti nickname).
+    launched: u32,
+}
+
+/// An owned channel's onion service and what it serves.
+struct Served {
+    name: Cid,
+    onion: String,
+    hosted: Rc<RefCell<Hosted>>,
+    _svc: Rc<Service>,
+}
+
+impl State {
+    /// The cell serving channel `name` (updated in place if it is online), holding `h`.
+    fn cell(&self, name: &Cid, h: Hosted) -> Rc<RefCell<Hosted>> {
+        match self.served.iter().find(|s| s.name == *name) {
+            Some(s) => {
+                *s.hosted.borrow_mut() = h;
+                s.hosted.clone()
+            }
+            None => Rc::new(RefCell::new(h)),
+        }
+    }
 }
 
 #[wasm_bindgen]
 pub struct ChannelApp {
     st: Rc<RefCell<State>>,
+}
+
+/// Rust side only (the chat app's `bind_channels`).
+impl ChannelApp {
+    /// The identity channels are owned with (Rust side: the chat app hands over its own) and
+    /// the Tor client they use. A new identity closes the open channels.
+    pub fn bind(&self, id: Option<Identity>, label: &str, tor: TorSlot) {
+        let mut st = self.st.borrow_mut();
+        let same = match (&st.id, &id) {
+            (Some(a), Some(b)) => a.peer_id() == b.peer_id(),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            st.own.clear();
+        }
+        st.id = id;
+        st.label = label.to_owned();
+        st.tor = tor;
+    }
 }
 
 impl Default for ChannelApp {
@@ -83,6 +130,10 @@ impl ChannelApp {
         ChannelApp { st: Rc::default() }
     }
 
+    fn tor(&self) -> Result<Rc<Tor>, JsValue> {
+        self.st.borrow().tor.borrow().clone().ok_or_else(|| err("Tor is not started"))
+    }
+
     // ---- identity (owners only; readers need none) ----
 
     /// Opens a key file (the passphrase buffer is wiped). Only the seed is kept: channel keys
@@ -94,6 +145,7 @@ impl ChannelApp {
         let mut st = self.st.borrow_mut();
         st.id = Some(Identity::from_seed(&o.seed));
         st.label = String::from_utf8_lossy(&o.label).into_owned();
+        st.own.clear();
         Ok(())
     }
 
@@ -122,7 +174,7 @@ impl ChannelApp {
         }
         let sf = Snowflake { brokers: b.brokers, fingerprints: b.fingerprints, ice: b.ice, nat: if nat.is_empty() { "unknown".into() } else { nat.into() } };
         let tor = Rc::new(Tor::new(sf, network_toml, cache).map_err(err)?);
-        self.st.borrow_mut().tor = Some(tor.clone());
+        *self.st.borrow().tor.borrow_mut() = Some(tor.clone());
         Ok(wasm_bindgen_futures::future_to_promise(async move {
             tor.bootstrap().await.map_err(err)?;
             Ok(JsValue::UNDEFINED)
@@ -130,11 +182,11 @@ impl ChannelApp {
     }
 
     pub fn tor_status(&self) -> String {
-        self.st.borrow().tor.as_ref().map_or_else(String::new, |t| t.status())
+        self.tor().map_or_else(|_| String::new(), |t| t.status())
     }
 
     pub fn tor_cache(&self) -> Vec<u8> {
-        self.st.borrow().tor.as_ref().and_then(|t| t.cache()).unwrap_or_default()
+        self.tor().ok().and_then(|t| t.cache()).unwrap_or_default()
     }
 
     pub fn tor_log(&self, level: &str) {
@@ -177,9 +229,11 @@ impl ChannelApp {
             let ch = ch.map_err(|e| err(format!("{e:?}")))?;
             if rec.validity >= now + RECORD_VALIDITY_S - RESIGN_AFTER_S {
                 // Fresh enough: keep serving the stored record and blocks as they are.
-                let hosted = Rc::new(RefCell::new(Hosted::new(ch.name(), root, record.to_vec(), blocks)));
                 drop(st);
-                self.st.borrow_mut().own = Some(Own { index, ch, record: record.to_vec(), hosted });
+                let mut st = self.st.borrow_mut();
+                let hosted = st.cell(&ch.name(), Hosted::new(ch.name(), root, record.to_vec(), blocks));
+                st.own.retain(|o| o.index != index);
+                st.own.push(Own { index, ch, record: record.to_vec(), hosted });
                 return Ok(());
             }
             ch
@@ -195,49 +249,57 @@ impl ChannelApp {
         let mut st = self.st.borrow_mut();
         let hosted = Hosted::new(ch.name(), root, record.clone(), blocks);
         // The onion serving the channel keeps the same `Hosted` cell: update it in place.
-        match st.own.as_mut().filter(|o| o.index == index) {
+        match st.own.iter_mut().find(|o| o.index == index) {
             Some(o) => {
                 *o.hosted.borrow_mut() = hosted;
                 o.ch = ch;
                 o.record = record;
             }
-            None => st.own = Some(Own { index, ch, record, hosted: Rc::new(RefCell::new(hosted)) }),
+            None => {
+                let hosted = st.cell(&ch.name(), hosted);
+                st.own.push(Own { index, ch, record, hosted });
+            }
         }
     }
 
-    fn change(&self, f: impl FnOnce(&mut Channel) -> Result<(), channel::ChannelError>) -> Result<(), JsValue> {
-        let (index, ch) = {
-            let mut st = self.st.borrow_mut();
-            let own = st.own.as_mut().ok_or_else(|| err("no channel open"))?;
+    fn change(&self, index: u32, f: impl FnOnce(&mut Channel) -> Result<(), channel::ChannelError>) -> Result<(), JsValue> {
+        let ch = {
+            let st = self.st.borrow();
+            let own = st.own.iter().find(|o| o.index == index).ok_or_else(|| err("that channel is not open"))?;
             // Work on a copy: a refused change leaves the channel as it was.
             let mut copy = own.ch.clone();
             f(&mut copy).map_err(|e| err(format!("{e:?}")))?;
-            (own.index, copy)
+            copy
         };
         self.set_own(index, ch, now_s());
         Ok(())
     }
 
-    /// Publishes a post (≤ 4 KiB); `reply` = the `seq` it answers, or 0.
-    pub fn post(&self, body: &str, reply: u32) -> Result<(), JsValue> {
-        let now = now_s();
-        self.change(|c| c.post(body, u64::from(reply), now).map(|_| ()))
+    /// Indices of the open channels.
+    pub fn open_channels(&self) -> Vec<u32> {
+        self.st.borrow().own.iter().map(|o| o.index).collect()
     }
 
-    pub fn delete(&self, seq: u32) -> Result<(), JsValue> {
-        self.change(|c| c.delete(u64::from(seq)))
+    /// Publishes a post (≤ 4 KiB) in channel `index`; `reply` = the `seq` it answers, or 0.
+    pub fn post(&self, index: u32, body: &str, reply: u32) -> Result<(), JsValue> {
+        let now = now_s();
+        self.change(index, |c| c.post(body, u64::from(reply), now).map(|_| ()))
+    }
+
+    pub fn delete(&self, index: u32, seq: u32) -> Result<(), JsValue> {
+        self.change(index, |c| c.delete(u64::from(seq)))
     }
 
     /// Signs the mirror list (comma-separated onion addresses) into the manifest (§D.7.1).
-    pub fn set_mirrors(&self, csv: &str) -> Result<(), JsValue> {
+    pub fn set_mirrors(&self, index: u32, csv: &str) -> Result<(), JsValue> {
         let list = list(csv);
-        self.change(|c| c.set_mirrors(list))
+        self.change(index, |c| c.set_mirrors(list))
     }
 
-    /// The open channel as JSON (see [`json::view`]).
-    pub fn view(&self) -> String {
+    /// Channel `index` as JSON (see [`json::view`]); empty if it is not open.
+    pub fn view(&self, index: u32) -> String {
         let st = self.st.borrow();
-        let Some(o) = st.own.as_ref() else { return String::new() };
+        let Some(o) = st.own.iter().find(|o| o.index == index) else { return String::new() };
         let h = o.hosted.borrow();
         let rec = ipns::verify(&h.name, &h.record, 0).ok();
         json::view(&View {
@@ -250,22 +312,28 @@ impl ChannelApp {
         })
     }
 
-    /// The open channel's whole CAR (store, export, Kubo import).
-    pub fn car(&self) -> Vec<u8> {
-        self.st.borrow().own.as_ref().map(|o| o.hosted.borrow().car()).unwrap_or_default()
+    /// Channel `index`'s whole CAR (store, export, Kubo import).
+    pub fn car(&self, index: u32) -> Vec<u8> {
+        self.st.borrow().own.iter().find(|o| o.index == index).map(|o| o.hosted.borrow().car()).unwrap_or_default()
     }
 
-    /// The open channel's current signed record.
-    pub fn record(&self) -> Vec<u8> {
-        self.st.borrow().own.as_ref().map(|o| o.record.clone()).unwrap_or_default()
+    /// Channel `index`'s current signed record.
+    pub fn record(&self, index: u32) -> Vec<u8> {
+        self.st.borrow().own.iter().find(|o| o.index == index).map(|o| o.record.clone()).unwrap_or_default()
     }
 
-    /// Serves the open channel on its own onion address (§D.2); returns `<56 chars>.onion`.
-    pub fn serve(&self) -> Result<String, JsValue> {
-        let (tor, hosted, index) = {
+    /// Serves channel `index` on its own onion address (§D.2); returns `<56 chars>.onion`. A
+    /// channel already online keeps its address (and serves its latest version).
+    pub fn serve(&self, index: u32) -> Result<String, JsValue> {
+        let tor = self.tor()?;
+        let (name, hosted) = {
             let st = self.st.borrow();
-            let own = st.own.as_ref().ok_or_else(|| err("no channel open"))?;
-            (st.tor.clone().ok_or_else(|| err("Tor is not started"))?, own.hosted.clone(), own.index)
+            let own = st.own.iter().find(|o| o.index == index).ok_or_else(|| err("that channel is not open"))?;
+            let name = own.hosted.borrow().name.clone();
+            if let Some(s) = st.served.iter().find(|s| s.name == name) {
+                return Ok(s.onion.clone());
+            }
+            (name, own.hosted.clone())
         };
         let mut onion_seed = {
             let st = self.st.borrow();
@@ -273,24 +341,30 @@ impl ChannelApp {
             sign.fill(0);
             onion
         };
-        let svc = tor.launch(&format!("channel{index}"), &onion_seed);
+        let nick = {
+            let mut st = self.st.borrow_mut();
+            st.launched += 1;
+            format!("channel{}", st.launched)
+        };
+        let svc = tor.launch(&nick, &onion_seed);
         onion_seed.fill(0);
         let svc = Rc::new(svc.map_err(err)?);
         let onion = svc.onion().to_owned();
-        self.st.borrow_mut().services.push(svc.clone());
-        wasm_bindgen_futures::spawn_local(serve_loop(svc, hosted));
+        wasm_bindgen_futures::spawn_local(serve_loop(svc.clone(), hosted.clone()));
+        self.st.borrow_mut().served.push(Served { name, onion: onion.clone(), hosted, _svc: svc });
         Ok(onion)
     }
 
-    /// Publishes the open channel's record to the IPFS routing network (§D.5.2, optional):
+    /// Publishes channel `index`'s record to the IPFS routing network (§D.5.2, optional):
     /// `PUT https://delegated-ipfs.dev/routing/v1/ipns/<name>` **through a Tor exit**, so the
     /// owner stays hidden. It only matters if some IPFS node holds the content (a follower's
     /// Kubo mirror). `host`/`extra_root`: the lab's stand-in; the page passes the real host.
-    pub fn publish_ipfs(&self, host: &str, extra_root: &[u8]) -> Result<js_sys::Promise, JsValue> {
-        let (tor, name, record) = {
+    pub fn publish_ipfs(&self, index: u32, host: &str, extra_root: &[u8]) -> Result<js_sys::Promise, JsValue> {
+        let tor = self.tor()?;
+        let (name, record) = {
             let st = self.st.borrow();
-            let own = st.own.as_ref().ok_or_else(|| err("no channel open"))?;
-            (st.tor.clone().ok_or_else(|| err("Tor is not started"))?, own.hosted.borrow().name.to_text(), own.record.clone())
+            let own = st.own.iter().find(|o| o.index == index).ok_or_else(|| err("that channel is not open"))?;
+            (own.hosted.borrow().name.to_text(), own.record.clone())
         };
         let (host, root) = (host.to_owned(), extra_root.to_vec());
         Ok(wasm_bindgen_futures::future_to_promise(async move {
@@ -311,7 +385,7 @@ impl ChannelApp {
     /// JSON view plus the raw record and CAR (for a mirror or a local copy).
     pub fn read(&self, name: &str, onions: &str, min_seq: f64) -> Result<js_sys::Promise, JsValue> {
         let name = Cid::parse(name).filter(|c| c.ed25519_key().is_some()).ok_or_else(|| err("not a channel name"))?;
-        let tor = self.st.borrow().tor.clone().ok_or_else(|| err("Tor is not started"))?;
+        let tor = self.tor()?;
         let onions = list(onions);
         if onions.is_empty() {
             return Err(err("no onion address to read from"));
@@ -363,7 +437,7 @@ impl ChannelApp {
         let name = Cid::parse(&reading.name).ok_or_else(|| err("name"))?;
         let root = roots.into_iter().next().ok_or_else(|| err("CAR has no root"))?;
         let hosted = Hosted::new(name.clone(), root, reading.record.clone(), blocks);
-        let tor = {
+        {
             let st = self.st.borrow();
             if let Some(m) = st.mirrors.iter().find(|m| m.name == name) {
                 // Only ever forward: a mirror never serves an older version than it has.
@@ -373,17 +447,19 @@ impl ChannelApp {
                 }
                 return Ok(m.onion.clone());
             }
-            st.tor.clone().ok_or_else(|| err("Tor is not started"))?
-        };
+        }
+        let tor = self.tor()?;
         let seed: [u8; 32] = seed.try_into().map_err(|_| err("mirror seed must be 32 bytes"))?;
-        let slot = self.st.borrow().mirrors.len();
-        let svc = Rc::new(tor.launch(&format!("mirror{slot}"), &seed).map_err(err)?);
+        let nick = {
+            let mut st = self.st.borrow_mut();
+            st.launched += 1;
+            format!("mirror{}", st.launched)
+        };
+        let svc = Rc::new(tor.launch(&nick, &seed).map_err(err)?);
         let onion = svc.onion().to_owned();
         let hosted = Rc::new(RefCell::new(hosted));
         wasm_bindgen_futures::spawn_local(serve_loop(svc.clone(), hosted.clone()));
-        let mut st = self.st.borrow_mut();
-        st.services.push(svc);
-        st.mirrors.push(Mirror { name, onion: onion.clone(), hosted, seq: std::cell::Cell::new(reading.seq) });
+        self.st.borrow_mut().mirrors.push(Mirror { name, onion: onion.clone(), hosted, seq: std::cell::Cell::new(reading.seq), _svc: svc });
         Ok(onion)
     }
 }
@@ -394,6 +470,7 @@ struct Mirror {
     onion: String,
     hosted: Rc<RefCell<Hosted>>,
     seq: std::cell::Cell<u64>,
+    _svc: Rc<Service>,
 }
 
 /// A verified channel as handed to the page: the JSON view, and the bytes it came from.

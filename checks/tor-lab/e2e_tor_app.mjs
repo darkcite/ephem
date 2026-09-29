@@ -69,9 +69,9 @@ try {
   await a.fill('#t-keyin', keyA);
   await a.fill('#i-pass-in', PASS);
   await a.click('#b-id-do-load');
-  await a.waitForFunction((h) => document.querySelector('#me').textContent === h, handleA, { timeout: 10_000 });
+  await a.waitForFunction((h) => document.querySelector('#me')?.textContent === h, handleA, { timeout: 10_000 });
   await a.click('#b-invite');
-  await a.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#t='), null, { timeout: 10_000 });
+  await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#t='), null, { timeout: 10_000 });
   const link = await a.inputValue('#v-code .link');
   const code = link.split('#t=')[1];
   check('Alice: one Tor invite (kind 5, 104 bytes), no answer box', Buffer.from(code, 'base64url').length === 104 && await a.isHidden('#answer-box'), `${code.length} chars`);

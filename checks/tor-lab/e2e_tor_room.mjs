@@ -37,7 +37,7 @@ const mesh = (page, n) => page.waitForFunction((n) => {
 /** Owner `a` invites `p` with a Tor invite; resolves when `p` is in the room. */
 async function join(a, p) {
   await a.click('#b-room-invite');
-  await a.waitForFunction(() => document.querySelector('#room-invite .link').value.includes('#t='), null, { timeout: 15_000 });
+  await a.waitForFunction(() => document.querySelector('#room-invite .link')?.value.includes('#t='), null, { timeout: 15_000 });
   check('owner shows a Tor invite, no answer box', await a.isHidden('#t-room-answer'));
   await p.fill('#t-code', await a.inputValue('#room-invite .link'));
   await p.click('#b-apply');

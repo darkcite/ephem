@@ -22,12 +22,12 @@ const allDirect = (page, n) => page.waitForFunction((n) => {
 /** Owner `a` invites `p` (observer or member); `p` answers; resolves when `p` is in the room. */
 async function join(a, p, observer) {
   await a.click(observer ? '#b-room-observer' : '#b-room-invite');
-  await a.waitForFunction(() => document.querySelector('#room-invite .link').value.includes('#i='), null, { timeout: 15000 });
+  await a.waitForFunction(() => document.querySelector('#room-invite .link')?.value.includes('#i='), null, { timeout: 15000 });
   await openSettings(p);
   await p.fill('#t-code', await a.inputValue('#room-invite .link'));
   accept(p); // "every member will see your IP" (§29.2)
   await p.click('#b-apply');
-  await p.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#a='), null, { timeout: 15000 });
+  await p.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#a='), null, { timeout: 15000 });
   await a.fill('#t-room-answer', await p.inputValue('#v-code .link'));
   await a.click('#b-room-answer');
   await p.waitForSelector('#v-chat:not([hidden])', { timeout: 20000 });
@@ -75,7 +75,7 @@ try {
   // T2 (§13): B loses its direct links to C and D; they come back through the owner's signalling.
   await b.click('#b-info');
   await b.click('#b-drop');
-  await b.waitForFunction(() => /reconnecting|connecting/.test(document.querySelector('#members').textContent), null, { timeout: 5000 });
+  await b.waitForFunction(() => /reconnecting|connecting/.test(document.querySelector('#members')?.textContent), null, { timeout: 5000 });
   await Promise.all([allDirect(b, 4), allDirect(c, 4), allDirect(d, 4)]);
   await b.click('#b-info');
   check('lost member links resume automatically (T2 via the owner)', true);
@@ -104,7 +104,7 @@ try {
   await c.waitForSelector('#log li.me.deleted', { timeout: 8000 });
   check('owner deletes a member’s message for everyone', true);
   await a.selectOption('#s-chat-ttl', '60');
-  await b.waitForFunction(() => /owner set messages to disappear/.test(document.querySelector('#log').textContent), null, { timeout: 8000 });
+  await b.waitForFunction(() => /owner set messages to disappear/.test(document.querySelector('#log')?.textContent), null, { timeout: 8000 });
   check('only the owner sets the timer', await b.isDisabled('#s-chat-ttl'));
 
   // ---- removal, leaving, closing ----
@@ -116,7 +116,7 @@ try {
   check('members see the new member list', !/Carol/.test((await rows(b)).join()));
 
   await b.click('#b-leave');
-  await a.waitForFunction(() => /Bob.*is no longer in the room/.test(document.querySelector('#log').textContent), null, { timeout: 10000 });
+  await a.waitForFunction(() => /Bob.*is no longer in the room/.test(document.querySelector('#log')?.textContent), null, { timeout: 10000 });
   await d.waitForFunction(() => document.querySelectorAll('#members li').length === 2, null, { timeout: 10000 });
   check('a member leaves; the others update', true);
 
@@ -129,8 +129,8 @@ try {
 } catch (e) {
   check('room flow', false, e.message.split('\n')[0]);
   for (const [who, p] of Object.entries(pages)) {
-    const st = await p.evaluate(() => [document.querySelector('.view:not([hidden])')?.id, document.querySelector('#status').textContent,
-      document.querySelector('#error').hidden ? '' : document.querySelector('#error').textContent,
+    const st = await p.evaluate(() => [document.querySelector('.view:not([hidden])')?.id, document.querySelector('#status')?.textContent,
+      document.querySelector('#error').hidden ? '' : document.querySelector('#error')?.textContent,
       [...document.querySelectorAll('#members li')].map((l) => l.textContent).join(' | '),
       [...document.querySelectorAll('#log li.sys')].map((l) => l.textContent).slice(-3).join(' | ')].join(' · ')).catch((x) => x.message);
     console.log(`  ${who}: ${st}`);

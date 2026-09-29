@@ -14,7 +14,45 @@ html[data-mode="tor"] .direct-only, html:not([data-mode="tor"]) .tor-only { disp
 html[data-mode="tor"] .brand::after { content: " · Tor"; color: var(--ok); }
 html, body { margin: 0; background: var(--bg); color: var(--fg); }
 body { min-height: 100dvh; display: flex; flex-direction: column; font: 14px/1.45 var(--mono); }
-main { flex: 1; width: 100%; max-width: 680px; margin: 0 auto; padding: 12px; }
+/* ---- shell (Appendix F.3.1): the tab lists beside the pane (desktop), or one then the other ---- */
+.shell { flex: 1; display: grid; grid-template-columns: 300px minmax(0, 1fr); width: 100%; max-width: 1180px; margin: 0 auto; }
+.side { position: sticky; top: 42px; align-self: start; height: calc(100dvh - 42px); overflow-y: auto; border-right: 1px solid var(--line);
+  padding: 0 10px 12px; background: var(--bg); }
+.pane { min-width: 0; width: 100%; max-width: 720px; margin: 0 auto; padding: 12px; }
+.tabs { display: flex; gap: 4px; position: sticky; top: 0; background: var(--bg); padding: 8px 0 6px; z-index: 1; }
+.tabs button { flex: 1; margin: 0; padding: 6px 4px; font-size: 12px; background: transparent; border-color: transparent; color: var(--dim);
+  border-bottom: 2px solid transparent; border-radius: 0; }
+.tabs button[aria-selected="true"] { color: var(--acc); border-bottom-color: var(--acc); font-weight: 600; }
+.badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--acc); color: var(--bg);
+  font-size: 11px; font-weight: 700; text-align: center; line-height: 18px; }
+button.wide { width: 100%; }
+.list h3 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; margin: 14px 0 4px; }
+.rows { list-style: none; margin: 6px 0; padding: 0; }
+.rows li { display: flex; gap: 8px; align-items: center; padding: 7px 8px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+.rows li:hover { background: var(--panel); }
+.rows li.active { background: var(--panel); border-color: var(--line); }
+.rows li .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.rows li b { color: var(--fg); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rows li .sub { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rows .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
+.rows li.ok .dot { background: var(--ok); }
+.rows li.bad .dot { background: var(--bad); }
+.rows .avatar { width: 30px; height: 30px; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #fff;
+  background: hsl(var(--hue, 210) 45% 38%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--line); }
+.rows li.ok .avatar { background: hsl(var(--hue, 210) 45% 38%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ok); }
+.rows li.bad .avatar { background: hsl(var(--hue, 210) 20% 30%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--bad); }
+.back { margin: 0; padding: 2px 10px; font-size: 16px; }
+@media (min-width: 900px) { .back { display: none; } }
+/* Phones: the list, or (after a tap) the pane with a Back button. */
+@media (max-width: 899px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .side { position: static; height: auto; border-right: 0; padding-bottom: 72px; }
+  body.pane-open .side { display: none; }
+  body:not(.pane-open) .pane { display: none; }
+  .tabs { position: fixed; bottom: 0; left: 0; right: 0; top: auto; z-index: 4; background: var(--panel); border-top: 1px solid var(--line);
+    padding: 4px 6px max(6px, env(safe-area-inset-bottom)); }
+  body.pane-open .tabs { display: none; }
+}
 a { color: var(--acc); }
 ::selection { background: var(--acc); color: var(--bg); }
 
@@ -81,8 +119,8 @@ button:disabled { opacity: .5; cursor: default; }
 .sas-emoji { font-size: 20px; letter-spacing: .2em; }
 .sas.optional p, .sas.optional .actions { display: none; }
 .sas.optional { padding: 4px 10px; }
-.peer { display: flex; gap: 8px; align-items: center; padding: 6px 0 8px; border-bottom: 1px solid var(--line);
-  position: sticky; top: 38px; background: var(--bg); z-index: 2; }
+.peer { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 0 8px; border-bottom: 1px solid var(--line);
+  position: sticky; top: 42px; background: var(--bg); z-index: 2; }
 .peer #peer { color: var(--acc); font-weight: 600; }
 .peer #peer::before { content: "↔ "; color: var(--dim); }
 #peer-state { color: var(--warn); }
@@ -153,7 +191,7 @@ h2 small { color: var(--dim); font-weight: 400; text-transform: none; letter-spa
 .room .codebox { margin-top: 8px; }
 .log li .who { display: block; font-size: 11px; color: var(--acc); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
 
-/* ---- public channels (channel.html) ---- */
+/* ---- public channels (Following, My channels) ---- */
 .posts li { max-width: 100%; align-self: stretch; }
 .posts li.deleted .body { color: var(--dim); font-style: italic; }
 .posts .quote { border-left: 2px solid var(--line); padding-left: 6px; margin: 2px 0; }

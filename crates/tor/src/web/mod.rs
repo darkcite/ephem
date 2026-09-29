@@ -33,6 +33,10 @@ pub use rt::sleep_ms;
 pub use tor_proto::client::stream::{DataReader, DataWriter};
 
 /// A comma-separated list (broker URLs, STUN URLs), empty entries dropped.
+/// The page's Tor client, shared by its chats and its channels (one client per page, Appendix
+/// F.3.3); empty until started.
+pub type TorSlot = std::rc::Rc<std::cell::RefCell<Option<std::rc::Rc<Tor>>>>;
+
 pub fn list(s: &str) -> Vec<String> {
     s.split(',').map(str::trim).filter(|x| !x.is_empty()).map(str::to_owned).collect()
 }

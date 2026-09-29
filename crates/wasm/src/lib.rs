@@ -542,7 +542,7 @@ fn contact_err(e: ContactError) -> ErrorCode {
 
 /// The key-file sections the page may read and write (`App::section`).
 fn settings_section(t: u8) -> bool {
-    matches!(t, contacts::TLV_TOR_BRIDGES | contacts::TLV_FOLLOWS | contacts::TLV_CHANNELS)
+    matches!(t, contacts::TLV_TOR_BRIDGES | contacts::TLV_FOLLOWS)
 }
 
 #[inline]
@@ -634,6 +634,16 @@ impl App {
     /// Dials a contact's onion (§28.7): the chat opens when the contact's Tor tab accepts.
     pub fn contact_connect(&self, peer_hex: &str) -> u32 {
         status(peer_from_hex(peer_hex).ok_or(ErrorCode::NotAContact).and_then(|p| tor::call(&self.inner, p)))
+    }
+
+    /// Gives the page's channels (`ChannelApp`) this tab's Tor client and identity: channel keys
+    /// are derived from its seed (§D.3). Call again after every sign-in or sign-out.
+    pub fn bind_channels(&self, ch: &ephem_channel_web::ChannelApp) {
+        let g = self.inner.borrow();
+        let label = g.saved.as_ref().map(|s| String::from_utf8_lossy(&s.label).into_owned()).unwrap_or_default();
+        // Only a saved identity owns channels; a temporary one only reads.
+        let id = g.saved.as_ref().map(|_| Identity::from_seed(g.id.seed()));
+        ch.bind(id, &label, g.tor.slot.clone());
     }
 
     /// arti logs to the console at `level` (`"info"`, `"debug"`, …; diagnostics only).
@@ -769,8 +779,8 @@ impl App {
 
     // ---- settings kept in the key file (Appendix F; saved identities only) ----
 
-    /// Section `t` of the key file (0x05 Tor bridge lines, 0x06 followed channels, 0x07 owned
-    /// channels) as UTF-8, or empty.
+    /// Section `t` of the key file (0x05 Tor bridge lines, 0x06 followed channels) as UTF-8, or
+    /// empty.
     pub fn section(&self, t: u8) -> String {
         let g = self.inner.borrow();
         match g.saved.as_ref() {

@@ -94,7 +94,7 @@ try {
   check('wrong passphrase rejected', /Wrong passphrase/.test(await a.textContent('#error')) && (await a.textContent('#me')) === temp2);
   await a.fill('#i-pass-in', PASS);
   await a.click('#b-id-do-load');
-  await a.waitForFunction((h) => document.querySelector('#me').textContent === h, savedHandle, { timeout: 10000 });
+  await a.waitForFunction((h) => document.querySelector('#me')?.textContent === h, savedHandle, { timeout: 10000 });
   check('sign in with key text restores the identity', true, savedHandle);
   const a3 = await ctxA.newPage(); watch(a3, 'alice-tab3');
   await a3.goto(`${base}/app/`);
@@ -110,7 +110,7 @@ try {
   // ---- invite ----
   await openSettings(a);
   await a.click('#b-invite');
-  await a.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#i='), null, { timeout: 15000 });
+  await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#i='), null, { timeout: 15000 });
   const invite = await a.inputValue('#v-code .link');
   check('invite link produced', invite.startsWith(`${base}/app/#i=`), `${invite.length} chars, ${Math.floor(invite.split('#i=')[1].length * 3 / 4)} B`);
   check('invite QR rendered', (await a.locator('#v-code .qr svg path').count()) === 1);
@@ -128,7 +128,7 @@ try {
   await openSettings(b);
   const tScan = Date.now();
   await b.click('#b-scan');
-  await b.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#a='), null, { timeout: 30000 })
+  await b.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#a='), null, { timeout: 30000 })
     .catch(async (e) => { throw new Error(`scan: ${await b.textContent('#scan-status')} — ${e.message}`); });
   check('invite scanned from camera (wasm QR decoder)', await b.locator('#scanner').isHidden(), `${((Date.now() - tScan) / 1000).toFixed(1)} s incl. answer`);
   const answer = await b.inputValue('#v-code .link');
@@ -137,8 +137,8 @@ try {
   // ---- Alice opens the answer link in a new tab: handed to her first tab ----
   const a2 = await ctxA.newPage(); watch(a2, 'alice-tab2');
   await a2.goto(answer);
-  await a2.waitForSelector('#v-note:not([hidden])', { timeout: 5000 });
-  check('answer link forwarded to owning tab', (await a2.textContent('#note-title')) === 'Code delivered');
+  await a2.waitForSelector('#v-handoff:not([hidden])', { timeout: 5000 });
+  check('answer link forwarded to owning tab', (await a2.textContent('#handoff-title')) === 'Code delivered');
   check('fragment scrubbed from URL', !a2.url().includes('#'));
   await a2.close();
 
@@ -156,7 +156,7 @@ try {
   await a.waitForFunction(() => document.querySelector('#log li.me .tick')?.textContent === '✓✓', null, { timeout: 8000 });
   check('ticks ✓ then ✓✓ (read receipt)', true);
   await b.locator('#t-msg').pressSequentially('typing', { delay: 20 });
-  await a.waitForFunction(() => document.querySelector('#peer-state').textContent === 'typing…', null, { timeout: 5000 });
+  await a.waitForFunction(() => document.querySelector('#peer-state')?.textContent === 'typing…', null, { timeout: 5000 });
   check('typing indicator', true);
   await b.fill('#t-msg', '');
 
@@ -193,21 +193,21 @@ try {
 
   // Self-destruct timer
   await a.selectOption('#s-chat-ttl', '5');
-  await b.waitForFunction(() => document.querySelector('#s-chat-ttl').value === '5', null, { timeout: 5000 });
+  await b.waitForFunction(() => document.querySelector('#s-chat-ttl')?.value === '5', null, { timeout: 5000 });
   check('self-destruct setting reaches the peer', /disappear after 5 seconds/.test(await b.textContent('#log')));
   await a.fill('#t-msg', 'this will vanish');
   await a.press('#t-msg', 'Enter');
   await msgWith(b, 'them', 'this will vanish').waitFor({ timeout: 5000 });
   const t0 = Date.now();
-  await b.waitForFunction(() => !document.querySelector('#log').textContent.includes('this will vanish'), null, { timeout: 12000 });
-  await a.waitForFunction(() => !document.querySelector('#log').textContent.includes('this will vanish'), null, { timeout: 12000 });
+  await b.waitForFunction(() => !document.querySelector('#log')?.textContent.includes('this will vanish'), null, { timeout: 12000 });
+  await a.waitForFunction(() => !document.querySelector('#log')?.textContent.includes('this will vanish'), null, { timeout: 12000 });
   check('self-destructing message removed on both sides', true, `${((Date.now() - t0) / 1000).toFixed(1)} s after arrival`);
   await b.selectOption('#s-chat-ttl', '0');
-  await a.waitForFunction(() => document.querySelector('#s-chat-ttl').value === '0', null, { timeout: 5000 });
+  await a.waitForFunction(() => document.querySelector('#s-chat-ttl')?.value === '0', null, { timeout: 5000 });
 
   // Diagnostics
   await a.click('#b-info');
-  await a.waitForFunction(() => document.querySelector('#diag-path').textContent.includes('↔'), null, { timeout: 12000 });
+  await a.waitForFunction(() => document.querySelector('#diag-path')?.textContent.includes('↔'), null, { timeout: 12000 });
   check('path diagnostics (getStats, no relay)', true, await a.textContent('#diag-path'));
 
   // ---- network loss and T3 reconnect ----
@@ -219,10 +219,10 @@ try {
   await a.press('#t-msg', 'Enter');
   check('message queued while offline (🕓)', (await msgWith(a, 'me', 'sent while offline').locator('.tick').textContent()) === '🕓');
   await a.click('#b-resume');
-  await a.waitForFunction(() => document.querySelector('#resume .link').value.includes('#r='), null, { timeout: 15000 });
+  await a.waitForFunction(() => document.querySelector('#resume .link')?.value.includes('#r='), null, { timeout: 15000 });
   await b.fill('#t-resume', await a.inputValue('#resume .link'));
   await b.click('#b-resume-apply');
-  await b.waitForFunction(() => document.querySelector('#resume .link').value.includes('#q='), null, { timeout: 15000 });
+  await b.waitForFunction(() => document.querySelector('#resume .link')?.value.includes('#q='), null, { timeout: 15000 });
   await a.fill('#t-resume', await b.inputValue('#resume .link'));
   await a.click('#b-resume-apply');
   await msgWith(b, 'them', 'sent while offline').waitFor({ timeout: 20000 });
@@ -263,7 +263,7 @@ try {
   swVersion = 'next-build';
   await a.evaluate(() => navigator.serviceWorker.getRegistration().then((r) => r.update()));
   await a.waitForSelector('#update:not([hidden])', { timeout: 10000 });
-  await a.waitForFunction(() => document.querySelector('#update-text').textContent.includes('next-build'), null, { timeout: 5000 });
+  await a.waitForFunction(() => document.querySelector('#update-text')?.textContent.includes('next-build'), null, { timeout: 5000 });
   const stillOld = await a.evaluate(() => caches.keys());
   check('new build waits and is offered to the user', stillOld.includes(`ephem-${oldBuild}`), `offered build next-build, running ${oldBuild}`);
   await Promise.all([a.waitForEvent('load'), a.click('#b-update')]);

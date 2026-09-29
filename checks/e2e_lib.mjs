@@ -70,11 +70,11 @@ export const openSettings = async (page) => {
 export async function connect(a, b) {
   await openSettings(a);
   await a.click('#b-invite');
-  await a.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#i='), null, { timeout: 15000 });
+  await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#i='), null, { timeout: 15000 });
   await openSettings(b);
   await b.fill('#t-code', await a.inputValue('#v-code .link'));
   await b.click('#b-apply');
-  await b.waitForFunction(() => document.querySelector('#v-code .link').value.includes('#a='), null, { timeout: 15000 });
+  await b.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#a='), null, { timeout: 15000 });
   await a.fill('#t-answer', await b.inputValue('#v-code .link'));
   await a.click('#b-answer');
 }

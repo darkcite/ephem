@@ -4,12 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-W5fAFqQxlJlBnS3Q9snvS+mSUOg1aRiCcLSkonFlDJQ='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="d7ca675d0620">
-<meta name="ephem-wasm" content="sha384-Giom3ZR2Pma7ni4Ishktw1pzOkLKlz+dHR2u6EP/eCJ4zHUgLH4NF9ggzBUDYHwj">
-<link rel="stylesheet" href="app.css" integrity="sha384-Y+x3CqybcsMzsp4p5lJL4MXixo8zhC1qHqCiylCYuPP97ExvFBNXbua3Sv1RVA96">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-IqfdV5oVkI/csLR1OQMyxgdoUnTwZCUQrmaGJVRFT9GQjwU+aqm8WEeL1hWz6rnf","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./bridges.js":"sha384-jdoNia6Eq3azxd8geruCudBE8S3kc0qqpeVo4KUUUO3RhZv7wzWb3nSnCVmZc3kI","./pkg/ephem_tor.js":"sha384-77g7bPXirI5jXlQCFoYVsN/S52K79oEvfJ0z6Q+EF7wJxILje8NftIC4gCl3JPLY"}}</script>
-<script type="module" src="app.js" integrity="sha384-IqfdV5oVkI/csLR1OQMyxgdoUnTwZCUQrmaGJVRFT9GQjwU+aqm8WEeL1hWz6rnf"></script>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-lECYE+KU9LS/B7/uhD7SH7SDjjmBlI3UscUxQBZxP7o='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="77e8e5ba2f97">
+<meta name="ephem-wasm" content="sha384-z1g8tt8aBh2a0p+8ThnN1xh1QrMhA0YXt8J8INI3yrrWiKyGj4S8V0J5+9BAfxlR">
+<meta name="ephem-tor-wasm" content="sha384-z1g8tt8aBh2a0p+8ThnN1xh1QrMhA0YXt8J8INI3yrrWiKyGj4S8V0J5+9BAfxlR">
+<link rel="stylesheet" href="app.css" integrity="sha384-w9EUT2zBIlfnbi+MjmZMx9qpkta8cEO4aDy5N0tAawQJrxZtykYyEbswVYz6t3jv">
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-CV5Eqf7s45nDqQjtI+dJdLC8n0ueIpOz+c8I900Bz/puP1d+W3oA+fLkNa90naIp","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./bridges.js":"sha384-jdoNia6Eq3azxd8geruCudBE8S3kc0qqpeVo4KUUUO3RhZv7wzWb3nSnCVmZc3kI","./channels.js":"sha384-fPod4muHR33DLU7PLYg8N1iNCdrlpOQh5+VRikYXka3ww0mDALfrlXXEfDNDKNVf","./ui.js":"sha384-KQ5z3i+t7gIBihDYG/0uuzAKndgSy/bvyTnhY5xBmlXHR8J82pE7kIt65Qn8pQHo","./pkg/ephem_tor.js":"sha384-8BA7UDpDRIpA6Qec7xfg8kFkQiz7hSxO6iiwYrecP1SpgbO/39jqw6DtPTEP+yFE"}}</script>
+<script type="module" src="app.js" integrity="sha384-CV5Eqf7s45nDqQjtI+dJdLC8n0ueIpOz+c8I900Bz/puP1d+W3oA+fLkNa90naIp"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -29,18 +30,45 @@
   <button id="b-update-later" class="ghost">Later</button>
 </div>
 <header class="bar">
+  <button id="b-back" class="ghost back" hidden aria-label="Back to the list">‹</button>
   <a class="brand" href="../">Ephem</a>
   <span id="me" class="pill" title="Your display handle (not a proof of identity)">…</span>
   <span id="status" class="pill status">starting</span>
 </header>
 
-<main>
-  <noscript><p class="warn">Ephem needs JavaScript and WebAssembly.</p></noscript>
+<div class="shell">
+  <aside id="side" class="side">
+    <nav class="tabs" role="tablist" aria-label="Ephem">
+      <button id="tab-chats" role="tab" aria-selected="true" data-tab="chats">Chats <span id="badge-chats" class="badge" hidden></span></button>
+      <button id="tab-follow" role="tab" aria-selected="false" data-tab="follow">Following <span id="badge-follow" class="badge" hidden></span></button>
+      <button id="tab-own" role="tab" aria-selected="false" data-tab="own">My channels</button>
+    </nav>
+    <div id="list-chats" class="list" role="tabpanel" aria-labelledby="tab-chats">
+      <button id="b-new" class="primary wide">＋ New chat</button>
+      <ul id="chats" class="rows" aria-label="Open chats"></ul>
+      <p id="chats-empty" class="note">No open chats. Messages exist only while a chat is open, in the two tabs that hold it.</p>
+      <h3 class="tor-only">Contacts</h3>
+      <ul id="chat-contacts" class="rows tor-only" aria-label="Contacts"></ul>
+    </div>
+    <div id="list-follow" class="list" role="tabpanel" aria-labelledby="tab-follow" hidden>
+      <button id="b-follow-new" class="primary wide">＋ Follow a channel</button>
+      <ul id="follows" class="rows" aria-label="Channels you follow"></ul>
+      <p id="follows-empty" class="note">You follow no channel yet. Open a channel link, then “Follow”.</p>
+    </div>
+    <div id="list-own" class="list" role="tabpanel" aria-labelledby="tab-own" hidden>
+      <button id="b-own-new" class="primary wide">＋ New channel</button>
+      <ul id="owns" class="rows" aria-label="Your channels"></ul>
+      <p id="owns-empty" class="note">No channel yet.</p>
+    </div>
+  </aside>
 
-  <!-- Start -->
-  <section id="v-start" class="view" hidden>
-    <h1>Start a private chat</h1>
-    <p class="lead">Two codes, one each way. Nothing is stored: when either of you leaves, the chat is gone.</p>
+  <main id="pane" class="pane">
+    <noscript><p class="warn">Ephem needs JavaScript and WebAssembly.</p></noscript>
+    <p id="error" class="warn" hidden></p>
+
+  <section id="v-start" class="view pane-home" hidden>
+    <h1>New chat</h1>
+    <p class="lead"><span class="direct-only">Two codes, one each way.</span><span class="tor-only">One code, through Tor.</span> Nothing is stored: when either of you leaves, the chat is gone. You can have up to 16 chats and rooms open at once.</p>
     <p id="ios-note" class="warn" hidden>Links open in Safari, not in this installed app. Scan codes with the in-app scanner, or paste them.</p>
 
     <div class="card">
@@ -58,11 +86,6 @@
       <p id="tor-state">Connecting to Tor through Snowflake…</p>
       <p class="note">Your peers see an onion address, never your IP address. The Snowflake volunteer proxy and broker see your IP address and that you use Tor, not whom you talk to. Messages take 0.5–2 s. Keep this tab open, and visible in Safari, to stay reachable. For faster starts, the public Tor directory is kept on this device (no chats, peers or keys).</p>
       <p class="note"><a href="./">Switch to direct mode</a> (ends this Tor session).</p>
-    </div>
-    <div class="card">
-      <h2>Public channels</h2>
-      <p>Post to anyone with the link; only you can post. A channel is served from your tab through Tor, so your IP address stays hidden. Readers and followers also use Tor.</p>
-      <p class="note"><a id="a-channels" href="channel.html">Open channels</a> (a separate page; <span class="direct-only">it starts its own Tor connection</span><span class="tor-only">it ends this chat session and starts its own Tor connection</span>). Desktop browsers.</p>
     </div>
     <div class="card direct-only">
       <h2>Hide your IP address</h2>
@@ -165,6 +188,7 @@
         </select>
       </label>
       <p class="note direct-only">STUN servers: Google and Cloudflare. They learn your public IP address, as does your peer. No relay is ever used.</p>
+      <label class="row"><input id="c-notify" type="checkbox"> Notify me of new messages and posts while Ephem is in the background (the notification never shows their text)</label>
       <div id="bridges-box" class="sub tor-only">
         <h3>Tor connection</h3>
         <label class="row"><input id="r-br-auto" type="radio" name="bridges" checked> Automatic: the Tor Project's Snowflake</label>
@@ -185,88 +209,239 @@
     </details>
   </section>
 
-  <!-- Code -->
-  <section id="v-code" class="view" hidden>
-    <h1 id="code-title">Your invite</h1>
-    <p id="code-help" class="lead"></p>
-    <div class="codebox">
-      <div class="qr" aria-label="QR code"></div>
-      <textarea class="link" rows="3" readonly spellcheck="false"></textarea>
-      <div class="actions">
-        <button class="primary copy">Copy link</button>
-        <button class="share">Share…</button>
-      </div>
-    </div>
-    <div id="exposure" class="card exposure" hidden>
-      <h2>What your peer will see</h2>
-      <p class="addrs"></p>
-      <p class="note">Your peer can see this IP address. If you use a VPN, it should be the VPN's address, not your home address.</p>
-      <p class="warn v6warn" hidden>Your peer can see two addresses: an IPv4 one and an IPv6 one. If you use a VPN that covers only IPv4, your IPv6 address is your real one. <button class="drop-v6">Drop IPv6 from my next codes</button></p>
-    </div>
-    <div id="answer-box" class="card" hidden>
-      <h2>2 · Paste their answer</h2>
-      <p>When your peer opens the invite, the app shows them an answer. Scan or paste it here, or open their answer link on this device.</p>
-      <textarea id="t-answer" rows="3" placeholder="https://…/app/#a=…" spellcheck="false" autocomplete="off"></textarea>
-      <div class="actions">
-        <button id="b-answer">Connect</button>
-        <button id="b-scan-answer" class="scan">Scan answer</button>
-      </div>
-    </div>
-    <p id="expiry" class="note"></p>
-    <button id="b-cancel" class="ghost">Cancel</button>
-  </section>
+    <section id="v-handoff" class="view" hidden>
+      <h1 id="handoff-title"></h1>
+      <p id="handoff-text" class="lead"></p>
+    </section>
 
-  <!-- Chat -->
-  <section id="v-chat" class="view chat" hidden>
-    <div id="sas" class="sas">
-      <div>
-        <strong>Safety code</strong>
-        <span id="sas-digits" class="sas-digits"></span>
-        <span id="sas-emoji" class="sas-emoji"></span>
-      </div>
-      <p id="sas-help">Compare it with your peer on another channel, for example a call. If it differs, someone may be in the middle.</p>
+    <!-- The chat on screen: one clone of #t-chat per chat; only the displayed one is attached. -->
+    <div id="chat-slot" class="view" hidden></div>
+
+    <!-- Channels (§27, Appendix D): Following and My channels -->
+    <section id="v-channels-off" class="view" hidden>
+      <h1>Channels</h1>
+      <p class="lead">Channels are read and served through Tor. <span class="direct-only">In direct mode Ephem loads its Tor part for them (about 2 MB, once): your chats stay direct.</span></p>
+      <p id="ch-state" class="note">Starting Tor…</p>
+    </section>
+
+    <section id="v-follow-new" class="view" hidden>
+      <h1>Follow a channel</h1>
+      <p class="lead">Paste a channel link. It is read through Tor and verified here: signed by the channel key, never older than what you saw.</p>
+      <textarea id="t-channel" rows="2" placeholder="https://…/app/tor.html#c=k51…&amp;o=….onion" spellcheck="false" autocomplete="off"></textarea>
       <div class="actions">
-        <button id="b-sas-ok" class="primary">Codes match</button>
-        <button id="b-sas-bad" class="danger">They differ</button>
+        <button id="b-channel-open" class="primary">Open channel</button>
+        <button id="b-channel-scan" class="scan">Scan QR code</button>
       </div>
-    </div>
-    <p id="imp-warn" class="warn" hidden></p>
-    <div id="card-req" class="warn" hidden>
-      <p id="card-req-text"></p>
+    </section>
+
+    <!-- Reader -->
+    <section id="v-read" class="view" hidden>
+      <h1 id="r-title">Channel</h1>
+      <p id="r-about" class="lead"></p>
+      <p id="r-source" class="note"></p>
       <div class="actions">
-        <button id="b-card-accept" class="primary">Accept and add as contact</button>
-        <button id="b-card-decline" class="danger">Decline</button>
+        <button id="b-follow" class="primary">Follow</button>
+        <button id="b-unfollow" class="ghost" hidden>Unfollow</button>
+        <button id="b-refresh">Refresh</button>
+        <button id="b-mirror">Mirror this channel</button>
+        <button id="b-kubo" class="ghost">For IPFS (Kubo)…</button>
+        <button id="b-gateway" class="ghost">Read without Tor…</button>
       </div>
-    </div>
-    <div class="peer">
-      <span id="peer">peer</span>
-      <span id="verified" class="pill">unverified</span>
-      <button id="b-save-contact" class="ghost" hidden title="Add to your contacts">＋ contact</button>
-      <span id="peer-state" class="note"></span>
-      <label class="ttl" title="Self-destruct timer for new messages (both of you)">⏱
-        <select id="s-chat-ttl">
-          <option value="0">off</option>
-          <option value="5">5 s</option>
-          <option value="30">30 s</option>
-          <option value="60">1 min</option>
-          <option value="300">5 min</option>
-          <option value="3600">1 h</option>
-          <option value="86400">1 day</option>
-        </select>
-      </label>
-      <button id="b-info" class="ghost" title="Connection details">ⓘ</button>
-      <button id="b-leave" class="ghost">Leave</button>
-    </div>
-    <div id="room" class="card room" hidden>
-      <h2>Room · <span id="room-count"></span> <span id="room-role" class="pill"></span></h2>
-      <ul id="members" class="contacts members"></ul>
-      <div id="room-owner" class="actions" hidden>
-        <button id="b-room-invite">Invite member</button>
-        <button id="b-room-observer" class="ghost">Invite observer</button>
+      <p id="gateway-warn" class="warn" hidden>Without Tor the channel is fetched from a public IPFS gateway (trustless-gateway.link), which <strong>sees your IP address</strong>. It works only if a follower mirrors this channel to public IPFS; what you get is still verified here. <button id="b-gateway-go">Read through the gateway</button></p>
+      <div id="mirror-note" class="card" hidden>
+        <p id="mirror-text"></p>
       </div>
-      <div id="room-invite" hidden>
-        <p class="note">Let the new member scan this code, or send them the link. It works once. <span class="direct-only">Then paste their answer below.</span><span class="tor-only">No answer is needed: they connect through Tor.</span></p>
-        <div class="codebox">
+      <div id="kubo" class="card" hidden>
+        <h2>Mirror to public IPFS (optional)</h2>
+        <p class="warn">Your IP address will be visible as a host of this channel. The owner's stays hidden.</p>
+        <p>Download the channel and its signed record, then run, with your own Kubo node:</p>
+        <pre id="kubo-cmds" class="note"></pre>
+        <div class="actions">
+          <button id="b-dl-car">Download channel.car</button>
+          <button id="b-dl-record">Download record</button>
+        </div>
+      </div>
+      <ol id="r-posts" class="log posts"></ol>
+    </section>
+
+    <!-- Owner -->
+    <section id="v-own-new" class="view" hidden>
+      <h1>New channel</h1>
+      <p class="lead">A public channel: only you post, anyone with the link reads. It is served from this tab through Tor, so your IP address stays hidden; it is online while this tab (or a follower's mirror) is open. Desktop browsers.</p>
+      <div id="signin" class="card" hidden>
+        <h2>Sign in</h2>
+        <p id="signin-why" class="note">A channel's keys are derived from a saved identity.</p>
+        <ul id="ch-slots" class="slots"></ul>
+        <label>…or key file <input id="i-ch-file" type="file" accept=".p2pkey,application/octet-stream"></label>
+        <label>Passphrase <input id="i-ch-pass" type="password" autocomplete="current-password"></label>
+        <button id="b-signin" class="primary">Sign in</button>
+      </div>
+      <div id="ch-new" class="card">
+        <h2>Create a channel</h2>
+        <p id="ch-identity" class="note"></p>
+        <button id="b-ch-separate" class="ghost" hidden>Use a separate identity for channels…</button>
+        <label>Title <input id="i-title" maxlength="128" autocomplete="off"></label>
+        <label>About <textarea id="i-about" rows="3" maxlength="1024"></textarea></label>
+        <ul class="note warn-list">
+          <li>Everything you post is <strong>public and permanent</strong>: followers may keep copies, even of posts you delete later.</li>
+          <li>Your writing style and posting times can identify you.</li>
+          <li>The channel has no owner field; you are known only if you say so. Its keys are derived from your identity, but nobody can link the two without your key file.</li>
+        </ul>
+        <label class="row"><input id="c-understood" type="checkbox"> I understand</label>
+        <button id="b-create" class="primary">Create channel</button>
+        <label>…or restore from a backup (channel.car + record) <input id="i-import" type="file" multiple accept=".car,.bin"></label>
+      </div>
+    </section>
+
+    <section id="v-own" class="view" hidden>
+      <div class="card">
+        <h2 id="o-title"></h2>
+        <p id="o-about" class="note"></p>
+        <p id="o-serving" class="note">Not online yet.</p>
+        <textarea id="o-link" class="link" rows="2" readonly spellcheck="false"></textarea>
+        <div class="actions">
+          <button id="b-copy" class="primary">Copy link</button>
+          <button id="b-export">Export backup</button>
+        </div>
+        <div class="sub">
+          <p class="note">Optional: make the channel's name resolvable on the public IPFS network (useful only if a follower mirrors it there with Kubo). The record goes to delegated-ipfs.dev <strong>through a Tor exit</strong>, so your IP stays hidden.</p>
+          <button id="b-publish">Publish to IPFS routing</button> <span id="publish-state" class="note"></span>
+        </div>
+        <label>Mirrors you vouch for (onion addresses, comma-separated) <input id="i-mirrors" autocomplete="off" spellcheck="false"></label>
+        <button id="b-mirrors">Sign mirror list</button>
+      </div>
+      <form id="f-post" class="card">
+        <label>New post (up to 4 KiB)<textarea id="t-post" rows="3" maxlength="4096"></textarea></label>
+        <div class="actions"><button id="b-post" class="primary" type="submit">Post</button></div>
+      </form>
+      <ol id="o-posts" class="log posts"></ol>
+    </section>
+  </main>
+</div>
+
+<template id="t-chat">
+  <div class="chatroot">
+    <section id="v-code" class="view" hidden>
+      <h1 id="code-title">Your invite</h1>
+      <p id="code-help" class="lead"></p>
+      <div class="codebox">
+        <div class="qr" aria-label="QR code"></div>
+        <textarea class="link" rows="3" readonly spellcheck="false"></textarea>
+        <div class="actions">
+          <button class="primary copy">Copy link</button>
+          <button class="share">Share…</button>
+        </div>
+      </div>
+      <div id="exposure" class="card exposure" hidden>
+        <h2>What your peer will see</h2>
+        <p class="addrs"></p>
+        <p class="note">Your peer can see this IP address. If you use a VPN, it should be the VPN's address, not your home address.</p>
+        <p class="warn v6warn" hidden>Your peer can see two addresses: an IPv4 one and an IPv6 one. If you use a VPN that covers only IPv4, your IPv6 address is your real one. <button class="drop-v6">Drop IPv6 from my next codes</button></p>
+      </div>
+      <div id="answer-box" class="card" hidden>
+        <h2>2 · Paste their answer</h2>
+        <p>When your peer opens the invite, the app shows them an answer. Scan or paste it here, or open their answer link on this device.</p>
+        <textarea id="t-answer" rows="3" placeholder="https://…/app/#a=…" spellcheck="false" autocomplete="off"></textarea>
+        <div class="actions">
+          <button id="b-answer">Connect</button>
+          <button id="b-scan-answer" class="scan">Scan answer</button>
+        </div>
+      </div>
+      <p id="expiry" class="note"></p>
+      <button id="b-cancel" class="ghost">Cancel</button>
+    </section>
+    <section id="v-chat" class="view chat" hidden>
+      <div id="sas" class="sas">
+        <div>
+          <strong>Safety code</strong>
+          <span id="sas-digits" class="sas-digits"></span>
+          <span id="sas-emoji" class="sas-emoji"></span>
+        </div>
+        <p id="sas-help">Compare it with your peer on another channel, for example a call. If it differs, someone may be in the middle.</p>
+        <div class="actions">
+          <button id="b-sas-ok" class="primary">Codes match</button>
+          <button id="b-sas-bad" class="danger">They differ</button>
+        </div>
+      </div>
+      <p id="imp-warn" class="warn" hidden></p>
+      <div id="card-req" class="warn" hidden>
+        <p id="card-req-text"></p>
+        <div class="actions">
+          <button id="b-card-accept" class="primary">Accept and add as contact</button>
+          <button id="b-card-decline" class="danger">Decline</button>
+        </div>
+      </div>
+      <div class="peer">
+        <span id="peer">peer</span>
+        <span id="verified" class="pill">unverified</span>
+        <button id="b-save-contact" class="ghost" hidden title="Add to your contacts">＋ contact</button>
+        <span id="peer-state" class="note"></span>
+        <label class="ttl" title="Self-destruct timer for new messages (both of you)">⏱
+          <select id="s-chat-ttl">
+            <option value="0">off</option>
+            <option value="5">5 s</option>
+            <option value="30">30 s</option>
+            <option value="60">1 min</option>
+            <option value="300">5 min</option>
+            <option value="3600">1 h</option>
+            <option value="86400">1 day</option>
+          </select>
+        </label>
+        <button id="b-info" class="ghost" title="Connection details">ⓘ</button>
+        <button id="b-leave" class="ghost">Leave</button>
+      </div>
+      <div id="room" class="card room" hidden>
+        <h2>Room · <span id="room-count"></span> <span id="room-role" class="pill"></span></h2>
+        <ul id="members" class="contacts members"></ul>
+        <div id="room-owner" class="actions" hidden>
+          <button id="b-room-invite">Invite member</button>
+          <button id="b-room-observer" class="ghost">Invite observer</button>
+        </div>
+        <div id="room-invite" hidden>
+          <p class="note">Let the new member scan this code, or send them the link. It works once. <span class="direct-only">Then paste their answer below.</span><span class="tor-only">No answer is needed: they connect through Tor.</span></p>
+          <div class="codebox">
+            <div class="qr" aria-label="QR code"></div>
+            <textarea class="link" rows="2" readonly spellcheck="false"></textarea>
+            <div class="actions">
+              <button class="primary copy">Copy link</button>
+              <button class="share">Share…</button>
+            </div>
+          </div>
+          <textarea id="t-room-answer" class="direct-only" rows="2" placeholder="Paste their answer (https://…/app/#a=…)" spellcheck="false" autocomplete="off"></textarea>
+          <div class="actions direct-only">
+            <button id="b-room-answer">Add to room</button>
+            <button id="b-scan-room" class="scan">Scan answer</button>
+          </div>
+        </div>
+        <div id="room-confirm" class="warn" hidden>
+          <p id="room-confirm-text"></p>
+          <div class="actions">
+            <button id="b-room-connect" class="primary">Connect</button>
+            <button id="b-room-decline" class="danger">Leave the room</button>
+          </div>
+        </div>
+      </div>
+      <div id="diag" class="card diag" hidden>
+        <p><strong>Path:</strong> <span id="diag-path">measuring…</span></p>
+        <p id="diag-core"></p>
+        <label class="row direct-only"><input id="c-addr" type="checkbox"> Show addresses</label>
+        <p class="direct-only"><strong>What your peer sees:</strong> <span id="diag-exposure"></span></p>
+        <p class="note tor-only">Through Tor, onion service to onion service: neither of you sees the other's IP address. Messages exist only in these two tabs and are delivered only while you are both connected; pending messages exist only in this tab.</p>
+        <p class="note direct-only">Direct connection only, never a relay. Messages exist only in these two tabs and are delivered only while you are both connected; pending messages exist only in this tab.</p>
+        <div class="actions">
+          <button id="b-restart" class="ghost direct-only">Restart ICE (in-band)</button>
+          <button id="b-drop" class="ghost">Simulate network loss</button>
+        </div>
+      </div>
+      <div id="resume" class="card resume direct-only" hidden>
+        <h2>Direct path lost</h2>
+        <p>Share a reconnect code with your peer (either of you can make one). Your messages and pending messages are kept for 10 minutes.</p>
+        <div class="actions">
+          <button id="b-resume" class="primary">Create reconnect code</button>
+          <button id="b-scan-resume" class="scan">Scan their code</button>
+        </div>
+        <div class="codebox" hidden>
+          <p class="note resume-help"></p>
           <div class="qr" aria-label="QR code"></div>
           <textarea class="link" rows="2" readonly spellcheck="false"></textarea>
           <div class="actions">
@@ -274,101 +449,54 @@
             <button class="share">Share…</button>
           </div>
         </div>
-        <textarea id="t-room-answer" class="direct-only" rows="2" placeholder="Paste their answer (https://…/app/#a=…)" spellcheck="false" autocomplete="off"></textarea>
-        <div class="actions direct-only">
-          <button id="b-room-answer">Add to room</button>
-          <button id="b-scan-room" class="scan">Scan answer</button>
+        <textarea id="t-resume" rows="2" placeholder="Paste their reconnect code or answer" spellcheck="false" autocomplete="off"></textarea>
+        <button id="b-resume-apply">Apply</button>
+      </div>
+      <ol id="log" class="log" aria-live="polite"></ol>
+      <div id="composing" class="composing" hidden>
+        <span id="composing-text"></span>
+        <button id="b-composing-x" class="ghost" title="Cancel">✕</button>
+      </div>
+      <form id="f-send" class="composer">
+        <textarea id="t-msg" rows="1" maxlength="4096" placeholder="Message" autocomplete="off"></textarea>
+        <button id="b-send" class="primary" type="submit">Send</button>
+      </form>
+    </section>
+    <section id="v-transfer" class="view" hidden>
+      <h1 id="xfer-title">Identity transfer</h1>
+      <p id="xfer-help" class="lead"></p>
+      <div class="sas">
+        <div><strong>Safety code</strong> <span id="xfer-digits" class="sas-digits"></span> <span id="xfer-emoji" class="sas-emoji"></span></div>
+        <p>Both devices must show the same code. The whole identity is at stake: never skip this.</p>
+        <div class="actions" id="xfer-sas-actions">
+          <button id="b-xfer-ok" class="primary">Codes match</button>
+          <button id="b-xfer-bad" class="danger">They differ</button>
         </div>
       </div>
-      <div id="room-confirm" class="warn" hidden>
-        <p id="room-confirm-text"></p>
+      <p id="xfer-state" class="note"></p>
+      <div id="xfer-unlock" class="card" hidden>
+        <h2>Unlock the received identity</h2>
+        <p id="xfer-label"></p>
+        <label>Passphrase of that identity <input id="i-xfer-pass" type="password" autocomplete="current-password"></label>
+        <label class="row"><input id="c-xfer-remember" type="checkbox" checked> Remember on this device</label>
+        <button id="b-xfer-unlock" class="primary">Unlock and sign in</button>
+      </div>
+      <div id="xfer-sent" class="card" hidden>
+        <h2>Identity sent</h2>
+        <p>The other device now has an encrypted copy. Keep this identity here too?</p>
         <div class="actions">
-          <button id="b-room-connect" class="primary">Connect</button>
-          <button id="b-room-decline" class="danger">Leave the room</button>
+          <button id="b-xfer-keep" class="primary">Keep it on this device</button>
+          <button id="b-xfer-remove" class="danger">Remove it from this device</button>
         </div>
       </div>
-    </div>
-    <div id="diag" class="card diag" hidden>
-      <p><strong>Path:</strong> <span id="diag-path">measuring…</span></p>
-      <p id="diag-core"></p>
-      <label class="row direct-only"><input id="c-addr" type="checkbox"> Show addresses</label>
-      <p class="direct-only"><strong>What your peer sees:</strong> <span id="diag-exposure"></span></p>
-      <p class="note tor-only">Through Tor, onion service to onion service: neither of you sees the other's IP address. Messages exist only in these two tabs and are delivered only while you are both connected; pending messages exist only in this tab.</p>
-      <p class="note direct-only">Direct connection only, never a relay. Messages exist only in these two tabs and are delivered only while you are both connected; pending messages exist only in this tab.</p>
-      <div class="actions">
-        <button id="b-restart" class="ghost direct-only">Restart ICE (in-band)</button>
-        <button id="b-drop" class="ghost">Simulate network loss</button>
-      </div>
-    </div>
-    <div id="resume" class="card resume direct-only" hidden>
-      <h2>Direct path lost</h2>
-      <p>Share a reconnect code with your peer (either of you can make one). Your messages and pending messages are kept for 10 minutes.</p>
-      <div class="actions">
-        <button id="b-resume" class="primary">Create reconnect code</button>
-        <button id="b-scan-resume" class="scan">Scan their code</button>
-      </div>
-      <div class="codebox" hidden>
-        <p class="note resume-help"></p>
-        <div class="qr" aria-label="QR code"></div>
-        <textarea class="link" rows="2" readonly spellcheck="false"></textarea>
-        <div class="actions">
-          <button class="primary copy">Copy link</button>
-          <button class="share">Share…</button>
-        </div>
-      </div>
-      <textarea id="t-resume" rows="2" placeholder="Paste their reconnect code or answer" spellcheck="false" autocomplete="off"></textarea>
-      <button id="b-resume-apply">Apply</button>
-    </div>
-    <ol id="log" class="log" aria-live="polite"></ol>
-    <div id="composing" class="composing" hidden>
-      <span id="composing-text"></span>
-      <button id="b-composing-x" class="ghost" title="Cancel">✕</button>
-    </div>
-    <form id="f-send" class="composer">
-      <textarea id="t-msg" rows="1" maxlength="4096" placeholder="Message" autocomplete="off"></textarea>
-      <button id="b-send" class="primary" type="submit">Send</button>
-    </form>
-  </section>
-
-  <!-- Identity transfer (§7.6) -->
-  <section id="v-transfer" class="view" hidden>
-    <h1 id="xfer-title">Identity transfer</h1>
-    <p id="xfer-help" class="lead"></p>
-    <div class="sas">
-      <div><strong>Safety code</strong> <span id="xfer-digits" class="sas-digits"></span> <span id="xfer-emoji" class="sas-emoji"></span></div>
-      <p>Both devices must show the same code. The whole identity is at stake: never skip this.</p>
-      <div class="actions" id="xfer-sas-actions">
-        <button id="b-xfer-ok" class="primary">Codes match</button>
-        <button id="b-xfer-bad" class="danger">They differ</button>
-      </div>
-    </div>
-    <p id="xfer-state" class="note"></p>
-    <div id="xfer-unlock" class="card" hidden>
-      <h2>Unlock the received identity</h2>
-      <p id="xfer-label"></p>
-      <label>Passphrase of that identity <input id="i-xfer-pass" type="password" autocomplete="current-password"></label>
-      <label class="row"><input id="c-xfer-remember" type="checkbox" checked> Remember on this device</label>
-      <button id="b-xfer-unlock" class="primary">Unlock and sign in</button>
-    </div>
-    <div id="xfer-sent" class="card" hidden>
-      <h2>Identity sent</h2>
-      <p>The other device now has an encrypted copy. Keep this identity here too?</p>
-      <div class="actions">
-        <button id="b-xfer-keep" class="primary">Keep it on this device</button>
-        <button id="b-xfer-remove" class="danger">Remove it from this device</button>
-      </div>
-    </div>
-  </section>
-
-  <!-- Ended / notices -->
-  <section id="v-note" class="view" hidden>
-    <h1 id="note-title"></h1>
-    <p id="note-text" class="lead"></p>
-    <button id="b-again" class="primary">Start over</button>
-  </section>
-
-  <p id="error" class="warn" hidden></p>
-</main>
+    </section>
+    <section id="v-note" class="view" hidden>
+      <h1 id="note-title"></h1>
+      <p id="note-text" class="lead"></p>
+      <button id="b-again" class="primary">Start over</button>
+    </section>
+  </div>
+</template>
 
 <div id="scanner" class="scanner" hidden>
   <video id="scan-video" playsinline muted></video>
@@ -378,7 +506,7 @@
 </div>
 
 <footer class="foot">
-  <p>Security depends on the codes reaching the right person and on the code this site serves. In direct mode your peer can see your IP address. <span id="build"></span></p>
+  <p>Security depends on the codes reaching the right person and on the code this site serves. In direct mode your peer can see your IP address; channels always go through Tor. <span id="build"></span></p>
 </footer>
 </body>
 </html>

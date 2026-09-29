@@ -11,10 +11,9 @@ pub const MAX_NICK: usize = 32;
 pub const TLV_CONTACTS: u8 = 0x01;
 pub const TLV_CARD: u8 = 0x04;
 /// Settings sections the adapter keeps as opaque UTF-8 in the key file's other sections
-/// (Appendix F): custom Tor bridge lines, the channels followed, the channels owned.
+/// (Appendix F): custom Tor bridge lines, the channels followed.
 pub const TLV_TOR_BRIDGES: u8 = 0x05;
 pub const TLV_FOLLOWS: u8 = 0x06;
-pub const TLV_CHANNELS: u8 = 0x07;
 
 /// The value of section `t` in a TLV area (`others` of [`Contacts::from_tlv`]).
 pub fn section(tlv: &[u8], t: u8) -> Option<&[u8]> {

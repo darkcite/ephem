@@ -681,8 +681,8 @@ export class App {
         }
     }
     /**
-     * Section `t` of the key file (0x05 Tor bridge lines, 0x06 followed channels, 0x07 owned
-     * channels) as UTF-8, or empty.
+     * Section `t` of the key file (0x05 Tor bridge lines, 0x06 followed channels) as UTF-8, or
+     * empty.
      * @param {number} t
      * @returns {string}
      */

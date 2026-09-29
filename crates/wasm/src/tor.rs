@@ -20,7 +20,7 @@ use ephem_crypto::contacts::cflags;
 use ephem_proto::ErrorCode;
 use ephem_proto::code::{Code, TOR_CODE_LEN, flags};
 use ephem_proto::frame::MAX_FRAME;
-use ephem_tor::web::{DataReader, DataStream, DataWriter, Snowflake, Tor, onion_address, sleep_ms};
+use ephem_tor::web::{DataReader, DataStream, DataWriter, Snowflake, Tor, TorSlot, onion_address, sleep_ms};
 use futures::channel::mpsc;
 use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
 use std::cell::RefCell;
@@ -68,13 +68,20 @@ impl TorWire {
 /// Tor state of the tab.
 #[derive(Default)]
 pub(crate) struct TorState {
-    pub(crate) tor: Option<Rc<Tor>>,
+    /// Shared with the page's channels (`App::bind_channels`).
+    pub(crate) slot: TorSlot,
     /// Our `.onion` address (empty until hosted).
     pub(crate) onion: String,
     /// Services hosted so far (each gets its own nickname).
     hosted: u32,
     /// Bootstrap failed: chats cannot connect (no fallback, §28.5).
     failed: bool,
+}
+
+impl TorState {
+    pub(crate) fn get(&self) -> Option<Rc<Tor>> {
+        self.slot.borrow().clone()
+    }
 }
 
 /// ev::TOR for the UI: 1 starting (text = status), 2 ready (text = our .onion), 3 failed.
@@ -84,7 +91,7 @@ fn progress(n: f64, text: &str) {
 
 /// Starts arti (Snowflake, bootstrap), hosts our onion service and accepts its streams.
 pub(crate) fn start(inner: &Shared, sf: Snowflake, network_toml: &str, cache: &[u8]) -> Result<(), ErrorCode> {
-    if inner.borrow().tor.tor.is_some() {
+    if inner.borrow().tor.get().is_some() {
         return Err(ErrorCode::NotPermitted);
     }
     let tor = match Tor::new(sf, network_toml, cache) {
@@ -94,7 +101,7 @@ pub(crate) fn start(inner: &Shared, sf: Snowflake, network_toml: &str, cache: &[
             return Err(ErrorCode::TorUnavailable);
         }
     };
-    inner.borrow_mut().tor.tor = Some(tor.clone());
+    *inner.borrow().tor.slot.borrow_mut() = Some(tor.clone());
     progress(1.0, "starting");
     let inner = inner.clone();
     wasm_bindgen_futures::spawn_local(async move {
@@ -120,7 +127,7 @@ pub(crate) fn invite(inner: &Shared, ttl_s: u32) -> Result<(), ErrorCode> {
     let (inv, room) = crate::ids();
     let id = {
         let mut g = inner.borrow_mut();
-        if g.tor.tor.is_none() {
+        if g.tor.get().is_none() {
             return Err(ErrorCode::TorUnavailable);
         }
         g.fresh()?;
@@ -152,7 +159,7 @@ pub(crate) fn offer(inner: &Shared, id: u32) {
 pub(crate) fn join(inner: &Shared, code: &[u8], now_s: u32, scanned: bool) -> Result<(), ErrorCode> {
     let lid = {
         let mut g = inner.borrow_mut();
-        if g.tor.tor.is_none() {
+        if g.tor.get().is_none() {
             return Err(ErrorCode::TorUnavailable);
         }
         let f = Code::decode(code)?.flags;
@@ -174,7 +181,7 @@ pub(crate) fn join(inner: &Shared, code: &[u8], now_s: u32, scanned: bool) -> Re
 pub(crate) fn call(inner: &Shared, peer: PeerId) -> Result<(), ErrorCode> {
     let lid = {
         let mut g = inner.borrow_mut();
-        if g.tor.tor.is_none() {
+        if g.tor.get().is_none() {
             return Err(ErrorCode::TorUnavailable);
         }
         let c = g.saved.as_ref().and_then(|s| s.contacts.get(&peer)).copied().ok_or(ErrorCode::NotAContact)?;
@@ -231,7 +238,7 @@ pub(crate) fn sync_identity(inner: &Shared) -> Result<(), ErrorCode> {
     let rehost = {
         let g = inner.borrow();
         let t = &g.tor;
-        (!t.onion.is_empty() && t.onion != onion_address(&g.identity().onion_pk())).then(|| t.tor.clone()).flatten()
+        (!t.onion.is_empty() && t.onion != onion_address(&g.identity().onion_pk())).then(|| t.get()).flatten()
     };
     match rehost {
         Some(tor) => host(inner, &tor),
@@ -264,12 +271,12 @@ fn host(inner: &Shared, tor: &Tor) -> Result<(), ErrorCode> {
 
 /// The Tor directory for the next session's warm start (§28.3; public data), or empty.
 pub(crate) fn cache(g: &Inner) -> Vec<u8> {
-    g.tor.tor.as_ref().and_then(|t| t.cache()).unwrap_or_default()
+    g.tor.get().and_then(|t| t.cache()).unwrap_or_default()
 }
 
 /// Bootstrap status line for the UI.
 pub(crate) fn status(g: &Inner) -> String {
-    g.tor.tor.as_ref().map_or_else(String::new, |t| t.status())
+    g.tor.get().map_or_else(String::new, |t| t.status())
 }
 
 /// The write half: a task that drains the link's buffer into the stream.
@@ -503,7 +510,7 @@ pub(crate) fn dial(inner: &Shared, lid: u32, fresh: bool) {
                 if g.links[i].sess.state() == State::Closed {
                     return;
                 }
-                let Some(tor) = g.tor.tor.clone() else { return };
+                let Some(tor) = g.tor.get() else { return };
                 if g.tor.failed {
                     drop(g);
                     let mut g = inner.borrow_mut();

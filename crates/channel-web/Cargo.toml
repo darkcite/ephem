@@ -1,12 +1,9 @@
 [package]
 name = "ephem-channel-web"
-description = "Ephem public channels in the browser (channel.html): owner, onion gateway, reader, mirrors; embedded Tor"
+description = "Ephem public channels in the browser (part of the Tor build): owner, onion gateway, reader, mirrors"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-
-[lib]
-crate-type = ["cdylib"]
 
 [dependencies]
 ephem-channel = { path = "../channel" }

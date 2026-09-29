@@ -38,11 +38,11 @@ export function labBridges(env = labEnv(), dead = false) {
 
 const lab = LIVE ? null : labConfig();
 
-/** Static server of the repository, with tor.html's CSP pointed at the lab broker (lab only). */
+/** Static server of the repository, with the pages' CSP also naming the lab broker (lab only). */
 export function serveTor(route = null) {
   if (LIVE) return serve(null, route);
   const origins = `${DEAD_BROKER} ${new URL(lab.labBroker).origin}`;
-  return serve((p, read) => (/\/(tor|channel)\.html$/.test(p) ? read().replace("connect-src 'self' https:", `connect-src 'self' https: ${origins}`) : null), route);
+  return serve((p, read) => (/\/(tor|index)\.html$/.test(p) ? read().replace("connect-src 'self' https:", `connect-src 'self' https: ${origins}`) : null), route);
 }
 
 /** Prepares a browser context for tor.html (the lab settings, unless LIVE). */
@@ -62,7 +62,7 @@ export async function torReady(page, who) {
     last = s;
   }, 10_000);
   try {
-    await page.waitForFunction(() => /Reachable through Tor|Tor failed/.test(document.querySelector('#tor-state').textContent), null, { timeout: T });
+    await page.waitForFunction(() => /Reachable through Tor|Tor failed/.test(document.querySelector('#tor-state')?.textContent), null, { timeout: T });
     const s = await page.textContent('#tor-state');
     if (/Tor failed/.test(s)) throw new Error(`${who}: ${s}`);
   } finally {
