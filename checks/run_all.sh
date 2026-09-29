@@ -185,7 +185,7 @@ if want tor; then
 say "Tor mode (§28): 1:1 and rooms over Tor in Chrome"
 { echo "## Tor mode"; echo; } >> "$OUT/REPORT.md"
 if [ -f /tmp/ephlab/lab.env ]; then
-  for t in e2e_tor_app e2e_tor_room e2e_tor_cards e2e_tor_channel e2e_tor_vault e2e_tor_bridges e2e_tor_multi; do
+  for t in e2e_tor_app e2e_tor_room e2e_tor_cards e2e_tor_channel e2e_tor_vault e2e_tor_incognito e2e_tor_bridges e2e_tor_multi; do
     E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/$t.mjs" 2>&1 | tee "$OUT/lab-$t.log"
     { echo "### Lab: $t"; echo '```'; cat "$OUT/lab-$t.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
   done
@@ -196,7 +196,7 @@ if [ -f /tmp/ephlab/lab.env ]; then
 fi
 # A container without UDP: the real Tor network through `checks/tor-lab/lab.sh relay`.
 if [ -f /tmp/ephrelay/relay.env ]; then
-  for t in e2e_tor_app e2e_tor_room e2e_tor_cards e2e_tor_channel e2e_tor_vault e2e_tor_multi; do
+  for t in e2e_tor_app e2e_tor_room e2e_tor_cards e2e_tor_channel e2e_tor_vault e2e_tor_incognito e2e_tor_multi; do
     RELAY=1 NODE_USE_ENV_PROXY=1 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/$t.mjs" 2>&1 | tee "$OUT/relay-$t.log"
     { echo "### Real Tor network via the local relay: $t"; echo '```'; cat "$OUT/relay-$t.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
   done

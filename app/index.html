@@ -6,12 +6,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-Sd6f8nUOuQDFhTF3fwEvrXkOqTvdap0FPmwhxDPrdTU='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="b35d9a02ee94">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-hMihqCsPm9bF+1VghPN3k+EIB+4tuEequkvsUNUJbr8='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="062fc5834eda">
 <meta name="ephem-wasm" content="sha384-XabUEaA8xOR4k2SW/WA8edAZ9lFQqQLj/YAEKniPNyQaGGZ5qo6+gJGXDctZatKU">
 <meta name="ephem-tor-wasm" content="sha384-rb3ABGhp0IpsDdu7a+dDvz10Y/7t6DyBZ9e8jneKGIWk/194L5OgJmGaZleI9MlO">
 <link rel="stylesheet" href="app.css" integrity="sha384-7erEQdhlMwyks1n9Fa6uA9OlrO+gDf9DcVbuSIS4QyTu5zNX84LV6Ewf9pDaj8zo">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-YvlMvJ4NnbkKhYrWCUbpGgfr6nftF9bWpoLPdHxet7BogvP1qnzQxkWUXBkrLEUn","./slots.js":"sha384-IlHgZ/G7YQmb6j7JCXNAbe997AcQ0jgf9kFcPNaROP0AcYmGBAzZ9Okdm4ch/5yC","./bridges.js":"sha384-XinMCx7qqD+BIl3mImyuYX0YNpqx/XA/fy1rBXFb3VrD/Hp62Vg7zBWO5+v1qTAV","./channels.js":"sha384-CJilW+1DCXpeXHtivTHrkY1B5i7HqE7m9yXRHxvHoJ3Du08bR5qp2F671Y8d7kN/","./ui.js":"sha384-Dg5+MKtdFNG4n1QschjGOvWfALXvB+/c+rOXQZOFRC3N7R0ouVLg7exIRd33Txvx","./pkg/ephem.js":"sha384-hfR0dAOdObKmgIM/y4z6U08mlWrBu1itS3Rd5Bbpo+TwAUDF0Quu5N+PfP0R6Grv","./pkg/ephem_tor.js":"sha384-E0w7iCIp1vpFwKBQqajcD4IRYaJvX6HdBrArg+UKJWgsNQJpAp2auhS+nqrfwi1c"}}</script>
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-YvlMvJ4NnbkKhYrWCUbpGgfr6nftF9bWpoLPdHxet7BogvP1qnzQxkWUXBkrLEUn","./slots.js":"sha384-IlHgZ/G7YQmb6j7JCXNAbe997AcQ0jgf9kFcPNaROP0AcYmGBAzZ9Okdm4ch/5yC","./bridges.js":"sha384-XinMCx7qqD+BIl3mImyuYX0YNpqx/XA/fy1rBXFb3VrD/Hp62Vg7zBWO5+v1qTAV","./channels.js":"sha384-3j2BL2wi5BbIqIiXutjR3luVhR+vhbVHaCtY8qkba5cTmmCEOs2s5rmi9WPCZvsX","./ui.js":"sha384-Dg5+MKtdFNG4n1QschjGOvWfALXvB+/c+rOXQZOFRC3N7R0ouVLg7exIRd33Txvx","./pkg/ephem.js":"sha384-hfR0dAOdObKmgIM/y4z6U08mlWrBu1itS3Rd5Bbpo+TwAUDF0Quu5N+PfP0R6Grv","./pkg/ephem_tor.js":"sha384-E0w7iCIp1vpFwKBQqajcD4IRYaJvX6HdBrArg+UKJWgsNQJpAp2auhS+nqrfwi1c"}}</script>
 <script type="module" src="app.js" integrity="sha384-YvlMvJ4NnbkKhYrWCUbpGgfr6nftF9bWpoLPdHxet7BogvP1qnzQxkWUXBkrLEUn"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
@@ -93,6 +93,7 @@
       <ul id="owns" class="rows" aria-label="Your channels"></ul>
       <p id="owns-empty" class="note">No channel yet.</p>
       <p id="own-sync" class="note" hidden></p>
+      <details id="own-diag" class="note" hidden><summary>Sync details</summary><pre id="own-diag-text"></pre></details>
     </div>
   </aside>
 

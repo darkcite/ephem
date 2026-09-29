@@ -68,7 +68,10 @@ export function onIdentity() {
   loadFollows();
   renderFollows();
   resetVault();
-  if (ch) scanOwned().then(() => { if (!torResolve) startAll(); });
+  if (ch) scanOwned().then(() => {
+    if (!torResolve) startAll();
+    else if (signedIn()) syncState('Starting Tor to look for this identity\'s channels on your other devices…');
+  });
 }
 
 /** A temporary identity's follow list moves into its new key file. True if the file changed. */
@@ -540,6 +543,11 @@ function renderOwned() {
     ul.append(li);
   }
   $('owns-empty').hidden = owned.length > 0;
+  // Not signed in for channels: "No channel yet." would read as "this identity has none".
+  $('owns-empty').textContent = signedIn() ? 'No channel yet.'
+    : ctx.app.identity_label() ? 'Your identity\'s channels show here after you enter its passphrase once (direct mode: the channels part signs in on its own).'
+      : 'Sign in with a saved identity to see its channels.';
+  renderDiag();
 }
 
 async function serveOwned(o) {
@@ -744,6 +752,29 @@ const timeOf = (s) => new Date(s * 1000).toLocaleTimeString([], { hour: '2-digit
 function syncState(text) {
   $('own-sync').hidden = !text;
   $('own-sync').textContent = text;
+  renderDiag();
+}
+
+// "Sync details" under My channels: what this device read and published, to compare devices
+// when a channel does not show up. Nothing secret: short ids and times only.
+const diag = { fetched: '', read: 'not yet', published: 'not yet' };
+const hhmm = (d = new Date()) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+function renderDiag() {
+  const on = signedIn();
+  $('own-diag').hidden = !on;
+  if (!on) return;
+  let name = '';
+  try { name = ch.vault_name(); } catch { /* not signed in */ }
+  const v = vault;
+  $('own-diag-text').textContent = [
+    `this device      ${deviceId().slice(0, 8)}${writer ? ' (writes the channels)' : ' (another device writes them)'}`,
+    `app version      ${document.querySelector('meta[name="ephem-build"]')?.content || '?'}`,
+    `channel list     ${name ? `${name.slice(0, 10)}…${name.slice(-6)}` : '-'}`,
+    `last read        ${diag.fetched ? `${diag.fetched}: ` : ''}${diag.read}`,
+    `last published   ${diag.published}`,
+    `list says        ${v ? `version ${v.seq}, ${v.channels.length} channel(s): ${v.channels.map((c) => c.title).join(', ') || '-'}; written by ${v.device.slice(0, 8)} until ${timeOf(v.until)}` : '-'}`,
+    `on this device   ${owned.map((o) => `${o.t || o.i}${o.restoring ? ' (restoring)' : o.away ? ' (other device)' : o.onion ? ' (online)' : ''}`).join(', ') || '-'}`,
+  ].join('\n');
 }
 
 /** Another identity: nothing known about its vault yet; this device writes until told. */
@@ -766,13 +797,20 @@ async function syncVault(takeover = false) {
       const j = await ch.vault_fetch(host, root);
       vault = j ? JSON.parse(j) : null;
       found = !!vault;
+      diag.fetched = hhmm();
+      diag.read = vault ? `found version ${vault.seq}` : 'no list published yet for this identity';
     } catch (e) {
+      diag.fetched = hhmm();
+      diag.read = `failed: ${e?.message || e}`;
       // Offline, or the routing service is down: keep going as we are (this device writes).
       console.info('vault:', e?.message || e);
       syncState(`Could not read the list of your channels (${e?.message || e}); trying again in a few minutes.`);
       if (!takeover) return;
     }
-    if (leasedElsewhere(vault) && !takeover) return standDown();
+    if (leasedElsewhere(vault) && !takeover) {
+      syncState('');
+      return standDown();
+    }
     const was = writer;
     writer = true;
     if (takeover) claimedAt = Date.now();
@@ -890,9 +928,12 @@ async function publishVault() {
   try {
     await ch.vault_publish(...routing(), deviceId(), Math.floor(Date.now() / 1000) + LEASE_S);
     vault = JSON.parse(ch.vault());
+    diag.published = `${hhmm()}: version ${vault.seq}, ${vault.channels.length} channel(s)`;
   } catch (e) {
     console.info('vault: not published:', e?.message || e);
+    diag.published = `${hhmm()}: failed: ${e?.message || e}`;
   }
+  renderDiag();
 }
 
 /** After a change: publish the vault once the burst of changes is over. */
