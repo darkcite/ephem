@@ -29,7 +29,7 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 | I | §1–§3 | Summary, principles, layers |
 | II | §4–§22, §26–§29 | Normative specification: infrastructure, architecture, identity, rendezvous, WebRTC, crypto, wire protocol, state machines, groups, PWA, security, Tor mode, IP privacy, public channels |
 | III | §23–§25 | **Plan**: phases, gates, checkpoints with results, decision log |
-| IV | Appendices A–E | SDP template, end-to-end flows, embedded-Tor engineering, public-channel design, features considered and rejected |
+| IV | Appendices A–F | SDP template, end-to-end flows, embedded-Tor engineering, public-channel design, features considered and rejected, **v1.2 proposal (bridges, three-tab app)** |
 
 ## Status at a glance (2026-09-28)
 
@@ -1798,3 +1798,163 @@ https://<owner>.github.io/ephem/channel.html#c=<ipns-name>&o=<channel-onion>[&m=
 | Automatic link previews | Fetching the link | Reveals the IP to third parties |
 | Channel comments | Write access for readers | Breaks read-only; "message the owner" through a normal invite instead |
 
+
+## Appendix F: Proposal (v1.2 draft): Tor bridges, and one app with Chats, Following and My channels
+
+**Status: proposal, not approved.** Nothing here is built. The owner decides on the open points in F.4 before any work starts. The merge of v1.1 to `main` (§23.1a) does not wait for this.
+
+### F.1 Where we start from
+
+| Fact (as built in v1.1) | Consequence for this proposal |
+|---|---|
+| One page holds **one** conversation: the adapter's `Inner` has one session **or** one room, and the event meta carries no chat id | Several chats at once is a **core change** (F.3.2), not only a UI change |
+| Three wasm builds: direct `ephem` (234 KB gzip), Tor `ephem_tor` (2.13 MB), channels `ephem_channel` (2.05 MB). The two big ones each contain arti | Chats and channels in one Tor page would run **two Tor clients** unless the builds merge (F.3.3) |
+| Mode is per page: `index.html` direct, `tor.html` Tor, `channel.html` always Tor | The "this tab never shows your IP" promise of a Tor tab is simple to state and to test |
+| Tor is reached only through the Tor Project's Snowflake (two brokers, two bridges, fixed STUN list in `app.js`); the brokers are in the page's CSP `connect-src` | A custom broker is **blocked by the CSP** today (F.2.4) |
+| P7: no chat history, ever | A Telegram-like chat **list** is possible; a message **history** is not (F.4, D1) |
+
+### F.2 Tor bridges (optional setting)
+
+#### F.2.1 What a browser page can and cannot use
+
+A page has no raw TCP or UDP. It has `fetch`, WebSocket, WebTransport and WebRTC. So of Tor Browser's bridge types:
+
+| Bridge type (Tor Browser line) | In our page | Why |
+|---|---|---|
+| `snowflake …` with its own `url=` (broker), `fingerprint=`, `ice=` | **Yes** | Everything it needs is `fetch` + WebRTC, which we already run |
+| `snowflake … ampcache=…` (AMP cache rendezvous) | **Spike** (BR-4) | A `GET` through `cdn.ampproject.org`; works only if the AMP cache answers cross-origin reads (CORS). Unknown until tried |
+| `snowflake … front=…` / `fronts=` (domain fronting) | Ignored, with a note | A browser cannot send a `Host` different from the URL. The URL itself is still used (as we do with the CDN77 URL) |
+| `snowflake … utls-imitate=…` | Ignored | The browser's own TLS is used; it already looks like a browser |
+| `webtunnel …` | **No** | The server expects raw bytes after the HTTP upgrade; a browser WebSocket always adds WebSocket framing. Making it work needs a server-side change (a companion program, excluded by P10) |
+| `obfs4`, `meek_lite`, `conjure`, `dnstt`, plain `IP:ORPort` | **No** | Raw TCP/UDP, or a forged `Host` header |
+
+**What this means in practice:** "bridges" in Ephem are **alternative Snowflake setups**:
+- another broker URL, for example a CDN name not blocked where the user is;
+- another STUN list, for where Google's STUN is blocked;
+- other Snowflake bridge fingerprints;
+- or a **self-hosted Snowflake stack**, the Tor Project's own broker, proxy and server, the same as our lab. Running it is the operator's choice; we build nothing for it (P10).
+
+Lines of a type the page cannot use are **rejected with the reason**, never silently dropped.
+
+#### F.2.2 Behaviour
+
+- **Settings → Tor connection**:
+  - "Automatic (Tor Project Snowflake)", the default and today's behaviour;
+  - "Custom bridges": paste one or more bridge lines, the Tor Browser format, one per line.
+- **Parsing:** lines are parsed in Rust (sans-IO, in `crates/tor`: `bridge::parse(&str) -> Result<BridgeLine, BridgeError>`, no allocation per field, only slices into the pasted text). The result is the existing `SnowflakeParams { brokers, fingerprints, ice, nat }`. Several lines give several brokers and bridges. The existing `WarmPool` per bridge and the broker fallback already handle more than one.
+- **Validation before use:**
+  - fingerprint: 40 hex characters;
+  - broker: `https:` only;
+  - ICE: `stun:` only, since TURN is rejected by P8;
+  - at least one usable line.
+  Each rejected line shows its reason.
+- **Falling back:**
+  - "Also use the default Snowflake if my bridges fail" is **off** by default. Someone who chose bridges may not want to touch the default broker.
+  - The Tor status line always says which set is in use.
+- **Storage:** bridge lines for a private bridge are semi-secret (they reveal the bridge).
+  - Signed in: they go in the **encrypted key file**, as a new TLV `0x05 TOR_BRIDGES`. Unknown TLVs are already kept by older versions (§7.3), so this is backward compatible.
+  - Temporary identity: they are kept in RAM only, and re-pasted after a reload, with a clear note.
+- **Sharing:** "Share these bridges" gives a `#b=` link / QR (kind 7). Opening it pre-fills the setting and never applies it silently.
+- **Directory snapshot:** the IndexedDB snapshot (§28) is independent of the bridge choice and stays as is.
+
+#### F.2.3 Plan
+
+| # | Deliverable | Checkpoint |
+|---|---|---|
+| BR-1 | `bridge::parse` (+ `to_line`), unit tests from Tor Browser's shipped lines, fuzz target | Every line type in F.2.1 is accepted or rejected with the right reason; fuzz 10⁶ runs clean |
+| BR-2 | Settings UI, TLV `0x05`, `#b=` kind 7, status line | APP-E2E-TOR-BRIDGES in the lab: the lab's broker and bridges pasted as lines → bootstrap and chat; a line with only a dead broker → the reasoned error; the default path unchanged |
+| BR-3 | CSP change (F.4, D5) | CSP check in `checks/`: the Tor page loads, a custom broker is reachable, nothing else widened |
+| BR-4 (spike) | AMP cache rendezvous from a page | Live: a CORS answer from `cdn.ampproject.org` or not. Adopt only if yes |
+
+#### F.2.4 The CSP question
+
+`connect-src` lists exactly two brokers today. A pasted broker URL is blocked by the browser. There are three ways to allow it:
+1. **`connect-src 'self' https:` on the Tor pages** (recommended):
+   - WebRTC, STUN and the Snowflake proxies are not governed by `connect-src` anyway. A script able to misuse `connect-src` could already exfiltrate over WebRTC.
+   - `script-src` stays hash-pinned with no inline scripts, so script injection is the real barrier, and it is unchanged.
+2. **A fixed allowlist** of known brokers and CDN names, extended by us in releases. This is safer on paper, but a user in a censored place cannot add the name that works for them.
+3. **Custom brokers only on a self-hosted copy of the app** with its own CSP. That is correct, but useless to most people.
+
+### F.3 One app, three tabs (Telegram-like)
+
+#### F.3.1 The layout
+
+```
+┌─────────── desktop (≥ 900 px) ───────────┐    ┌──── phone ────┐
+│ ☰ Ephem · alice · Tor ●      [+ New]     │    │ Chats      [+]│
+├──────────────┬───────────────────────────┤    │ ● Bob      2  │
+│ Chats (3)    │ Bob  · via Tor · 🔒 SAS ✓ │    │ ○ Carol       │
+│ ● Bob     2  │                           │    │ ● Room: ops   │
+│ ○ Carol      │  messages…                │    │               │
+│ ● Room: ops  │                           │    │               │
+│──────────────│                           │    │               │
+│ Following    │                           │    ├───────────────┤
+│ My channels  │ [ message…         ] Send │    │ 💬  📰  ✎      │
+└──────────────┴───────────────────────────┘    └───────────────┘
+```
+
+Three tabs: **Chats**, **Following** (channels you read), and **My channels** (channels you own and post to). On a phone they are a bottom tab bar, and a row opens the conversation full screen with Back. On a desktop the list and the open pane sit side by side, in a single page and a single identity.
+
+| Tab | Rows | Row shows | Open pane | "+" |
+|---|---|---|---|---|
+| **Chats** | Live chats and rooms of this tab, then saved contacts | Nick, identicon from the peer key, online dot, "via Tor"/"direct", last message preview (**RAM only**), unread count | Today's chat or room view, unchanged in behaviour (SAS, receipts, reply, edit, timers, members) | Invite · Create room · Add a card · Paste/scan a code |
+| **Following** | Channels you follow | Title, newest post preview, new-post count, where it was read from (owner/mirror/gateway), "mirroring" badge | Today's reader view: posts, Refresh, Mirror on/off, Kubo, gateway | Paste/scan a channel link |
+| **My channels** | Channels you own | Title, "online through Tor"/"offline", post count, mirrors | Today's owner view: composer, link/QR, mirrors, backup, publish to IPFS | Create a channel · Restore from backup |
+
+A counter on each tab shows the unread total, from this tab's RAM and the follow list's high-water marks. Notifications: while the tab is open, a system notification says only "New message" or "New post in <channel title>". It never shows message text, which would go to the OS notification store and break P7.
+
+#### F.3.2 Several chats at once (core change)
+
+- **Adapter:**
+  - `Inner` gets a **fixed-capacity table of conversations** (`MAX_CHATS = 16`, preallocated at start, no allocation afterwards). Each slot is a 1:1 session or a room, with its links, pending queue and sequence state.
+  - Scratch buffers (`rx`, `text`, the meta slot) stay **shared and single**. The tab is single-threaded and frames are processed one at a time, so per-chat buffers would only add memory: 16 × 16 KB for nothing.
+  - Every API call that acts on a chat takes a `chat: u8`. Every event's meta gains a `CHAT` byte.
+  - Invites and cards map to a chat by `invite_id` / card secret, in a small fixed table.
+- **Routing, direct mode:** one `RTCPeerConnection` per 1:1 chat, as now, times N. Rooms keep their mesh. Browser limits (Chrome has hundreds of peer connections) are far above 16 chats + 16 room members.
+- **Routing, Tor mode:** one onion for all 1:1 chats, as today. An incoming stream is matched to its chat by the Noise IK static key: `contact_host` already tries sessions in turn and becomes a key lookup. Each room member link is its own stream. **Zero-copy is unchanged:** a Tor cell payload is read into the shared `rx` buffer once, then decrypted in place, as now (the one existing copy, arti's `DataStream` → `rx`, stays documented in §22).
+- **Safety in a multi-chat UI:**
+  - the chat header always shows the peer's nick, transport and SAS state;
+  - the composer's draft is per chat (RAM);
+  - switching chats never carries a draft over;
+  - removing a chat or leaving a room zeroizes its slot at once.
+- **Tests:**
+  - native: two sessions in one `Inner`, frames interleaved, each delivered to its own chat, and a slot reused after zeroize;
+  - e2e: Alice chats with Bob and Carol at the same time (direct and Tor), with messages, receipts and a redial in one chat that does not disturb the other.
+
+#### F.3.3 Chats and channels in one Tor client
+
+- **Builds go from three to two:**
+  - `ephem-channel-web` is folded into the Tor build of `ephem-wasm` (feature `tor`), so chats and channels share **one** arti client, one Snowflake pool and one directory snapshot. That saves about 2 MB of download and one Tor client's memory: the iOS concern (G4) is exactly this.
+  - The direct build stays small (no Tor).
+- **In direct mode**, "Following" and "My channels" load the Tor build **lazily**, the first time one of them is opened, and use it **only for channels**. Chats in that page stay direct.
+  - The page then shows two mode pills: "Chats: direct" and "Channels: Tor". No direct chat ever goes through Tor, and no channel request ever goes out directly (except the explicit "Read without Tor" gateway button).
+- **Old links keep working:** `channel.html#c=…` becomes a small redirect page into the app's Following tab with that link pre-filled. `channel.html` without a fragment opens My channels.
+- **Following list:** per identity, one entry per followed channel: IPNS name, onions, high-water sequence number, "mirror it" flag. It is stored per decision D2. Refresh:
+  - on open, every 10 minutes while the tab is open, and on demand;
+  - rounds in parallel, as the reader does now;
+  - capped at 4 channels at a time, so Tor circuits aren't flooded.
+- **My channels:** several owned channels per identity (`channel_seeds(index)` already supports this), each served on its own onion while the tab is open (`Tor::launch` already runs several). The list of owned indices is kept per decision D3.
+
+#### F.3.4 Plan
+
+| # | Deliverable | Checkpoint |
+|---|---|---|
+| UI-1 | Multi-chat core: conversation table, `chat` in API and events, Tor key routing | Native tests (F.3.2); the existing e2e suites unchanged (one chat is slot 0) |
+| UI-2 | App shell: tabs, list + pane, responsive, "+" sheet, per-chat drafts and unread counts, notifications without content | APP-E2E-MULTI: A with B and C at once, direct and Tor; phone viewport run; axe accessibility check clean |
+| UI-3 | One Tor build with channels; lazy channel tabs in direct mode; `channel.html` redirect | APP-E2E-TOR-CHANNEL passes inside the app; direct page never loads the Tor build until a channel tab opens (network check) |
+| UI-4 | Following: follow list, refresh scheduler, new-post counts, mirror toggle | e2e: follow 3 channels, owner posts, counts update, one channel offline → read from its mirror |
+| UI-5 | My channels: several owned channels, each online on its onion | e2e: 2 owned channels served at once, both readable |
+| UI-6 | Polish: identicons, empty states, keyboard shortcuts, strings in one table (ready for translation) | Visual check on desktop Chrome/Safari/Firefox and iPhone |
+
+**Order:** BR-1…BR-3 (small, independent), then UI-1 → UI-2 → UI-3 → UI-4 → UI-5 → UI-6. UI-1 is the risky one: it touches the core every flow uses. It gets the full regression suite before anything is built on it.
+
+### F.4 Decisions for the owner
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| D1 | Chat history in the Chats tab | (a) **keep P7**: the list shows contacts and live chats, and messages vanish when the tab closes; (b) optional encrypted local history | **(a)**. History changes the threat model (a seized device reveals chats) and the product promise |
+| D2 | Where the follow list lives | (a) **in the encrypted key file** (TLV `0x06 FOLLOWS`); (b) plain in the browser (OPFS/localStorage) | **(a)** when signed in. It reveals what you read. A temporary identity keeps it in RAM |
+| D3 | Which identity owns channels | (a) **the chat identity** (channel keys are derived with HKDF and are unlinkable in public; they are linkable only from the key file); (b) a separate publisher identity, signed in inside My channels | **(a) by default, with (b) offered** ("use a separate identity for channels") next to today's warning |
+| D4 | Direct and Tor chats in one tab | (a) **one mode per tab for chats** (channels always Tor); (b) mixed, chosen per chat | **(a)**. "This tab never shows your IP" stays a one-line promise; mixed mode makes a leak a mis-click away |
+| D5 | CSP for custom brokers | F.2.4 options 1–3 | **Option 1** (`https:` on the Tor pages) |
+| D6 | Concurrent chats per tab | 8 / **16** / 32 | **16**. Memory and UI stay sane; a room already counts as one chat |
