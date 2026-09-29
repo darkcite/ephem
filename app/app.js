@@ -309,6 +309,29 @@ function renderExposure(c) {
 const atBottom = () => { const p = $('pane'); return p.scrollTop + p.clientHeight >= p.scrollHeight - 160; };
 const toBottom = () => { const p = $('pane'); p.scrollTop = p.scrollHeight; };
 
+/** The frame follows the visible viewport (Appendix F.3.1). On an iPhone the on-screen keyboard
+ *  covers the bottom of the page and iOS scrolls the whole page up to show the focused field,
+ *  pushing the header off-screen and leaving the tab bar floating over the keyboard. Instead the
+ *  frame shrinks to the area above the keyboard (--vvh), the page is held at the top, and the
+ *  tab bar is hidden while typing (body.kbd), so the composer sits right on the keyboard. */
+function fitViewport() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const follow = atBottom();
+  const field = document.activeElement?.matches?.('textarea, input:not([type=button]):not([type=checkbox]):not([type=radio]), select');
+  const kbd = !!field && phone() && window.innerHeight - vv.height > 120;
+  document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+  document.body.classList.toggle('kbd', kbd);
+  if (window.scrollY || vv.offsetTop) window.scrollTo(0, 0);
+  if (follow || (kbd && document.activeElement.closest('.composer'))) toBottom();
+}
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', fitViewport);
+  visualViewport.addEventListener('scroll', fitViewport);
+  document.addEventListener('focusin', () => setTimeout(fitViewport, 50));
+  document.addEventListener('focusout', () => setTimeout(fitViewport, 50));
+}
+
 function sysLine(c, t) {
   const follow = c === shown && atBottom();
   const li = document.createElement('li');

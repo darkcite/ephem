@@ -20,7 +20,10 @@ body { min-height: 100dvh; display: flex; flex-direction: column; font: 14px/1.4
    an iPhone Home Screen app); the tab list and the pane scroll inside it. Desktop: tabs and list
    beside the pane. Phones: the list or the pane, with the tab bar always at the bottom. ---- */
 html, body { height: 100%; overscroll-behavior: none; }
-body { height: 100dvh; overflow: hidden; }
+body { height: var(--vvh, 100dvh); min-height: 0; overflow: hidden; }
+/* With the on-screen keyboard open (body.kbd, set from visualViewport in app.js) the frame is
+   exactly the visible area above the keyboard: header on top, the composer right on the
+   keyboard, no tab bar (it comes back when the keyboard closes). */
 .shell { flex: 1; min-height: 0; display: grid; width: 100%; max-width: 1180px; margin: 0 auto;
   grid-template-columns: 300px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "tabs pane" "side pane"; }
 .tabs { grid-area: tabs; display: flex; gap: 2px; padding: 8px 10px 6px; border-right: 1px solid var(--line); background: var(--bg); }
@@ -28,6 +31,7 @@ body { height: 100dvh; overflow: hidden; }
 .pane { grid-area: pane; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
   padding: 12px max(12px, calc((100% - 720px) / 2)) 0; }
 .pane > .view { padding-bottom: 12px; }
+.pane > #chat-slot { padding-bottom: 0; }
 .tabs button { flex: 1; margin: 0; padding: 6px 2px; font-size: 12px; background: transparent; border-color: transparent; color: var(--dim);
   border-bottom: 2px solid transparent; border-radius: 0; white-space: nowrap; }
 .tabs button[aria-selected="true"] { color: var(--acc); border-bottom-color: var(--acc); font-weight: 600; }
@@ -54,6 +58,9 @@ button.wide { width: 100%; }
   body:not(.pane-open) .pane { display: none; }
   .side { border-right: 0; }
   .tabs { border-right: 0; border-top: 1px solid var(--line); background: var(--panel); padding: 4px 6px max(6px, env(safe-area-inset-bottom)); }
+  body.kbd .tabs { display: none; }
+  body.kbd .shell, body.kbd.pane-open .shell { grid-template-rows: minmax(0, 1fr); }
+  body .composer { padding-bottom: 8px; }
 }
 
 h1 { font-size: 15px; margin: 6px 0 4px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg); }
@@ -112,8 +119,11 @@ button:disabled { opacity: .5; cursor: default; }
 #expiry { text-align: center; color: var(--warn); }
 
 /* ---- chat ---- */
-.chat { display: flex; flex-direction: column; min-height: 100%; }
-#chat-slot, .chatroot { min-height: 100%; }
+.chat { display: flex; flex-direction: column; flex: 1; }
+/* Flex columns all the way down, so the chat fills the pane and the composer sits at its
+   bottom (a percentage min-height does not pass through the auto-height .chatroot). */
+#chat-slot, .chatroot { min-height: 100%; display: flex; flex-direction: column; }
+.chatroot { flex: 1; }
 .chat > .log { flex: 1 1 auto; min-height: 40dvh; }
 .sas { background: var(--warn-bg); border: 1px solid rgba(226, 177, 60, .35); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; }
 .sas strong { color: var(--warn); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; }
@@ -156,7 +166,7 @@ button:disabled { opacity: .5; cursor: default; }
 .composing button { margin: 0; padding: 0 6px; }
 .composer { display: flex; gap: 6px; align-items: flex-end; padding-top: 8px; padding-bottom: max(8px, env(safe-area-inset-bottom));
   position: sticky; bottom: 0; background: var(--bg); border-top: 1px solid var(--line); }
-.composer textarea { margin: 0; font-size: 14px; }
+.composer textarea { margin: 0; }
 .composer button { margin: 0; }
 
 /* ---- overlays, banners, footer ---- */
