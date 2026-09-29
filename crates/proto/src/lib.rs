@@ -9,6 +9,7 @@
 pub mod b64url;
 pub mod buf;
 pub mod candidate;
+pub mod card;
 pub mod code;
 pub mod error;
 pub mod frame;

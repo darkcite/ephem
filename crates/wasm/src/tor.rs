@@ -181,7 +181,10 @@ pub(crate) fn call(inner: &Shared, peer: PeerId) -> Result<(), ErrorCode> {
         if c.flags & cflags::HAS_ONION == 0 {
             return Err(ErrorCode::NotPermitted);
         }
-        let s = Session::tor_contact_dialer(g.identity(), peer, c.onion_pk, g.settings());
+        // Added from their card and never connected: the card's secret opens the first dial.
+        let secret = if c.flags & cflags::FROM_CARD != 0 { c.card_secret } else { [0; 16] };
+        tracing::info!("tor: dialling a contact{}", if secret == [0; 16] { "" } else { " with their card's secret" });
+        let s = Session::tor_contact_dialer(g.identity(), peer, c.onion_pk, g.settings(), secret);
         g.reset();
         g.add_link(0, s, false)
     };
@@ -189,27 +192,37 @@ pub(crate) fn call(inner: &Shared, peer: PeerId) -> Result<(), ErrorCode> {
     Ok(())
 }
 
-/// A contact dials while the tab has no chat (§28.7): a new chat for the stream, if its key is
-/// one of our contacts. Returns the new link's index.
-fn contact_host(g: &mut Inner, now: u64, frame: &[u8], wire: &TorWire) -> Option<usize> {
-    if g.room.is_some() || g.links.iter().any(|l| l.sess.state() != State::Closed) || g.saved.as_ref().is_none_or(|s| s.contacts.list().is_empty()) {
+/// A contact dials while the tab has no chat (§28.7), or someone with our live contact card
+/// (§28.4 case 3: any key, the user is asked next). Returns the new link's index and whether
+/// it came through the card.
+fn contact_host(g: &mut Inner, now: u64, frame: &[u8], wire: &TorWire) -> Option<(usize, bool)> {
+    if g.room.is_some() || g.links.iter().any(|l| l.sess.state() != State::Closed) {
         return None;
     }
-    let s = Session::tor_contact_host(g.identity(), g.settings());
+    let sv = g.saved.as_ref()?;
+    let now_s = (now / 1000) as u32;
+    let card = sv.contacts.card.filter(|k| k.live(now_s)).map(|k| k.secret);
+    let contacts = !sv.contacts.list().is_empty();
     g.reset();
-    g.add_link(1, s, false);
-    let i = g.links.len() - 1;
-    let taken = {
-        let Inner { id, links, meta, inbox, saved, .. } = &mut *g;
-        let contacts = &saved.as_ref()?.contacts;
-        let Link { sess, rtc, id: lid, member, peer, .. } = &mut links[i];
-        let mut out = Out { rtc: rtc.as_ref(), tor: Some(wire), meta, inbox, peer, link: *lid, member: *member };
-        sess.tor_accept(id, now, frame, |k| contacts.get(k).is_some(), &mut |e| on_event(&mut out, e)) == Ok(true)
-    };
-    if !taken {
+    // Contacts (zero secret, known keys only), then the card (its secret, any key).
+    for secret in [contacts.then_some([0u8; 16]), card].into_iter().flatten() {
+        let s = Session::tor_contact_host(g.identity(), g.settings(), secret);
+        g.add_link(1, s, false);
+        let i = g.links.len() - 1;
+        let taken = {
+            let Inner { id, links, meta, inbox, saved, .. } = &mut *g;
+            let known = &saved.as_ref()?.contacts;
+            let Link { sess, rtc, id: lid, member, peer, .. } = &mut links[i];
+            let mut out = Out { rtc: rtc.as_ref(), tor: Some(wire), meta, inbox, peer, link: *lid, member: *member };
+            let from_card = secret != [0; 16];
+            sess.tor_accept(id, now, frame, |k| from_card || known.get(k).is_some(), &mut |e| on_event(&mut out, e)) == Ok(true)
+        };
+        if taken {
+            return Some((i, secret != [0; 16]));
+        }
         g.links.pop();
     }
-    taken.then_some(i)
+    None
 }
 
 /// The identity changed (sign-in, sign-out): host the new one's onion service, so invites and
@@ -351,9 +364,29 @@ fn lost(inner: &Shared, lid: u32) {
     }
 }
 
-/// Every second: connected Tor links that went silent are lost (see [`SILENT_MS`]).
+/// Every second: connected Tor links that went silent are lost (see [`SILENT_MS`]); a contact
+/// added from a card that has connected no longer needs the card's secret (ev::CARD 2: the
+/// key file changed).
 pub(crate) fn tick(inner: &Shared) {
     let now = now_ms();
+    let used = {
+        let mut g = inner.borrow_mut();
+        let Inner { links, saved, .. } = &mut *g;
+        let mut used = false;
+        if let Some(sv) = saved.as_mut() {
+            for l in links.iter().filter(|l| l.sess.contact() && l.sess.role() == Role::Answerer && l.sess.ever_connected()) {
+                let peer = l.sess.remote();
+                if sv.contacts.get(&peer).is_some_and(|c| c.flags & cflags::FROM_CARD != 0) {
+                    sv.contacts.card_used(&peer);
+                    used = true;
+                }
+            }
+        }
+        used
+    };
+    if used {
+        emit(ev::CARD, 2.0, &[]);
+    }
     let silent: Vec<u32> = {
         let g = inner.borrow();
         g.links.iter().filter(|l| l.tor.is_some() && l.sess.state() == State::Connected && l.sess.rx_idle_ms(now) > SILENT_MS).map(|l| l.id).collect()
@@ -391,6 +424,7 @@ async fn incoming(inner: Shared, s: DataStream) {
         }
     };
     let wire = writer(w);
+    let mut card_event = false;
     let taken = {
         let mut g = inner.borrow_mut();
         let now = now_ms();
@@ -420,12 +454,24 @@ async fn incoming(inner: Shared, s: DataStream) {
                 g.links[i].tor = Some(wire);
                 Some(lid)
             }
-            None => contact_host(&mut g, now, &buf[2..2 + n], &wire).map(|i| {
+            None => contact_host(&mut g, now, &buf[2..2 + n], &wire).map(|(i, from_card)| {
                 g.links[i].tor = Some(wire);
+                if from_card {
+                    // The UI asks its user before the chat starts (§28.4 case 3).
+                    card_event = true;
+                }
                 g.links[i].id
             }),
         }
     };
+    if card_event {
+        emit(ev::CARD, 1.0, &[]);
+    }
+    if taken.is_none() {
+        let g = inner.borrow();
+        let busy = g.room.is_some() || g.links.iter().any(|l| l.sess.state() != State::Closed);
+        tracing::warn!("tor: an incoming stream matched no chat (busy: {busy}, links: {}); dropped", g.links.len());
+    }
     // A stream for none of our chats is dropped unanswered (§28.4).
     if let Some(lid) = taken {
         buf.drain(..2 + n);

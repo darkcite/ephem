@@ -37,11 +37,12 @@ impl TorWire {
 use core::cell::RefCell;
 use ephem_core::room::{OWNER_IDX, RoomRole};
 use ephem_core::{Event, MsgRef, Privacy, Session, Settings, State};
-use ephem_crypto::contacts::{ContactError, Contacts};
+use ephem_crypto::contacts::{ContactError, Contacts, OwnCard};
 use ephem_crypto::{Identity, PeerId, keyfile};
 use ephem_proto::ErrorCode;
 use ephem_proto::b64url;
 use ephem_proto::buf::Buf;
+use ephem_proto::card::{Card, MAX_CARD_LEN};
 use ephem_proto::code::{Code, Kind, MAX_CODE_LEN, flags};
 use ephem_proto::frame::{MAX_FRAME, MAX_TEXT};
 use std::rc::Rc;
@@ -109,6 +110,10 @@ pub mod ev {
     /// Tor build (§28): num = 1 starting (text = bootstrap status), 2 ready (text = our
     /// `.onion`), 3 failed (text = reason).
     pub const TOR: u32 = 26;
+    /// Contact cards (§7.5): num = 1 the chat that just connected came through our card (ask
+    /// the user: accept = save the contact, decline = leave); 2 contacts changed (save the key
+    /// file).
+    pub const CARD: u32 = 27;
 }
 
 /// Byte offsets inside the meta block.
@@ -662,6 +667,66 @@ impl App {
         status(r)
     }
 
+    // ---- contact cards (§7.5, saved identities only) ----
+
+    /// Our contact card as base64url (empty for a temporary identity). A card is created on
+    /// first use, and again when `reset` or when the current one expired; `ttl_days` = 0 makes
+    /// a new card that never expires. Save the key file afterwards (the secret is in it).
+    pub fn my_card(&self, reset: bool, ttl_days: u32) -> String {
+        let now_s = (now_ms() / 1000) as u32;
+        let mut g = self.inner.borrow_mut();
+        let Inner { id, saved, prefs, scratch, .. } = &mut *g;
+        let Some(sv) = saved.as_mut() else { return String::new() };
+        let card = match sv.contacts.card.filter(|k| !reset && k.live(now_s)) {
+            Some(k) => k,
+            None => {
+                let mut secret = [0u8; 16];
+                ephem_crypto::random(&mut secret);
+                let k = OwnCard { secret, expires_at: if ttl_days == 0 { 0 } else { now_s.saturating_add(ttl_days.saturating_mul(86_400)) } };
+                sv.contacts.card = Some(k);
+                // The key file changed: the page saves it (after this call returns).
+                emit(ev::CARD, 2.0, &[]);
+                k
+            }
+        };
+        let c = Card { peer_id: id.peer_id().0, onion_pk: id.onion_pk(), secret: card.secret, expires_at: card.expires_at, nick: prefs.settings.nick() };
+        let mut bin = [0u8; MAX_CARD_LEN];
+        let Ok(n) = c.encode(&mut bin) else { return String::new() };
+        b64url::encode(&bin[..n], &mut scratch[..]).map_or_else(|_| String::new(), |len| String::from_utf8_lossy(&scratch[..len]).into_owned())
+    }
+
+    /// Expiry of our current card (Unix seconds; 0 = never or no card).
+    pub fn card_expires(&self) -> u32 {
+        self.inner.borrow().saved.as_ref().and_then(|s| s.contacts.card).map_or(0, |k| k.expires_at)
+    }
+
+    /// The suggested nickname of a card (`#k=` link or text), or `None` if it is not a card.
+    pub fn card_nick(&self, text: &str) -> Option<String> {
+        let (bin, n) = decode_text(text)?;
+        Card::decode(&bin[..n]).ok().map(|c| String::from_utf8_lossy(c.nick).into_owned())
+    }
+
+    /// Adds the owner of a card as an unverified contact named `nick` (§7.5). Save the key file
+    /// afterwards.
+    pub fn add_card(&self, text: &str, nick: &str) -> u32 {
+        let now_s = (now_ms() / 1000) as u32;
+        let r = (|| {
+            let (bin, n) = decode_text(text).ok_or(ErrorCode::InvalidInvite)?;
+            let c = Card::decode(&bin[..n])?;
+            if !c.live(now_s) {
+                return Err(ErrorCode::ExpiredInvite);
+            }
+            let mut g = self.inner.borrow_mut();
+            let me = g.id.peer_id();
+            let sv = g.saved.as_mut().ok_or(ErrorCode::NotPermitted)?;
+            if PeerId(c.peer_id) == me {
+                return Err(ErrorCode::NotPermitted);
+            }
+            sv.contacts.add_from_card(PeerId(c.peer_id), c.onion_pk, c.secret, nick.trim().as_bytes(), now_s).map_err(contact_err)
+        })();
+        status(r)
+    }
+
     pub fn remove_contact(&self, peer_hex: &str) -> u32 {
         let mut g = self.inner.borrow_mut();
         let r = match (peer_from_hex(peer_hex), g.saved.as_mut()) {
@@ -1164,7 +1229,7 @@ impl Default for App {
 fn extract_payload(s: &str) -> &str {
     let s = s.trim();
     let s = s.rsplit_once('#').map_or(s, |(_, f)| f);
-    for k in ["i=", "a=", "r=", "q=", "t="] {
+    for k in ["i=", "a=", "r=", "q=", "t=", "k="] {
         if let Some(rest) = s.strip_prefix(k) {
             return rest;
         }

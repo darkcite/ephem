@@ -114,6 +114,21 @@ impl Identity {
         derive(&self.seed, b"p2pchat/onion-ed25519")
     }
 
+    /// Public channel number `index` (§D.3): its Ed25519 signing seed (the IPNS name is its
+    /// public key) and its onion service seed. One-way from the identity seed and from each
+    /// other, so a channel cannot be linked to the chat identity. The caller wipes both.
+    pub fn channel_seeds(&self, index: u32) -> ([u8; 32], [u8; 32]) {
+        let mut info = [0u8; 26];
+        let n = b"p2pchat/channel/".len();
+        info[..n].copy_from_slice(b"p2pchat/channel/");
+        info[n..n + 4].copy_from_slice(&index.to_be_bytes());
+        let sign = derive(&self.seed, &info[..n + 4]);
+        let m = b"p2pchat/channel-onion/".len();
+        info[..m].copy_from_slice(b"p2pchat/channel-onion/");
+        info[m..m + 4].copy_from_slice(&index.to_be_bytes());
+        (sign, derive(&self.seed, &info[..m + 4]))
+    }
+
     /// The onion service public key (the `.onion` address is its base32 form).
     pub fn onion_pk(&self) -> [u8; 32] {
         let mut s = self.onion_secret();

@@ -23,7 +23,7 @@ let App, qr_svg_path;
 
 const EV = { CODE: 1, CONNECTED: 2, HELLO: 3, CHAT: 4, DELIVERED: 5, DEGRADED: 6, ALIVE: 7, PEER_HIDDEN: 8, CLOSED: 9, ERROR: 10,
   PROGRESS: 11, PATH: 12, SETTING: 13, EDITED: 14, DELETED: 15, EXPIRED: 16, READ: 17, TYPING: 18, SUSPENDED: 19,
-  REACTION: 20, PEER_READY: 21, IDENTITY_SENT: 22, IDENTITY_RECEIVED: 23, ROOM: 24, ROOM_CLOSED: 25, TOR: 26 };
+  REACTION: 20, PEER_READY: 21, IDENTITY_SENT: 22, IDENTITY_RECEIVED: 23, ROOM: 24, ROOM_CLOSED: 25, TOR: 26, CARD: 27 };
 // Meta block offsets (crates/wasm/src/lib.rs `meta`).
 const META = { TTL: 0, HAS_REPLY: 4, SENDER: 5, REPLY_SEQ: 8, RESUMED: 0, MEMBER: 16, LEN: 24 };
 const PENDING = 0xff;           // member index of a joiner the owner has not admitted yet
@@ -35,7 +35,7 @@ const FLAG_TRANSFER = 4;
 const FLAG_OBSERVER = 8;
 const CONTACT_HAS_ONION = 2; // contact flags (crates/crypto/src/contacts.rs `cflags`)
 const ST = { NONE: 0, GATHERING: 1, AWAITING: 2, CONNECTING: 3, CONNECTED: 4, CLOSED: 5, SUSPENDED: 6 };
-const FRAG = { 1: 'i', 2: 'a', 3: 'r', 4: 'q', 5: 't' };
+const FRAG = { 1: 'i', 2: 'a', 3: 'r', 4: 'q', 5: 't', 6: 'k' };
 const TTL_LABEL = { 5: '5 seconds', 30: '30 seconds', 60: '1 minute', 300: '5 minutes', 3600: '1 hour', 86400: '1 day' };
 const TTL_SHORT = { 5: '5s', 30: '30s', 60: '1m', 300: '5m', 3600: '1h', 86400: '1d' };
 // ErrorCode values (§19) for negative return values.
@@ -84,6 +84,7 @@ let typingTimer = 0;
 let scanStop = null;
 let pathText = '';
 let torReady = false;
+let cardRequest = false;       // the open chat came through our contact card: ask first (§28.4)
 let lockRelease = null;        // releases the Web Lock of the saved identity in use (§7.2)
 let updateWorker = null;
 let transferring = null;       // identity transfer (§7.6): 'receiver' (new device) | 'sender' (old device)
@@ -418,6 +419,7 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       $('sas').classList.remove('optional');
       $('verified').textContent = 'unverified';
       $('verified').className = 'pill';
+      if (cardRequest) later(showCardRequest);
       openChat(room ? 'Connected to the room owner. The member list arrives next.'
         : TOR ? 'Connected through Tor: neither of you sees the other\'s IP address. Messages are end-to-end encrypted and exist only in these two tabs.'
           : 'Connected directly. Messages are end-to-end encrypted and exist only in these two tabs.');
@@ -430,6 +432,7 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
         break;
       }
       peerNick = text(ptr, len);
+      if (cardRequest) later(showCardRequest);
       // Both codes scanned in person: the SAS is shown but not prompted (§10.4).
       if (num === 1 && $('verified').textContent === 'unverified') {
         $('sas').classList.add('optional');
@@ -564,6 +567,12 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
     }
     case EV.ERROR:
       error(text(ptr, len));
+      break;
+    case EV.CARD:
+      if (num === 1) {
+        cardRequest = true;
+        later(showCardRequest);
+      } else later(persist);
       break;
     case EV.TOR: {
       const t = text(ptr, len);
@@ -755,6 +764,9 @@ function endTransfer() {
 
 function ended(name) {
   if (transferring) transferring = null;
+  cardRequest = false;
+  $('card-req').hidden = true;
+  $('log').hidden = false;
   const wasChat = chatOpen;
   const wasRoom = !!room;
   chatOpen = false;
@@ -776,7 +788,9 @@ function reset() {
   room = null;
   names.clear();
   removedByMe.clear();
-  for (const id of ['room', 'room-invite', 'room-confirm']) $(id).hidden = true;
+  for (const id of ['room', 'room-invite', 'room-confirm', 'card-req']) $(id).hidden = true;
+  cardRequest = false;
+  $('log').hidden = false;
   $('s-chat-ttl').disabled = false;
   $('f-send').hidden = false;
   codeExpires = 0;
@@ -824,6 +838,8 @@ function renderIdentity() {
     ? `Saved identity “${label}” (${h}). Peers see the same identity every time you use it.`
     : `Temporary identity ${h}. It disappears when you close this tab.`;
   $('b-id-temp').hidden = !label;
+  $('b-card').hidden = !label;
+  if (!label) $('card').hidden = true;
   if (document.activeElement !== $('i-nick')) $('i-nick').value = app.nick();
   renderContacts();
   renderSlots();
@@ -956,6 +972,7 @@ function applyPrefs() {
 function applyCode(raw, scanned) {
   const v = raw.trim();
   if (!v) return;
+  if (app.card_nick(v) !== undefined) return addCard(v);
   const info = app.code_info(v);
   if ((info & 0xff) === 1 && (info >> 8) & FLAG_TRANSFER) {
     // Someone asks for this identity (§7.6).
@@ -1218,7 +1235,7 @@ const bc = 'BroadcastChannel' in globalThis ? new BroadcastChannel('p2pchat-code
 
 function takeFragment() {
   const h = location.hash;
-  if (!/^#[iarqt]=/.test(h)) return null;
+  if (!/^#[iarqtk]=/.test(h)) return null;
   history.replaceState(null, '', location.pathname);
   return h;
 }
@@ -1280,6 +1297,46 @@ async function registerWorker() {
 function applyUpdate() {
   if (chatOpen && !confirm('Updating reloads Ephem and ends the current chat. Update now?')) return;
   updateWorker?.postMessage('activate');
+}
+
+// ---- contact cards (§7.5) ----------------------------------------------------------------------
+function renderCard() {
+  const code = app.my_card(false, Number($('s-card-ttl').value));
+  if (!code) return;
+  renderCodeBox($('card').querySelector('.codebox'), 6, code);
+  const exp = app.card_expires();
+  $('card-expiry').textContent = exp ? `This card works until ${new Date(exp * 1000).toLocaleDateString()}.` : 'This card never expires.';
+}
+
+function addCard(text) {
+  if (!app.identity_label()) return error('Sign in with a saved identity first: contacts live in its key file.');
+  const suggested = app.card_nick(text) || '';
+  const name = prompt(`Add ${suggested ? `“${suggested}”` : 'the owner of this card'} as a contact? Name (only you see it):`, suggested);
+  if (name === null) return;
+  if (app.add_card(text, name) !== 0) return;
+  persist();
+  $('t-code').value = '';
+  status(TOR ? 'contact added: Connect to chat' : 'contact added');
+  show('v-start');
+}
+
+// The chat came through our card from someone who is not a contact yet (§28.4 case 3).
+function showCardRequest() {
+  if (!cardRequest || !chatOpen) return;
+  $('card-req-text').textContent = `${peerNick || $('peer').dataset.handle || 'Someone'} (from your contact card) wants to connect. Compare the safety code, then accept or decline.`;
+  $('card-req').hidden = false;
+  // Nothing of the chat is shown before the user accepts.
+  $('f-send').hidden = true;
+  $('log').hidden = true;
+}
+
+function answerCardRequest(accept) {
+  cardRequest = false;
+  $('card-req').hidden = true;
+  if (!accept) return $('b-leave').click();
+  $('f-send').hidden = false;
+  $('log').hidden = false;
+  if (app.save_contact(peerNick || $('peer').dataset.handle || '') === 0) persist().then(renderPeer);
 }
 
 // ---- Tor mode (§28) --------------------------------------------------------------------------
@@ -1433,6 +1490,14 @@ async function main() {
     app.create_transfer_invite(Number($('s-ttl').value));
   };
   $('b-backup').onclick = downloadBackup;
+  $('b-card').onclick = () => { $('card').hidden = !$('card').hidden; if (!$('card').hidden) renderCard(); };
+  $('b-card-reset').onclick = () => {
+    if (!confirm('Reset your contact card? Every card you shared stops working for a first contact.')) return;
+    app.my_card(true, Number($('s-card-ttl').value));
+    renderCard();
+  };
+  $('b-card-accept').onclick = () => answerCardRequest(true);
+  $('b-card-decline').onclick = () => answerCardRequest(false);
   $('i-nick').onchange = () => {
     if (app.set_nick($('i-nick').value) === 0 && app.identity_label()) persist();
   };
@@ -1501,7 +1566,7 @@ async function main() {
   status(TOR ? 'starting Tor' : 'ready');
   show('v-start');
   if (!frag) return;
-  if (frag.startsWith('#i=') || frag.startsWith('#t=')) return applyCode(frag, false);
+  if (frag.startsWith('#i=') || frag.startsWith('#t=') || frag.startsWith('#k=')) return applyCode(frag, false);
   if (await forward(frag)) {
     $('note-title').textContent = 'Code delivered';
     $('note-text').textContent = 'The code was passed to your open Ephem tab. You can close this tab.';

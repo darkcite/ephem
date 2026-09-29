@@ -24,7 +24,7 @@ function labConfig() {
     ice: env.STUN_URL,
     nat: 'unrestricted',
     network: fs.readFileSync(`${env.LAB}/arti-net.toml`, 'utf8'),
-    log: process.env.TOR_LOG || 'warn',
+    log: process.env.TOR_LOG || 'info',
   };
 }
 
@@ -67,3 +67,20 @@ export const noise = (text) => /Password field is not contained in a form/.test(
 
 /** Page problems, without the browser's own report of the dead broker (lab only, expected). */
 export const unexpected = (problems) => problems.filter((p) => LIVE || !/net::ERR_CONNECTION_REFUSED/.test(p));
+
+/** Console lines of every page (`record(page, who)`), printed by `dumpLogs()` when a flow fails. */
+const logs = [];
+export function record(page, who) {
+  page.on('console', (m) => {
+    if (!/ERR_CONNECTION_REFUSED/.test(m.text())) logs.push(`  ${who} | ${m.text()}`);
+    if (process.env.VERBOSE && !noise(m.text())) console.log(`  ${who} |`, m.text());
+  });
+}
+/** The app's own Tor lines (`tor: …`) in full, then the last `n` other lines. */
+export const dumpLogs = (n = 40) => {
+  if (process.env.VERBOSE) return;
+  const quiet = (l) => /unreachable|proxy ready|memquota|Downloading|Marked consensus|Directory is complete|consensus diff/.test(l);
+  console.log(logs.filter((l) => /\btor: /.test(l)).join('\n'));
+  console.log('  ---');
+  console.log(logs.filter((l) => !quiet(l)).slice(-n).join('\n'));
+};

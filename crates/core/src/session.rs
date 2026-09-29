@@ -582,20 +582,25 @@ impl Session {
     }
 
     /// Tor mode, a contact dials (§28.7): no invite, the peer's keys come from the contact entry.
-    /// The prologue is [`CONTACT_PROLOGUE`] and the `invite_id` in message 1 is zero; the host
-    /// accepts the stream only from a key in its contacts.
-    pub fn tor_contact_dialer(id: &Identity, peer: PeerId, peer_onion: [u8; 32], settings: Settings) -> Self {
+    /// The prologue is [`CONTACT_PROLOGUE`]. Message 1 carries `card_secret` where an invite
+    /// carries its `invite_id`: zero for a contact that knows us (the host accepts only keys in
+    /// its contacts), or the secret of the peer's contact card we were added from (§28.4 case 3:
+    /// the host accepts any key with its current secret, then asks its user).
+    pub fn tor_contact_dialer(id: &Identity, peer: PeerId, peer_onion: [u8; 32], settings: Settings, card_secret: [u8; 16]) -> Self {
         let mut s = Self::contact_blank(Role::Answerer, id, settings);
+        s.invite_id = card_secret;
         s.remote = peer;
         s.peer_onion = peer_onion;
         s.state = State::Gathering;
         s
     }
 
-    /// Tor mode, the host side of a contact dial: waits for one stream from a contact (its key
-    /// is checked by the `allow` of [`Self::tor_accept`]).
-    pub fn tor_contact_host(id: &Identity, settings: Settings) -> Self {
+    /// Tor mode, the host side of a contact dial: waits for one stream whose message 1 carries
+    /// `card_secret` (zero: a contact dial, whose key `allow` of [`Self::tor_accept`] checks;
+    /// else our card's secret).
+    pub fn tor_contact_host(id: &Identity, settings: Settings, card_secret: [u8; 16]) -> Self {
         let mut s = Self::contact_blank(Role::Offerer, id, settings);
+        s.invite_id = card_secret;
         s.state = State::AwaitingAnswer;
         s
     }

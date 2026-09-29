@@ -719,8 +719,8 @@ fn tor_invite_ik_handshake_and_redial() {
 fn tor_contact_dial() {
     let (ha, hb) = (Identity::from_seed(&[3; 32]), Identity::from_seed(&[4; 32]));
     let (a_key, b_key) = (ha.peer_id(), hb.peer_id());
-    let host = Session::tor_contact_host(&ha, Settings::default());
-    let dialer = Session::tor_contact_dialer(&hb, a_key, ha.onion_pk(), Settings::default());
+    let host = Session::tor_contact_host(&ha, Settings::default(), [0; 16]);
+    let dialer = Session::tor_contact_dialer(&hb, a_key, ha.onion_pk(), Settings::default(), [0; 16]);
     assert!(host.contact() && dialer.contact());
     assert_eq!(dialer.peer_onion(), ha.onion_pk());
     let mut p = Pair { a: Side { id: ha, s: Box::new(host), out: Wire { frames: vec![] }, seen: Seen::default() }, b: Side { id: hb, s: Box::new(dialer), out: Wire { frames: vec![] }, seen: Seen::default() }, now: NOW_MS };
@@ -742,4 +742,35 @@ fn tor_contact_dial() {
     act!(p.a, send_chat(NOW_MS, None, b"hi contact", None)).unwrap();
     p.settle();
     assert_eq!(p.b.seen.chats[0].1, b"hi contact");
+}
+
+/// Tor mode, contact cards (§28.4 case 3): a dial carrying the host's card secret is taken by
+/// the card session from any key; a contact session (zero secret) does not take it, and a wrong
+/// secret is taken by neither.
+#[test]
+fn tor_card_dial() {
+    let (ha, hb) = (Identity::from_seed(&[5; 32]), Identity::from_seed(&[6; 32]));
+    let secret = [0x5c; 16];
+    let id = Identity::from_seed(&[5; 32]);
+    let dial = |secret: [u8; 16]| {
+        let hb = Identity::from_seed(&[6; 32]);
+        let mut d = Session::tor_contact_dialer(&hb, ha.peer_id(), ha.onion_pk(), Settings::default(), secret);
+        d.tor_dial(&hb).unwrap();
+        let (mut w, mut s) = (Wire { frames: vec![] }, Seen::default());
+        d.on_open(NOW_MS, &mut sink(&mut w, &mut s));
+        (d, w.frames.remove(0))
+    };
+    let (mut w, mut s) = (Wire { frames: vec![] }, Seen::default());
+    let (_, wrong) = dial([0x11; 16]);
+    let mut card = Session::tor_contact_host(&id, Settings::default(), secret);
+    assert_eq!(card.tor_accept(&id, NOW_MS, &wrong, |_| true, &mut sink(&mut w, &mut s)), Ok(false), "wrong secret");
+    let (dialer, msg1) = dial(secret);
+    let mut contacts = Session::tor_contact_host(&id, Settings::default(), [0; 16]);
+    assert_eq!(contacts.tor_accept(&id, NOW_MS, &msg1, |_| true, &mut sink(&mut w, &mut s)), Ok(false), "not a contact dial");
+    let mut p = Pair { a: Side { id: ha, s: Box::new(card), out: Wire { frames: vec![] }, seen: Seen::default() }, b: Side { id: hb, s: Box::new(dialer), out: Wire { frames: vec![] }, seen: Seen::default() }, now: NOW_MS };
+    assert_eq!(act!(p.a, tor_accept(&id, NOW_MS, &msg1, |_| true)), Ok(true));
+    p.settle();
+    assert_eq!((p.a.s.state(), p.b.s.state()), (State::Connected, State::Connected));
+    assert_eq!(p.a.s.remote(), p.b.id.peer_id());
+    assert_eq!(p.a.seen.sas, p.b.seen.sas);
 }

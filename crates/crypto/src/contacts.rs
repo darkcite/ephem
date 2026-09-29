@@ -9,13 +9,18 @@ pub const MAX_CONTACTS: usize = 256;
 pub const MAX_NICK: usize = 32;
 /// Key-file TLV types (§7.3).
 pub const TLV_CONTACTS: u8 = 0x01;
+pub const TLV_CARD: u8 = 0x04;
+/// Default lifetime of a new contact card (§7.5).
+pub const CARD_TTL_S: u32 = 30 * 24 * 3600;
 
 pub mod cflags {
     /// The SAS was compared with this peer.
     pub const VERIFIED: u8 = 1 << 0;
     pub const HAS_ONION: u8 = 1 << 1;
     pub const HAS_SIGN: u8 = 1 << 2;
-    pub const KNOWN: u8 = VERIFIED | HAS_ONION | HAS_SIGN;
+    /// Added from their contact card, whose secret opens the first Tor dial (§28.4 case 3).
+    pub const FROM_CARD: u8 = 1 << 3;
+    pub const KNOWN: u8 = VERIFIED | HAS_ONION | HAS_SIGN | FROM_CARD;
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -24,6 +29,8 @@ pub struct Contact {
     pub flags: u8,
     pub onion_pk: [u8; 32],
     pub sign_pk: [u8; 32],
+    /// The secret of the card this contact was added from (flag `FROM_CARD`).
+    pub card_secret: [u8; 16],
     pub added_at: u32,
     nick_len: u8,
     nick: [u8; MAX_NICK],
@@ -59,6 +66,9 @@ impl Contact {
         if self.flags & cflags::HAS_SIGN != 0 {
             out.extend_from_slice(&self.sign_pk);
         }
+        if self.flags & cflags::FROM_CARD != 0 {
+            out.extend_from_slice(&self.card_secret);
+        }
         out.extend_from_slice(&self.added_at.to_le_bytes());
         out.push(self.nick_len);
         out.extend_from_slice(self.nick());
@@ -72,9 +82,10 @@ impl Contact {
         }
         let onion_pk = if flags & cflags::HAS_ONION != 0 { r.arr::<32>()? } else { [0; 32] };
         let sign_pk = if flags & cflags::HAS_SIGN != 0 { r.arr::<32>()? } else { [0; 32] };
+        let card_secret = if flags & cflags::FROM_CARD != 0 { r.arr::<16>()? } else { [0; 16] };
         let added_at = r.u32()?;
         let n = r.u8()? as usize;
-        let mut c = Contact { peer_id, flags, onion_pk, sign_pk, added_at, nick_len: 0, nick: [0; MAX_NICK] };
+        let mut c = Contact { peer_id, flags, onion_pk, sign_pk, card_secret, added_at, nick_len: 0, nick: [0; MAX_NICK] };
         c.set_nick(r.take(n)?).then_some(c)
     }
 }
@@ -87,14 +98,71 @@ pub enum ContactError {
     NotFound,
 }
 
+/// Our own contact card's secret (TLV 0x04): whoever holds a card with it may dial us once.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct OwnCard {
+    pub secret: [u8; 16],
+    /// Unix seconds; 0 = never.
+    pub expires_at: u32,
+}
+
+impl OwnCard {
+    #[inline(always)]
+    pub fn live(&self, now_s: u32) -> bool {
+        self.expires_at == 0 || now_s <= self.expires_at
+    }
+}
+
 #[derive(Default)]
 pub struct Contacts {
     list: Vec<Contact>,
+    /// Our current contact card (none until the user shows one).
+    pub card: Option<OwnCard>,
 }
 
 impl Contacts {
     pub fn new() -> Self {
-        Self { list: Vec::with_capacity(MAX_CONTACTS) }
+        Self { list: Vec::with_capacity(MAX_CONTACTS), card: None }
+    }
+
+    /// Adds a contact from their card (§7.5): unverified, with their onion key and the card's
+    /// secret. An existing contact keeps its verification and nickname; it only gains the
+    /// onion key if it had none.
+    pub fn add_from_card(&mut self, peer: PeerId, onion_pk: [u8; 32], secret: [u8; 16], nick: &[u8], now_s: u32) -> Result<(), ContactError> {
+        if let Some(c) = self.list.iter_mut().find(|c| c.peer_id == peer) {
+            if c.flags & cflags::HAS_ONION == 0 {
+                c.onion_pk = onion_pk;
+                c.flags |= cflags::HAS_ONION;
+            }
+            return Ok(());
+        }
+        if self.list.len() >= MAX_CONTACTS {
+            return Err(ContactError::Full);
+        }
+        let mut c = Contact {
+            peer_id: peer,
+            flags: cflags::HAS_ONION | cflags::FROM_CARD,
+            onion_pk,
+            sign_pk: [0; 32],
+            card_secret: secret,
+            added_at: now_s,
+            nick_len: 0,
+            nick: [0; MAX_NICK],
+        };
+        if !c.set_nick(nick) {
+            return Err(ContactError::BadNick);
+        }
+        self.list.push(c);
+        Ok(())
+    }
+
+    /// The contact now knows us (a connection went through): later dials are contact dials,
+    /// so the card's secret is no longer needed (and may have been reset since).
+    pub fn card_used(&mut self, peer: &PeerId) {
+        if let Some(c) = self.list.iter_mut().find(|c| c.peer_id == *peer) {
+            c.flags &= !cflags::FROM_CARD;
+            c.card_secret = [0; 16];
+        }
     }
 
     #[inline]
@@ -138,6 +206,7 @@ impl Contacts {
             flags: if verified { cflags::VERIFIED } else { 0 },
             onion_pk: [0; 32],
             sign_pk: [0; 32],
+            card_secret: [0; 16],
             added_at: now_s,
             nick_len: 0,
             nick: [0; MAX_NICK],
@@ -173,9 +242,16 @@ impl Contacts {
         Ok(())
     }
 
-    /// The key-file TLV area: CONTACTS (if any) followed by `others` (unknown sections, kept).
+    /// The key-file TLV area: CONTACTS and CARD (if any) followed by `others` (unknown
+    /// sections, kept).
     pub fn to_tlv(&self, others: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
+        if let Some(k) = self.card {
+            out.push(TLV_CARD);
+            out.extend_from_slice(&20u16.to_le_bytes());
+            out.extend_from_slice(&k.secret);
+            out.extend_from_slice(&k.expires_at.to_le_bytes());
+        }
         if !self.list.is_empty() {
             let mut v = Vec::with_capacity(2 + self.list.len() * 134);
             v.extend_from_slice(&(self.list.len() as u16).to_le_bytes());
@@ -200,6 +276,15 @@ impl Contacts {
             let t = r.u8()?;
             let len = r.u16()? as usize;
             let value = r.take(len)?;
+            if t == TLV_CARD {
+                let mut v = Rd::new(value);
+                let card = OwnCard { secret: v.arr::<16>()?, expires_at: v.u32()? };
+                if v.remaining() != 0 || contacts.card.is_some() {
+                    return None;
+                }
+                contacts.card = Some(card);
+                continue;
+            }
             if t != TLV_CONTACTS {
                 others.push(t);
                 others.extend_from_slice(&(len as u16).to_le_bytes());
@@ -230,6 +315,34 @@ impl Contacts {
 mod tests {
     use super::*;
 
+    /// Cards (§7.5): our card's secret and contacts added from cards survive the key file;
+    /// a card contact loses its secret once it has connected.
+    #[test]
+    fn cards_in_the_key_file() {
+        let mut c = Contacts::new();
+        let (carol, dave) = (PeerId([7; 32]), PeerId([8; 32]));
+        c.card = Some(OwnCard { secret: [5; 16], expires_at: 0 });
+        c.add_from_card(carol, [9; 32], [6; 16], "Кэрол".as_bytes(), 50).unwrap();
+        c.save(dave, None, true, b"Dave", 51).unwrap();
+        c.add_from_card(dave, [4; 32], [3; 16], b"ignored", 52).unwrap();
+        let d = *c.get(&dave).unwrap();
+        assert!(d.verified() && d.nick() == b"Dave" && d.flags & cflags::FROM_CARD == 0, "an existing contact keeps its state");
+        assert_eq!(d.onion_pk, [4; 32], "but gains the onion key");
+        let (back, kept) = Contacts::from_tlv(&c.to_tlv(&[])).unwrap();
+        assert!(kept.is_empty());
+        assert_eq!(back.card, c.card);
+        assert_eq!(back.list(), c.list());
+        let k = back.get(&carol).unwrap();
+        assert!(!k.verified() && k.flags & cflags::FROM_CARD != 0 && k.card_secret == [6; 16] && k.onion_pk == [9; 32]);
+        c.card_used(&carol);
+        assert_eq!(c.get(&carol).unwrap().flags & cflags::FROM_CARD, 0);
+        assert!(OwnCard { secret: [0; 16], expires_at: 10 }.live(10) && !OwnCard { secret: [0; 16], expires_at: 10 }.live(11));
+        let mut two = c.to_tlv(&[]);
+        two.extend_from_slice(&[TLV_CARD, 20, 0]);
+        two.extend_from_slice(&[0; 20]);
+        assert!(Contacts::from_tlv(&two).is_none(), "two cards");
+    }
+
     #[test]
     fn save_verify_impersonation_roundtrip() {
         let mut c = Contacts::new();
@@ -248,7 +361,7 @@ mod tests {
         assert!(c.impersonated(b"Bob", &bob).is_none(), "the real Bob");
         assert_eq!(c.save(eve, None, false, &[0xff], 1), Err(ContactError::BadNick));
 
-        let others = [0x04u8, 2, 0, 7, 7];
+        let others = [0x07u8, 2, 0, 7, 7];
         let tlv = c.to_tlv(&others);
         let (back, kept) = Contacts::from_tlv(&tlv).unwrap();
         assert_eq!(back.list(), c.list());

@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-ArDxPZhZUP3IMxL8Yc7JYf/HjUHbaWGiv9nvjqAyhR0='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="e2178f6081d3">
-<meta name="ephem-wasm" content="sha384-F7YeXgP7bhD2X75QFBw9zGeTJmgv9UqYKySacGaXHBMNjcQ4wTxb1ybE4MNk+5aL">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-ptXJ62rvT80gKDeG3COiiKgcBAzk/nGlUpimf2F21BQ='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="7cf9ca96181d">
+<meta name="ephem-wasm" content="sha384-rZ5gmLGi4DbEra21u4LnPeu/NtDYJPQH50trb9ipNohalYCe4jTDCA59eGLaWdNc">
 <link rel="stylesheet" href="app.css" integrity="sha384-KZyITPZ3GHGWJGfigtvweOjJ0Q+0JiKzjPh8eCB1I2ZnwRrJ+pWIlL92vZbPl9uM">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-CO6s0uVk611CdwYVHGN5OJn+FYSbN2qXTXYTAb4tO+j5k32MKI0oYMaKw1z6WT/a","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem.js":"sha384-r8mT07dwdnkeemy4TayMbxTJWXhqvwlhL86djGza/r3mvtvOlZCFs0uSfa5dOihI"}}</script>
-<script type="module" src="app.js" integrity="sha384-CO6s0uVk611CdwYVHGN5OJn+FYSbN2qXTXYTAb4tO+j5k32MKI0oYMaKw1z6WT/a"></script>
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-fVioR6DMosltbEo2HphjBDAR+yVquLKLeBjQ+9+UMkEohUnvL6VJYGf+tMierljj","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem.js":"sha384-EAgYmuAWW3XnnQR0VfQpIqRt0LF0m3H73eheiHf3mAkhJAbYYvB+rbSqOrTd2kyh"}}</script>
+<script type="module" src="app.js" integrity="sha384-fVioR6DMosltbEo2HphjBDAR+yVquLKLeBjQ+9+UMkEohUnvL6VJYGf+tMierljj"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -84,6 +84,27 @@
         <button id="b-id-load">Use a saved identity…</button>
         <button id="b-id-receive" class="direct-only">Receive identity from another device</button>
         <button id="b-id-temp" hidden>Switch to a temporary identity</button>
+        <button id="b-card" hidden>My contact card</button>
+      </div>
+      <div id="card" class="sub" hidden>
+        <p class="note">Anyone with this card can add you as a contact without chatting first. <span class="tor-only">In Tor mode they can also connect to you once with it; you are asked before the chat starts.</span><span class="direct-only">In direct mode a card only pins your key and nickname: a chat still needs an invite.</span></p>
+        <div class="codebox">
+          <div class="qr" aria-label="QR code"></div>
+          <textarea class="link" rows="2" readonly spellcheck="false"></textarea>
+          <div class="actions">
+            <button class="primary copy">Copy link</button>
+            <button class="share">Share…</button>
+          </div>
+        </div>
+        <p id="card-expiry" class="note"></p>
+        <label>Validity of a new card
+          <select id="s-card-ttl">
+            <option value="30" selected>30 days</option>
+            <option value="0">Never expires</option>
+          </select>
+        </label>
+        <button id="b-card-reset" class="danger">Reset my contact card</button>
+        <p class="note">Resetting makes every card you shared unusable for a first contact. Contacts you already have are not affected.</p>
       </div>
       <div id="id-save" class="sub" hidden>
         <p class="note">Saving gives you the same identity every time, so peers can recognise you, and can link your sessions. The file is encrypted with your passphrase (Argon2id). The label is <strong>not</strong> secret.</p>
@@ -181,6 +202,13 @@
       </div>
     </div>
     <p id="imp-warn" class="warn" hidden></p>
+    <div id="card-req" class="warn" hidden>
+      <p id="card-req-text"></p>
+      <div class="actions">
+        <button id="b-card-accept" class="primary">Accept and add as contact</button>
+        <button id="b-card-decline" class="danger">Decline</button>
+      </div>
+    </div>
     <div class="peer">
       <span id="peer">peer</span>
       <span id="verified" class="pill">unverified</span>

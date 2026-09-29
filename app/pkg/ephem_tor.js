@@ -10,6 +10,21 @@ export class App {
         wasm.__wbg_app_free(ptr, 0);
     }
     /**
+     * Adds the owner of a card as an unverified contact named `nick` (§7.5). Save the key file
+     * afterwards.
+     * @param {string} text
+     * @param {string} nick
+     * @returns {number}
+     */
+    add_card(text, nick) {
+        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(nick, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.app_add_card(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        return ret >>> 0;
+    }
+    /**
      * Applies a code: a full link, `#i=` / `#a=` / `#r=` / `#q=`, or bare base64url.
      * `scanned` = it came from the in-app camera (SAS policy, §10.4).
      * Returns 0 or an error code (also emitted as ERROR).
@@ -22,6 +37,37 @@ export class App {
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.app_apply_code(this.__wbg_ptr, ptr0, len0, scanned);
         return ret >>> 0;
+    }
+    /**
+     * Expiry of our current card (Unix seconds; 0 = never or no card).
+     * @returns {number}
+     */
+    card_expires() {
+        const ret = wasm.app_card_expires(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * The suggested nickname of a card (`#k=` link or text), or `None` if it is not a card.
+     * @param {string} text
+     * @returns {string | undefined}
+     */
+    card_nick(text) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.app_card_nick(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            let v2;
+            if (r0 !== 0) {
+                v2 = getStringFromWasm0(r0, r1);
+                wasm.__wbindgen_export5(r0, r1 * 1, 1);
+            }
+            return v2;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * The chat's self-destruct timer in seconds (0 = off).
@@ -329,6 +375,30 @@ export class App {
     meta_ptr() {
         const ret = wasm.app_meta_ptr(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * Our contact card as base64url (empty for a temporary identity). A card is created on
+     * first use, and again when `reset` or when the current one expired; `ttl_days` = 0 makes
+     * a new card that never expires. Save the key file afterwards (the secret is in it).
+     * @param {boolean} reset
+     * @param {number} ttl_days
+     * @returns {string}
+     */
+    my_card(reset, ttl_days) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.app_my_card(retptr, this.__wbg_ptr, reset, ttl_days);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * Our member index (1:1: our PeerIdx), for message identities `(sender, seq)`.
@@ -918,7 +988,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_5881(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_5890(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -1003,7 +1073,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_5881_62(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_5890_66(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -1200,17 +1270,17 @@ function __wbg_get_imports() {
         },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 839, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_5846);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_5855);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 651, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_4049);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 652, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_4058);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000003: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 350, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_2154);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 351, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_2163);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000004: function(arg0, arg1) {
@@ -1237,26 +1307,26 @@ function __wbg_get_imports() {
     };
 }
 
-function __wasm_bindgen_func_elem_2154(arg0, arg1) {
-    wasm.__wasm_bindgen_func_elem_2154(arg0, arg1);
+function __wasm_bindgen_func_elem_2163(arg0, arg1) {
+    wasm.__wasm_bindgen_func_elem_2163(arg0, arg1);
 }
 
-function __wasm_bindgen_func_elem_4049(arg0, arg1, arg2) {
-    wasm.__wasm_bindgen_func_elem_4049(arg0, arg1, addHeapObject(arg2));
+function __wasm_bindgen_func_elem_4058(arg0, arg1, arg2) {
+    wasm.__wasm_bindgen_func_elem_4058(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_5881(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_5881(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_5890(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_5890(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_5881_62(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_5881_62(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_5890_66(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_5890_66(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_5846(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_5855(arg0, arg1, arg2) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        wasm.__wasm_bindgen_func_elem_5846(retptr, arg0, arg1, addHeapObject(arg2));
+        wasm.__wasm_bindgen_func_elem_5855(retptr, arg0, arg1, addHeapObject(arg2));
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         if (r1) {
