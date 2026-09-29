@@ -31,7 +31,7 @@ use ephem_channel::gateway::{self, Hosted};
 use ephem_channel::page::Served;
 use ephem_channel::{Cid, ipns};
 use ephem_crypto::{Identity, keyfile};
-use ephem_tor::web::{DataStream, Service, Snowflake, Tor, TorSlot, list, sleep_ms, tor_log};
+use ephem_tor::web::{DataStream, Service, Snowflake, Tor, TorSlot, list, onion_address, sleep_ms, tor_log};
 use futures::{AsyncReadExt, AsyncWriteExt};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -178,6 +178,17 @@ impl ChannelApp {
         name.map_err(|_| err("channel key"))
     }
 
+    /// The onion address of channel `index` (`<56 chars>.onion`), derived like its keys: the
+    /// same on every device of the identity, so a device can read what another one serves.
+    pub fn channel_onion(&self, index: u32) -> Result<String, JsValue> {
+        let st = self.st.borrow();
+        let (mut sign, mut onion) = st.id.as_ref().ok_or_else(|| err("sign in first"))?.channel_seeds(index);
+        sign.fill(0);
+        let pk = ed25519_dalek::SigningKey::from_bytes(&onion).verifying_key().to_bytes();
+        onion.fill(0);
+        Ok(onion_address(&pk))
+    }
+
     // ---- Tor ----
 
     /// As the chat's Tor mode (`tor.html`): Snowflake bridge lines (Appendix F.2), NAT hint, lab
@@ -262,7 +273,7 @@ impl ChannelApp {
         let (root, blocks) = ch.build(now);
         let record = ch.record(&root, now);
         let mut st = self.st.borrow_mut();
-        let hosted = Hosted::new(ch.name(), root, record.clone(), blocks, Served::Owner);
+        let hosted = Hosted::owned(root.clone(), record.clone(), blocks, &ch.view(&root, now));
         // The onion serving the channel keeps the same `Hosted` cell: update it in place.
         match st.own.iter_mut().find(|o| o.index == index) {
             Some(o) => {

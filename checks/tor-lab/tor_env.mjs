@@ -7,8 +7,12 @@
 // `ephemTorLab` before the page loads (app.js `startTor`); nothing else differs.
 // LIVE=1: the real Snowflake broker and the real Tor network, the page unchanged (T-10, run on
 // a machine that can reach them, e.g. `LIVE=1 E2E_BROWSER=chrome node checks/tor-lab/e2e_tor_app.mjs`).
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as https from 'node:https';
 import * as net from 'node:net';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { serve } from '../e2e_lib.mjs';
 
 export const LIVE = process.env.LIVE === '1';
@@ -135,4 +139,39 @@ function socksGet(onion, path, port) {
       resolve({ status: Number(head.split(' ')[1]), headers: head, body: rest.join('\r\n\r\n') });
     });
   });
+}
+/** A stand-in for delegated-ipfs.dev (§D.5.2, §D.11): HTTPS on 127.0.0.1 with a throwaway CA,
+ *  reached by the pages through a lab exit relay. It keeps the last record PUT under each path
+ *  and returns it on GET (404 before any); `routed` lists every request. `cfg` goes into
+ *  `ephemTorLab.routing`. */
+export async function routingStandIn() {
+  const certs = fs.mkdtempSync(path.join(os.tmpdir(), 'ephem-ca-'));
+  const ssl = (...a) => execFileSync('openssl', a, { cwd: certs, stdio: 'ignore' });
+  ssl('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-days', '2', '-subj', '/CN=Ephem lab CA', '-keyout', 'ca.key', '-out', 'ca.pem', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign');
+  ssl('req', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-subj', '/CN=127.0.0.1', '-keyout', 'leaf.key', '-out', 'leaf.csr');
+  fs.writeFileSync(path.join(certs, 'ext'), 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n');
+  ssl('x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '2', '-extfile', 'ext', '-out', 'leaf.pem');
+  ssl('x509', '-in', 'ca.pem', '-outform', 'DER', '-out', 'ca.der');
+  const routed = [];
+  const kept = new Map();
+  const server = https.createServer({ key: fs.readFileSync(path.join(certs, 'leaf.key')), cert: fs.readFileSync(path.join(certs, 'leaf.pem')) }, (q, res) => {
+    const body = [];
+    q.on('data', (c) => body.push(c));
+    q.on('end', () => {
+      const b = Buffer.concat(body);
+      routed.push({ method: q.method, url: q.url, type: q.headers['content-type'], body: b });
+      if (q.method === 'PUT') kept.set(q.url, b);
+      const got = q.method === 'GET' ? kept.get(q.url) : null;
+      if (q.method === 'GET' && !got) {
+        res.writeHead(404);
+        return res.end();
+      }
+      res.writeHead(200, got ? { 'content-type': 'application/vnd.ipfs.ipns-record', 'content-length': got.length } : {});
+      res.end(got || undefined);
+    });
+  });
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+  const cfg = { host: `127.0.0.1:${server.address().port}`, root: fs.readFileSync(path.join(certs, 'ca.der')).toString('base64') };
+  fs.rmSync(certs, { recursive: true });
+  return { server, cfg, routed };
 }

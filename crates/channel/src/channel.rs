@@ -302,6 +302,20 @@ impl Channel {
         ipns::create(&self.key, &r)
     }
 
+    /// The owner's view of the state last built for `root` and signed by [`Self::record`] at
+    /// `now_s` (no verification: the owner made it).
+    pub fn view(&self, root: &Cid, now_s: u64) -> View {
+        View {
+            name: self.name(),
+            root: root.clone(),
+            record: Record { value: format!("/ipfs/{}", root.to_text()), sequence: self.revision, validity: now_s + RECORD_VALIDITY_S, ttl_ns: RECORD_TTL_NS },
+            manifest: self.manifest.clone(),
+            posts: self.posts.clone(),
+            missing: self.base.as_ref().map_or(0, |b| b.count),
+            updated: now_s,
+        }
+    }
+
     /// Reopens the owner's channel from its stored blocks (OPFS or a CAR backup) and the
     /// sequence of its last record.
     pub fn load(sign_seed: &[u8; 32], root: &Cid, blocks: &[Block], revision: u64) -> Result<Self, ChannelError> {

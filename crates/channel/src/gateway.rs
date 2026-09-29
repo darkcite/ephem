@@ -13,7 +13,7 @@
 
 use crate::car::{self, Block};
 use crate::cbor::Value;
-use crate::channel;
+use crate::channel::{self, View};
 use crate::cid::Cid;
 use crate::page::{self, Served};
 use std::collections::{HashMap, HashSet};
@@ -47,6 +47,12 @@ impl Hosted {
             Err(_) => b"<!doctype html><title>Channel</title><p>This channel cannot be shown right now.</p>".to_vec(),
         };
         Self { name, root, record, blocks: blocks.into_iter().collect(), page }
+    }
+
+    /// As [`Self::new`], for the owner's own channel: its page comes from `view` (the state it
+    /// just built and signed), so a post costs no re-verification of the whole channel.
+    pub fn owned(root: Cid, record: Vec<u8>, blocks: Vec<Block>, view: &View) -> Self {
+        Self { name: view.name.clone(), root, record, blocks: blocks.into_iter().collect(), page: page::html(view, Served::Owner) }
     }
 
     /// The blocks reachable from `cid` (itself first), or `None` if it is not held.

@@ -1781,7 +1781,7 @@ https://<owner>.github.io/ephem/channel.html#c=<ipns-name>&o=<channel-onion>[&m=
 | C-P5 | OPFS quota and eviction with `persist()` on each browser | ⏳ |
 | E8 | A hidden desktop tab with an open DataChannel keeps its timers running | ✅ Chrome and Firefox; ❌ Safari (§24.2 E8) |
 
-### D.11 One identity on several devices: the vault (proposed, not built)
+### D.11 One identity on several devices: the vault (V-1…V-3 built; spikes V-P1/V-P2 and V-4 open)
 
 **Problem (owner report, 2026-09-29).** A channel lives in the storage of the browser that created it (OPFS/IndexedDB, D.5). The same identity signed in on another device, in a private window, in the iPhone Home Screen app instead of Safari (iOS keeps their storage apart), or in Safari after 7 days without a visit (ITP may evict storage), finds no channel. Today the only move is the manual backup (Export → Import).
 
@@ -1831,16 +1831,26 @@ Everything else follows from this table: the vault makes the *state* follow the 
 - A key-file thief gets the vault too (as they get the channels today, D.3): the identity is the root secret either way.
 - A replayed old vault record is refused by `sequence` once a newer one was seen on this device; on a brand-new device the worst case is a stale state, and step 5 still re-reads each channel's own (independently signed) latest record before writing.
 
-#### D.11.6 Phases and spikes
+#### D.11.6 As built (V-1…V-3)
 
-| ID | Scope / question | Done when |
-|---|---|---|
-| V-P1 (spike) | `delegated-ipfs.dev` accepts and returns a V2-only record of ~9.5 KiB with an identity-CID value; `trustless-gateway.link` returns it | Live PUT/GET byte-identical, as C-P4 |
-| V-P2 (spike) | How long the DHT keeps the record without republishing | Measured over 72 h (resolve every hour) |
-| V-1 | `channel::vault`: keys, TLV, padding, seal/open, V2-only record; the key-file snapshot section | Unit tests, fuzzed open |
-| V-2 | Publish on change and every 12 h; restore on sign-in (vault → snapshot → probe); fetch from onion/mirrors/gateway | Lab E2E: create on A, close A, sign in on B, channel listed |
-| V-3 | Continue without history; back-fill; the writer lease and "Take over here" | Lab E2E: B posts with A off; A returns, sees the lease, stops; readers see one chain |
-| V-P3 (spike) → V-4 | Storage providers with CORS CAR upload; the optional setting | Live: upload through Tor, read back from the gateway |
+- **Rust** (`crates/channel/src/vault.rs`): `Vault { lease {device (16 bytes), until}, entries [{index, title, about, created, mirrors, head, count, last_seq, record_seq}] }` as dag-cbor `{v: 1, dev, until, ch: […]}` (short keys), padded to 512/1 024/2 048/4 096/5 632 bytes (`about` texts, then mirror lists, are dropped if that is what it takes to fit), sealed with XChaCha20-Poly1305 (AAD `"ephem-vault-v1" ‖ sequence`, a random 24-byte nonce per record) and signed as an IPNS V2-only record (`ipns::create_v2`). Keys: `Identity::vault_seeds` (`"p2pchat/vault-sign"`, `"p2pchat/vault-key"`).
+- **Continuing without history** (`Channel::resume`, `backfill`): new pages chain onto the old head; `count` and `seq` continue. `read_dag` stops at the first page it does not hold and reports the posts before it as `missing` (the view's JSON, the owner's note, the plain page's footer) instead of failing; `seq`s must run 1, 2, … without gaps, and a chain cannot claim more or fewer posts than it links. A resumed chain leaves a partly filled page, so the loop guard is "more pages than posts".
+- **Wasm** (`ChannelApp`): `vault_name`, `vault_fetch`, `vault_publish(host, root, device, until)`, `vault`, `resume`, `backfill`, `release` (stop hosting: serve loops end when their onion service is dropped), `channel_onion` (a channel's onion address, the same on every device). HTTPS through a Tor exit does any method and returns the body (`Content-Length`, chunked, or to the end).
+- **Page** (`app/channels.js`): a random device id per browser (localStorage). Once Tor is up and an identity is signed in: fetch the vault; a live lease of another device → this tab stops hosting (**"written by your other device"**, **Take over here**); otherwise it writes: each vault channel missing here is read from its onion and mirrors (90 s), else resumed without history; the vault is published with a lease of **15 min**, renewed every 5 min (after checking nobody took over; a lost lease stops hosting and says so), and 2 s after every change. Missing older posts are back-filled from mirrors at each renewal.
+- **Lab** (`checks/tor-lab/e2e_tor_vault.mjs`, lease 30 s, 8/8): A publishes (a 1 056-byte, opaque record) → B signs in: listed as written by the other device → B takes over (the newest version read from the channel's onion in < 1 s) → A notices at its next renewal → A and B close → C waits out B's lease, finds no host, continues without the 2 older posts (the sequence continues), posts `seq` 3 and serves it.
+- **Found on the way:** since the plain page (D.2), the owner's tab re-verified the whole channel on every post to rebuild that page (1 000 posts: 58 s instead of 1.1 s). The owner's page now comes from the state it just signed (`Hosted::owned`): 1 000 posts in 1.1 s again (C-P3).
+
+#### D.11.7 Phases and spikes
+
+| ID | Scope / question | Done when | Status |
+|---|---|---|---|
+| V-P1 (spike) | `delegated-ipfs.dev` accepts and returns a V2-only record of ~9.5 KiB with an identity-CID value; `trustless-gateway.link` returns it | Live PUT/GET byte-identical, as C-P4 | ⏳ needs a browser on the real network (the build container cannot reach it) |
+| V-P2 (spike) | How long the DHT keeps the record without republishing | Measured over 72 h (resolve every hour) | ⏳ |
+| V-1 | `channel::vault`: keys, dag-cbor, padding, seal/open, V2-only record | Unit tests | ✅ tamper (every 97th byte), wrong key and name, the largest vault ≤ 10 KiB |
+| V-2 | Publish on change and on every lease renewal; restore on sign-in; fetch from the channel's onion and mirrors | Lab E2E | ✅ `e2e_tor_vault.mjs` |
+| V-3 | Continue without history; back-fill; the writer lease and "Take over here" | Lab E2E | ✅ `e2e_tor_vault.mjs` (back-fill: unit tests; in the app from mirrors) |
+| — | Key-file snapshot (the fallback once the DHT forgot the vault) | | ⏳ not built: the vault is the only source for now |
+| V-P3 (spike) → V-4 | Storage providers with CORS CAR upload; the optional setting | Live: upload through Tor, read back from the gateway | ⏳ |
 
 ### D.12 Boards: a 4chan-like channel type (proposed)
 

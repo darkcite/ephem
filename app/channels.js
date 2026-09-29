@@ -66,6 +66,7 @@ export function onIdentity() {
   if (ctx.TOR && ch) ctx.app.bind_channels(ch);
   loadFollows();
   renderFollows();
+  resetVault();
   if (ch) scanOwned().then(() => { if (!torResolve) startAll(); });
 }
 
@@ -152,7 +153,8 @@ async function loadEngine() {
 let running = false;
 async function startAll() {
   if (!ch || torResolve) return;
-  for (const o of owned) if (!o.onion) serveOwned(o);
+  for (const o of owned) if (!o.onion && !o.away) serveOwned(o);
+  syncVault();
   if (running) return;
   running = true;
   // Reachability of owned channels changes on its own (publication, network changes).
@@ -504,7 +506,7 @@ async function scanOwned() {
       ch.open(i, saved.car, saved.record);
       await store('channels', n, ch.car(i), ch.record(i)); // a record older than 7 days was re-signed
       // A channel already online keeps its address (serving is idempotent in Rust).
-      found.push({ i, n, t: JSON.parse(ch.view(i)).title, onion: owned.find((o) => o.n === n)?.onion || '' });
+      found.push({ i, n, t: JSON.parse(ch.view(i)).title, onion: owned.find((o) => o.n === n)?.onion || '', away: !writer });
     } catch (e) {
       ctx.error(`Your channel ${i} could not be opened: ${e?.message || e}`);
     }
@@ -528,7 +530,7 @@ function renderOwned() {
     li.innerHTML = '<span class="dot"></span><span class="grow"><b></b><span class="sub"></span></span>';
     li.querySelector('b').textContent = o.t || `Channel ${o.i}`;
     avatar(li, o.t || o.n);
-    li.querySelector('.sub').textContent = REACH[r] || 'offline';
+    li.querySelector('.sub').textContent = o.away ? 'written by your other device' : REACH[r] || 'offline';
     li.onclick = () => { ctx.setTab('own'); showOwner(o.i); };
     ul.append(li);
   }
@@ -550,6 +552,7 @@ function showOwner(i) {
   const o = owned.find((x) => x.i === i);
   if (!o) return newChannel();
   current = { own: i };
+  if (o.away) return showAway(o);
   ctx.showPane('v-own');
   renderOwn(o);
   renderOwned();
@@ -566,6 +569,8 @@ function renderOwn(o) {
   $('o-plain').hidden = !o.onion;
   $('o-plain-url').textContent = o.onion ? `http://${o.onion}/` : '';
   $('publish-state').textContent = '';
+  $('o-missing').hidden = !v.missing;
+  $('o-missing').textContent = v.missing ? `${v.missing} older post${v.missing === 1 ? ' is' : 's are'} not on this device yet: they join when your other device, a mirror or a backup has them. New posts continue the same channel.` : '';
   renderPosts($('o-posts'), v, o);
 }
 
@@ -584,6 +589,7 @@ async function change(o, fn) {
     renderOwn(o);
     renderOwned();
     $('error').hidden = true;
+    publishSoon();
   } catch (e) {
     ctx.error(e?.message || e);
   }
@@ -636,8 +642,10 @@ async function signIn() {
     $('i-ch-pass').value = '';
     ch.sign_in(blob, pass);
     delete $('signin').dataset.separate;
+    resetVault();
     await scanOwned();
     for (const o of owned) serveOwned(o);
+    syncVault();
     if (owned.length) showOwner(owned[0].i);
     else newChannel();
   } catch (e) {
@@ -657,6 +665,7 @@ async function create() {
     await navigator.storage.persist?.().catch(() => false);
     await store('channels', o.n, ch.car(i), ch.record(i));
     owned.push(o);
+    publishSoon();
     $('i-title').value = $('i-about').value = '';
     $('c-understood').checked = false;
     showOwner(i);
@@ -687,6 +696,186 @@ async function importBackup() {
     return;
   }
   ctx.error('This backup is not a channel of the signed-in identity.');
+}
+
+// ---- one identity on several devices: the vault (§D.11) ---------------------------------------
+// The identity's devices share an encrypted IPNS record (Rust: channel::vault) listing its
+// channels and which device writes them (the lease). A device that finds a live lease of
+// another device shows its channels as "written by your other device" and offers to take
+// over; one with no lease (or an expired one) writes: channels missing here are read from their
+// onion or mirrors, else continued without their older posts (which join later).
+const LEASE_S = globalThis.ephemTorLab?.leaseS || 15 * 60;
+const RENEW_MS = (LEASE_S * 1000) / 3;
+const RESTORE_MS = globalThis.ephemTorLab?.restoreMs || 90_000;
+let vault = null;                    // { seq, device, until, channels: [{ index, title, count, mirrors }] }
+let writer = true;                   // this device writes the identity's channels
+let syncing = false;
+let renewTimer = 0;
+let publishTimer = 0;
+
+/** A lab stand-in routing host and its test CA, or delegated-ipfs.dev. */
+function routing() {
+  const lab = globalThis.ephemTorLab?.routing;
+  return [lab?.host || ROUTING_HOST, lab ? Uint8Array.from(atob(lab.root), (c) => c.charCodeAt(0)) : new Uint8Array()];
+}
+
+/** This browser's device id (random, kept in localStorage; a new one only after it is cleared). */
+function deviceId() {
+  let d = '';
+  try { d = localStorage.getItem('ephem-device') || ''; } catch { /* storage blocked */ }
+  if (!/^[0-9a-f]{32}$/.test(d)) {
+    d = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+    try { localStorage.setItem('ephem-device', d); } catch { /* per session then */ }
+  }
+  return d;
+}
+
+const signedIn = () => { try { return !!ch?.label(); } catch { return false; } };
+const leasedElsewhere = (v) => !!v && v.device !== deviceId() && v.until * 1000 > Date.now();
+const timeOf = (s) => new Date(s * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+/** Another identity: nothing known about its vault yet; this device writes until told. */
+function resetVault() {
+  vault = null;
+  writer = true;
+}
+
+/** Fetches the vault and acts on its lease; `takeover`: this device writes from now on. */
+async function syncVault(takeover = false) {
+  if (!ch || !signedIn() || syncing) return;
+  syncing = true;
+  try {
+    await torUp;
+    const [host, root] = routing();
+    try {
+      const j = await ch.vault_fetch(host, root);
+      vault = j ? JSON.parse(j) : null;
+    } catch (e) {
+      // Offline, or the routing service is down: keep going as we are (this device writes).
+      console.info('vault:', e?.message || e);
+      if (!takeover) return;
+    }
+    if (leasedElsewhere(vault) && !takeover) return standDown();
+    const was = writer;
+    writer = true;
+    if (!was || takeover) {
+      await scanOwned(); // Rust released them: reopen from the store
+      for (const o of owned) o.away = false;
+    }
+    for (const e of vault?.channels || []) await restore(e, takeover);
+    await publishVault();
+    for (const o of owned) if (!o.onion) serveOwned(o);
+    renderOwned();
+    if (current?.own !== undefined && owned.some((o) => o.i === current.own)) showOwner(current.own);
+    backfillOwned();
+  } catch (e) {
+    ctx.error(e?.message || e);
+  } finally {
+    syncing = false;
+    clearTimeout(renewTimer);
+    renewTimer = setTimeout(renew, RENEW_MS);
+  }
+}
+
+/** Another device holds the lease: stop hosting and posting here; list its channels. */
+function standDown() {
+  const lost = writer && owned.some((o) => o.onion);
+  writer = false;
+  ch.release();
+  for (const o of owned) Object.assign(o, { onion: '', away: true });
+  for (const e of vault.channels) {
+    if (!owned.some((o) => o.i === e.index)) owned.push({ i: e.index, n: ch.channel_name(e.index), t: e.title, onion: '', away: true });
+  }
+  owned.sort((a, b) => a.i - b.i);
+  if (lost) ctx.error(`Your other device took over your channels (until at least ${timeOf(vault.until)}). This tab stopped hosting them; take over again from My channels.`);
+  renderOwned();
+  if (current?.own !== undefined) showOwner(current.own);
+}
+
+/** Channel `e` of the vault on this device: the newest version from its onion or mirrors,
+ *  else (none answers) continued without its older posts. `fresh`: re-read even if stored. */
+async function restore(e, fresh) {
+  const have = owned.find((o) => o.i === e.index);
+  if (have && !fresh) return;
+  const n = ch.channel_name(e.index);
+  const onions = [ch.channel_onion(e.index), ...e.mirrors].join(',');
+  const local = have ? JSON.parse(ch.view(e.index) || '{"sequence":0}').sequence : 0;
+  try {
+    const r = await Promise.race([ch.read(n, onions, local), new Promise((_, no) => setTimeout(() => no(new Error('no host answered')), RESTORE_MS))]);
+    if (!have || r.sequence > local) {
+      ch.open(e.index, r.car(), r.record());
+      await store('channels', n, ch.car(e.index), ch.record(e.index));
+    }
+  } catch (err) {
+    if (have) return; // what the store has is what we write on
+    console.info(`vault: channel ${e.index}: ${err?.message || err}; continuing without its older posts`);
+    ch.resume(e.index);
+    await store('channels', n, ch.car(e.index), ch.record(e.index));
+  }
+  if (!have) owned.push({ i: e.index, n, t: e.title, onion: '' });
+  owned.sort((a, b) => a.i - b.i);
+}
+
+/** Older posts missing here: joined from the channel's onion or mirrors when one has them. */
+async function backfillOwned() {
+  for (const o of owned) {
+    const v = JSON.parse(ch.view(o.i) || '{}');
+    if (!v.missing) continue;
+    try {
+      const onions = [...new Set([...(vault?.channels.find((e) => e.index === o.i)?.mirrors || []), ...v.mirrors])];
+      if (!onions.length) continue;
+      const r = await ch.read(o.n, onions.join(','), 0);
+      ch.backfill(o.i, r.car());
+      await store('channels', o.n, ch.car(o.i), ch.record(o.i));
+      if (current?.own === o.i) renderOwn(o);
+    } catch (e) {
+      console.info(`vault: back-fill of channel ${o.i}: ${e?.message || e}`);
+    }
+  }
+}
+
+async function publishVault() {
+  if (!writer || !signedIn()) return;
+  try {
+    await ch.vault_publish(...routing(), deviceId(), Math.floor(Date.now() / 1000) + LEASE_S);
+    vault = JSON.parse(ch.vault());
+  } catch (e) {
+    console.info('vault: not published:', e?.message || e);
+  }
+}
+
+/** After a change: publish the vault once the burst of changes is over. */
+function publishSoon() {
+  clearTimeout(publishTimer);
+  publishTimer = setTimeout(publishVault, 2000);
+}
+
+/** Every third of a lease: a writer checks nobody took over, then renews; a device that stood
+ *  down takes over by itself when the other device's lease ran out. */
+async function renew() {
+  renewTimer = setTimeout(renew, RENEW_MS);
+  if (!ch || !signedIn() || syncing) return;
+  try {
+    const j = await ch.vault_fetch(...routing());
+    vault = j ? JSON.parse(j) : vault;
+  } catch (e) {
+    return console.info('vault:', e?.message || e);
+  }
+  if (leasedElsewhere(vault)) {
+    if (writer) standDown();
+  } else if (!writer) {
+    syncVault();
+  } else {
+    await publishVault();
+    backfillOwned();
+  }
+}
+
+function showAway(o) {
+  ctx.showPane('v-own-away');
+  $('a-title').textContent = o.t || `Channel ${o.i}`;
+  $('a-state').textContent = vault ? `Your other device writes this channel (its lease runs until at least ${timeOf(vault.until)}; it renews it while it runs).` : 'Your other device writes this channel.';
+  renderOwned();
 }
 
 function renderPosts(ol, view, owner) {
@@ -741,6 +930,7 @@ function wire() {
   $('i-import').onchange = importBackup;
   $('b-copy').onclick = () => navigator.clipboard?.writeText($('o-link').value).catch(() => {});
   $('b-export').onclick = () => { const o = own(); if (o) { ctx.download(ch.car(o.i), 'channel.car'); ctx.download(ch.record(o.i), 'record.bin'); } };
+  $('b-takeover').onclick = () => syncVault(true);
   $('b-mirrors').onclick = () => { const o = own(); if (o) change(o, () => ch.set_mirrors(o.i, $('i-mirrors').value)); };
   $('b-publish').onclick = async () => {
     const o = own();
@@ -748,9 +938,7 @@ function wire() {
     $('publish-state').textContent = 'publishing through Tor…';
     try {
       await torUp;
-      const lab = globalThis.ephemTorLab?.routing; // lab: a stand-in host and its test CA
-      const root = lab ? Uint8Array.from(atob(lab.root), (c) => c.charCodeAt(0)) : new Uint8Array();
-      await ch.publish_ipfs(o.i, lab?.host || ROUTING_HOST, root);
+      await ch.publish_ipfs(o.i, ...routing());
       $('publish-state').textContent = `published (version ${JSON.parse(ch.view(o.i)).sequence})`;
     } catch (e) {
       $('publish-state').textContent = `failed: ${e?.message || e}`;

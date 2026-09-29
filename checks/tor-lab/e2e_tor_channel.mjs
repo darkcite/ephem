@@ -14,13 +14,9 @@
 //   channel from the mirror.
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network.
-import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as https from 'node:https';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { check, finish, launch, PASS, problems, toSettings, watch } from '../e2e_lib.mjs';
-import { LIVE, T, dumpLogs, record, serveTor, torBrowserGet, torContext, unexpected } from './tor_env.mjs';
+import { LIVE, T, dumpLogs, record, routingStandIn, serveTor, torBrowserGet, torContext, unexpected } from './tor_env.mjs';
 
 // A stand-in public IPFS gateway (§D.6.2) for the no-Tor reader: it serves what a follower's
 // Kubo mirror would (the CAR and record the reader downloads with "For IPFS (Kubo)").
@@ -34,27 +30,7 @@ const srv = await serveTor((u) => {
 const base = `http://127.0.0.1:${srv.address().port}/app`;
 const browsers = [];
 
-// A stand-in for delegated-ipfs.dev (§D.5.2): HTTPS on 127.0.0.1 with a throwaway CA, reached
-// by the owner's page through a lab exit relay. It keeps what was PUT.
-const certs = fs.mkdtempSync(path.join(os.tmpdir(), 'ephem-ca-'));
-const ssl = (...a) => execFileSync('openssl', a, { cwd: certs, stdio: 'ignore' });
-ssl('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-days', '2', '-subj', '/CN=Ephem lab CA', '-keyout', 'ca.key', '-out', 'ca.pem', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign');
-ssl('req', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-subj', '/CN=127.0.0.1', '-keyout', 'leaf.key', '-out', 'leaf.csr');
-fs.writeFileSync(path.join(certs, 'ext'), 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n');
-ssl('x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '2', '-extfile', 'ext', '-out', 'leaf.pem');
-ssl('x509', '-in', 'ca.pem', '-outform', 'DER', '-out', 'ca.der');
-const routed = [];
-const routing = https.createServer({ key: fs.readFileSync(path.join(certs, 'leaf.key')), cert: fs.readFileSync(path.join(certs, 'leaf.pem')) }, (q, res) => {
-  const body = [];
-  q.on('data', (c) => body.push(c));
-  q.on('end', () => {
-    routed.push({ method: q.method, url: q.url, type: q.headers['content-type'], body: Buffer.concat(body) });
-    res.writeHead(200);
-    res.end();
-  });
-});
-await new Promise((ok) => routing.listen(0, '127.0.0.1', ok));
-const routingCfg = { host: `127.0.0.1:${routing.address().port}`, root: fs.readFileSync(path.join(certs, 'ca.der')).toString('base64') };
+const { server: routing, cfg: routingCfg, routed } = await routingStandIn();
 
 async function page(who, extra = {}) {
   const b = await launch();
@@ -196,10 +172,11 @@ try {
     // ---- optional IPNS publishing through a Tor exit (§D.5.2) ----
     await o.click('#b-publish');
     await o.waitForFunction(() => /published|failed/.test(document.querySelector('#publish-state')?.textContent), null, { timeout: T });
-    const put = routed[0];
+    const name = link.match(/#c=([^&]+)/)[1];
+    const put = routed.find((q) => q.method === 'PUT' && q.url === `/routing/v1/ipns/${name}`);
     const ownRecord = Buffer.from(await o.evaluate(() => Array.from(globalThis.ephemChannel.record(0))));
     check('owner publishes the IPNS record through a Tor exit (HTTPS PUT, routing API)',
-      /published/.test(await o.textContent('#publish-state')) && put?.method === 'PUT' && put.url === `/routing/v1/ipns/${link.match(/#c=([^&]+)/)[1]}` && put.type === 'application/vnd.ipfs.ipns-record' && put.body.equals(ownRecord),
+      /published/.test(await o.textContent('#publish-state')) && put && put.type === 'application/vnd.ipfs.ipns-record' && put.body.equals(ownRecord),
       await o.textContent('#publish-state'));
 
   }
@@ -267,6 +244,5 @@ try {
   for (const b of browsers) await b.close();
   srv.close();
   routing.close();
-  fs.rmSync(certs, { recursive: true });
 }
 finish();
