@@ -116,6 +116,13 @@ impl Identity {
         derive(&self.seed, b"p2pchat/onion-ed25519")
     }
 
+    /// The vault (§D.11): the Ed25519 seed of its IPNS name and its XChaCha20-Poly1305 key.
+    /// One-way from the identity seed, from each other and from every channel key, so the
+    /// vault cannot be linked to the chat identity or to any channel. The caller wipes both.
+    pub fn vault_seeds(&self) -> ([u8; 32], [u8; 32]) {
+        (derive(&self.seed, b"p2pchat/vault-sign"), derive(&self.seed, b"p2pchat/vault-key"))
+    }
+
     /// Public channel number `index` (§D.3): its Ed25519 signing seed (the IPNS name is its
     /// public key) and its onion service seed. One-way from the identity seed and from each
     /// other, so a channel cannot be linked to the chat identity. The caller wipes both.

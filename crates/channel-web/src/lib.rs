@@ -24,7 +24,9 @@ mod https;
 mod json;
 
 use ephem_channel::car;
-use ephem_channel::channel::{self, Channel, View, RECORD_VALIDITY_S};
+use ephem_channel::cbor::Value;
+use ephem_channel::channel::{self, Base, Channel, View, RECORD_VALIDITY_S};
+use ephem_channel::vault::{self, Entry, Lease, Vault};
 use ephem_channel::gateway::{self, Hosted};
 use ephem_channel::page::Served;
 use ephem_channel::{Cid, ipns};
@@ -75,6 +77,9 @@ struct State {
     mirrors: Vec<Mirror>,
     /// Onion services launched so far (each needs its own arti nickname).
     launched: u32,
+    /// The newest vault seen or published (§D.11) and its record sequence.
+    vault: Vault,
+    vault_seq: u64,
 }
 
 /// An owned channel's onion service and what it serves.
@@ -318,6 +323,7 @@ impl ChannelApp {
             record: rec.unwrap_or(ipns::Record { value: String::new(), sequence: 0, validity: 0, ttl_ns: 0 }),
             manifest: o.ch.manifest.clone(),
             posts: o.ch.posts.clone(),
+            missing: o.ch.base.as_ref().map_or(0, |b| b.count),
             updated: now_s(),
         })
     }
@@ -360,7 +366,7 @@ impl ChannelApp {
         onion_seed.fill(0);
         let svc = Rc::new(svc.map_err(err)?);
         let onion = svc.onion().to_owned();
-        wasm_bindgen_futures::spawn_local(serve_loop(svc.clone(), hosted.clone()));
+        wasm_bindgen_futures::spawn_local(serve_loop(Rc::downgrade(&svc), hosted.clone()));
         self.st.borrow_mut().served.push(Online { name, onion: onion.clone(), hosted, _svc: svc });
         Ok(onion)
     }
@@ -388,13 +394,146 @@ impl ChannelApp {
         let (host, root) = (host.to_owned(), extra_root.to_vec());
         Ok(wasm_bindgen_futures::future_to_promise(async move {
             let path = format!("/routing/v1/ipns/{name}");
-            let status = with_timeout(FETCH_TIMEOUT_MS, https::put(&tor, &host, &path, gateway::CT_RECORD, &record, &root)).await.map_err(err)?;
+            let status = with_timeout(FETCH_TIMEOUT_MS, https::request(&tor, "PUT", &host, &path, gateway::CT_RECORD, &record, &root)).await.map_err(err)?.0;
             if (200..300).contains(&status) {
                 Ok(JsValue::from(status))
             } else {
                 Err(err(format!("the routing service answered {status}")))
             }
         }))
+    }
+
+    // ---- the vault: one identity on several devices (§D.11) ----
+
+    /// The vault's IPNS name (`k51…`) of the signed-in identity.
+    pub fn vault_name(&self) -> Result<String, JsValue> {
+        let (mut sign, mut key) = self.vault_seeds()?;
+        key.fill(0);
+        let n = vault::name(&sign).to_text();
+        sign.fill(0);
+        Ok(n)
+    }
+
+    fn vault_seeds(&self) -> Result<([u8; 32], [u8; 32]), JsValue> {
+        Ok(self.st.borrow().id.as_ref().ok_or_else(|| err("sign in first"))?.vault_seeds())
+    }
+
+    /// Fetches the vault record through a Tor exit (`GET https://<host>/routing/v1/ipns/<vault
+    /// name>`), verifies and opens it. Resolves to the vault as JSON ([`vault_json`]), or to ""
+    /// when there is none (404: never published, or forgotten by the DHT). A record older than
+    /// one seen before is ignored (the newer one stays).
+    pub fn vault_fetch(&self, host: &str, extra_root: &[u8]) -> Result<js_sys::Promise, JsValue> {
+        let tor = self.tor()?;
+        let name = vault::name(&{
+            let (sign, mut key) = self.vault_seeds()?;
+            key.fill(0);
+            sign
+        });
+        let (host, root, st) = (host.to_owned(), extra_root.to_vec(), self.st.clone());
+        Ok(wasm_bindgen_futures::future_to_promise(async move {
+            let path = format!("/routing/v1/ipns/{}", name.to_text());
+            let (status, body) = with_timeout(FETCH_TIMEOUT_MS, https::request(&tor, "GET", &host, &path, gateway::CT_RECORD, &[], &root)).await.map_err(err)?;
+            if status == 404 {
+                return Ok(JsValue::from_str(""));
+            }
+            if status != 200 {
+                return Err(err(format!("the routing service answered {status}")));
+            }
+            let (_, mut key) = st.borrow().id.as_ref().ok_or_else(|| err("sign in first"))?.vault_seeds();
+            let opened = vault::open(&name, &key, &body, now_s());
+            key.fill(0);
+            let (v, seq) = opened.map_err(|e| err(format!("vault: {e:?}")))?;
+            let mut st = st.borrow_mut();
+            if seq > st.vault_seq {
+                st.vault = v;
+                st.vault_seq = seq;
+            }
+            Ok(JsValue::from_str(&vault_json(&st.vault, st.vault_seq)))
+        }))
+    }
+
+    /// The vault as last fetched or published (JSON), "" before either.
+    pub fn vault(&self) -> String {
+        let st = self.st.borrow();
+        if st.vault_seq == 0 { String::new() } else { vault_json(&st.vault, st.vault_seq) }
+    }
+
+    /// Publishes the vault (the open channels, plus the channels of the last vault that are not
+    /// open here) with the writer lease `{device (32 hex), until}` through a Tor exit (`PUT`, as
+    /// `publish_ipfs`). Resolves to the new sequence.
+    pub fn vault_publish(&self, host: &str, extra_root: &[u8], device: &str, until: f64) -> Result<js_sys::Promise, JsValue> {
+        let tor = self.tor()?;
+        let dev = unhex16(device).ok_or_else(|| err("device id: 32 hex digits"))?;
+        let (v, seq, record, name) = {
+            let st = self.st.borrow();
+            let mut entries: Vec<Entry> = st.own.iter().map(entry_of).collect();
+            for e in &st.vault.entries {
+                if !entries.iter().any(|x| x.index == e.index) {
+                    entries.push(e.clone());
+                }
+            }
+            entries.sort_by_key(|e| e.index);
+            entries.truncate(vault::MAX_ENTRIES);
+            let v = Vault { lease: Lease { device: dev, until: until as u64 }, entries };
+            let seq = st.vault_seq + 1;
+            let (mut sign, mut key) = st.id.as_ref().ok_or_else(|| err("sign in first"))?.vault_seeds();
+            let mut nonce = [0u8; 24];
+            ephem_crypto::random(&mut nonce);
+            let record = vault::seal(&sign, &key, &v, seq, now_s(), &nonce);
+            let name = vault::name(&sign);
+            sign.fill(0);
+            key.fill(0);
+            (v, seq, record.map_err(|e| err(format!("vault: {e:?}")))?, name)
+        };
+        let (host, root, st) = (host.to_owned(), extra_root.to_vec(), self.st.clone());
+        Ok(wasm_bindgen_futures::future_to_promise(async move {
+            let path = format!("/routing/v1/ipns/{}", name.to_text());
+            let status = with_timeout(FETCH_TIMEOUT_MS, https::request(&tor, "PUT", &host, &path, gateway::CT_RECORD, &record, &root)).await.map_err(err)?.0;
+            if !(200..300).contains(&status) {
+                return Err(err(format!("the routing service answered {status}")));
+            }
+            let mut st = st.borrow_mut();
+            if seq > st.vault_seq {
+                st.vault = v;
+                st.vault_seq = seq;
+            }
+            Ok(JsValue::from(seq as f64))
+        }))
+    }
+
+    /// Continues channel `index` from the vault, without its blocks (§D.11.3 step 4): the
+    /// manifest is re-signed, new posts go on top of the older chain, which joins when a host
+    /// holding it is found (`backfill`).
+    pub fn resume(&self, index: u32) -> Result<(), JsValue> {
+        let ch = {
+            let st = self.st.borrow();
+            let e = st.vault.entries.iter().find(|e| e.index == index).ok_or_else(|| err("that channel is not in the vault"))?;
+            let (mut sign, mut onion) = st.id.as_ref().ok_or_else(|| err("sign in first"))?.channel_seeds(index);
+            onion.fill(0);
+            let base = e.head.clone().map(|head| Base { head, count: e.count });
+            let ch = Channel::resume(&sign, &e.title, &e.about, e.created, e.mirrors.clone(), base, e.record_seq);
+            sign.fill(0);
+            ch.map_err(|e| err(format!("{e:?}")))?
+        };
+        self.set_own(index, ch, now_s());
+        Ok(())
+    }
+
+    /// Joins the older posts of channel `index` from a CAR (fetched from a host that holds
+    /// them, or a backup); still-missing ones stay missing. Resolves the view's `missing`.
+    pub fn backfill(&self, index: u32, car_bytes: &[u8]) -> Result<f64, JsValue> {
+        let (_, blocks) = car::read(car_bytes).ok_or_else(|| err("not a valid CAR file"))?;
+        self.change(index, |c| c.backfill(&blocks))?;
+        let st = self.st.borrow();
+        Ok(st.own.iter().find(|o| o.index == index).and_then(|o| o.ch.base.as_ref()).map_or(0.0, |b| b.count as f64))
+    }
+
+    /// Stops writing here: the open channels close and their onions go down (another device
+    /// holds the lease, §D.11.3 step 5). The store keeps them for reading.
+    pub fn release(&self) {
+        let mut st = self.st.borrow_mut();
+        st.own.clear();
+        st.served.clear();
     }
 
     // ---- readers and mirrors ----
@@ -477,10 +616,57 @@ impl ChannelApp {
         let svc = Rc::new(tor.launch(&nick, &seed).map_err(err)?);
         let onion = svc.onion().to_owned();
         let hosted = Rc::new(RefCell::new(hosted));
-        wasm_bindgen_futures::spawn_local(serve_loop(svc.clone(), hosted.clone()));
+        wasm_bindgen_futures::spawn_local(serve_loop(Rc::downgrade(&svc), hosted.clone()));
         self.st.borrow_mut().mirrors.push(Mirror { name, onion: onion.clone(), hosted, seq: std::cell::Cell::new(reading.seq), _svc: svc });
         Ok(onion)
     }
+}
+
+/// An open channel as the vault lists it.
+fn entry_of(o: &Own) -> Entry {
+    let h = o.hosted.borrow();
+    let head = h.dag(&h.root).and_then(|b| b.into_iter().next()).and_then(|(_, root)| Value::decode(&root)).and_then(|r| r.get("head").and_then(Value::link).cloned());
+    let m = &o.ch.manifest;
+    Entry { index: o.index, title: m.title.clone(), about: m.about.clone(), created: m.created, mirrors: m.mirrors.clone(), head, count: o.ch.count(), last_seq: o.ch.count(), record_seq: o.ch.revision }
+}
+
+fn unhex16(s: &str) -> Option<[u8; 16]> {
+    let mut out = [0u8; 16];
+    if s.len() != 32 {
+        return None;
+    }
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
+/// `{"seq","device","until","channels":[{"index","title","count","missing"…}]}`.
+fn vault_json(v: &Vault, seq: u64) -> String {
+    use std::fmt::Write;
+    let mut o = String::with_capacity(128 + v.entries.len() * 128);
+    let _ = write!(o, "{{\"seq\":{seq},\"device\":\"");
+    for b in v.lease.device {
+        let _ = write!(o, "{b:02x}");
+    }
+    let _ = write!(o, "\",\"until\":{},\"channels\":[", v.lease.until);
+    for (i, e) in v.entries.iter().enumerate() {
+        if i > 0 {
+            o.push(',');
+        }
+        let _ = write!(o, "{{\"index\":{},\"count\":{},\"title\":", e.index, e.count);
+        json::string(&mut o, &e.title);
+        o.push_str(",\"mirrors\":[");
+        for (j, m) in e.mirrors.iter().enumerate() {
+            if j > 0 {
+                o.push(',');
+            }
+            json::string(&mut o, m);
+        }
+        o.push_str("]}");
+    }
+    o.push_str("]}");
+    o
 }
 
 /// A channel this tab mirrors.
@@ -579,10 +765,16 @@ async fn fetch_channel(tor: &Tor, name: &Cid, onion: &str, min_seq: u64, fresh: 
     .await
 }
 
-async fn serve_loop(svc: Rc<Service>, hosted: Rc<RefCell<Hosted>>) {
-    loop {
-        let s = svc.accept().await;
-        wasm_bindgen_futures::spawn_local(serve_one(s, hosted.clone()));
+/// Serves until the service is dropped (its owner stopped writing here, §D.11.3 step 5).
+async fn serve_loop(svc: std::rc::Weak<Service>, hosted: Rc<RefCell<Hosted>>) {
+    while let Some(s) = svc.upgrade() {
+        match s.try_accept() {
+            Some(stream) => wasm_bindgen_futures::spawn_local(serve_one(stream, hosted.clone())),
+            None => {
+                drop(s);
+                sleep_ms(50).await;
+            }
+        }
     }
 }
 

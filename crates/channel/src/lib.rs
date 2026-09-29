@@ -20,6 +20,7 @@ pub mod ipns;
 pub mod page;
 pub mod time;
 pub mod varint;
+pub mod vault;
 
 pub use channel::{Channel, ChannelError, Manifest, Post, View};
 pub use car::{read as read_car, write as write_car};

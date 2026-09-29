@@ -86,10 +86,11 @@ pub fn html(view: &View, served: Served) -> Vec<u8> {
         post(&mut s, p, if p.reply == 0 { None } else { by_seq(p.reply) });
     }
     s.push_str("</ol>");
-    if view.posts.is_empty() {
+    if view.posts.is_empty() && view.missing == 0 {
         s.push_str("<p class=\"note\">No posts yet.</p>");
-    } else if view.posts.len() > shown {
-        s.push_str(&format!("<p class=\"note\">The {shown} newest of {} posts. The Ephem app shows them all.</p>", view.posts.len()));
+    } else if view.posts.len() > shown || view.missing > 0 {
+        let total = view.posts.len() as u64 + view.missing;
+        s.push_str(&format!("<p class=\"note\">The {shown} newest of {total} posts. The Ephem app shows all that this host has; older ones appear when a host that holds them is online.</p>"));
     }
     s.push_str("<footer>Channel name (IPNS): ");
     esc(&mut s, &view.name.to_text());

@@ -1182,6 +1182,7 @@ dependencies = [
 name = "ephem-channel"
 version = "0.1.0"
 dependencies = [
+ "chacha20poly1305",
  "ed25519-dalek",
  "sha2",
 ]

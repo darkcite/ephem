@@ -2,13 +2,14 @@
 // Copyright 2026 Anton (darkcite)
 //! The page's view of a channel as JSON (no serde: a handful of fields, escaped by hand).
 //!
-//! `{"name","root","sequence","validity","title","about","created","updated","mirrors":[…],
-//! "posts":[{"seq","ts","body","reply","deleted"}…]}`
+//! `{"name","root","sequence","validity","title","about","created","updated","missing",
+//! "mirrors":[…],"posts":[{"seq","ts","body","reply","deleted"}…]}` (`missing`: older posts not
+//! in the blocks, §D.11.3)
 
 use ephem_channel::View;
 use std::fmt::Write;
 
-fn string(out: &mut String, s: &str) {
+pub fn string(out: &mut String, s: &str) {
     out.push('"');
     for c in s.chars() {
         match c {
@@ -32,7 +33,7 @@ pub fn view(v: &View) -> String {
     string(&mut o, &v.name.to_text());
     o.push_str(",\"root\":");
     string(&mut o, &v.root.to_text());
-    let _ = write!(o, ",\"sequence\":{},\"validity\":{},\"created\":{},\"updated\":{}", v.record.sequence, v.record.validity, v.manifest.created, v.updated);
+    let _ = write!(o, ",\"sequence\":{},\"validity\":{},\"created\":{},\"updated\":{},\"missing\":{}", v.record.sequence, v.record.validity, v.manifest.created, v.updated, v.missing);
     o.push_str(",\"title\":");
     string(&mut o, &v.manifest.title);
     o.push_str(",\"about\":");

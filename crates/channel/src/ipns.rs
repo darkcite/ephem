@@ -73,6 +73,19 @@ pub fn create(key: &SigningKey, r: &Record) -> Vec<u8> {
     out
 }
 
+/// A signed **V2-only** record: `signatureV2` and `data`, no V1 fields (which would repeat the
+/// value; the vault needs the room, §D.11.2).
+pub fn create_v2(key: &SigningKey, r: &Record) -> Vec<u8> {
+    let data = data_cbor(r, &time::rfc3339(r.validity));
+    let mut v2 = Vec::with_capacity(SIG_V2_PREFIX.len() + data.len());
+    v2.extend_from_slice(SIG_V2_PREFIX);
+    v2.extend_from_slice(&data);
+    let mut out = Vec::with_capacity(data.len() + 80);
+    field_bytes(&mut out, 8, &key.sign(&v2).to_bytes());
+    field_bytes(&mut out, 9, &data);
+    out
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RecordError {
     Malformed,

@@ -1842,6 +1842,10 @@ Everything else follows from this table: the vault makes the *state* follow the 
 | V-3 | Continue without history; back-fill; the writer lease and "Take over here" | Lab E2E: B posts with A off; A returns, sees the lease, stops; readers see one chain |
 | V-P3 (spike) → V-4 | Storage providers with CORS CAR upload; the optional setting | Live: upload through Tor, read back from the gateway |
 
+### D.12 Boards: a 4chan-like channel type (proposed)
+
+A second channel type, next to the channels above (which stay as they are): boards → threads → replies, anyone with the link posts anonymously through Tor, proof of work instead of captchas, the owner's tab numbers, moderates, signs and serves. The full design is Appendix G, in [`docs/BOARDS.md`](BOARDS.md).
+
 ## Appendix E: Features considered from Tox/qTox and Telegram
 
 **Rule:** a feature is adopted only if it works with **no application server**. It may use the peers' own devices and free, no-registration third-party services.
