@@ -12,6 +12,24 @@ if [[ "$have" != "$want" ]]; then
   exit 1
 fi
 
+# The Tor and channel builds compile ring's C code for wasm32 (the TLS of the Tor link). Apple's
+# clang has no wasm32 target; Homebrew's LLVM has. Pick the first clang that can, with its llvm-ar.
+wasm_cc() { echo 'int x;' | "$1" --target=wasm32-unknown-unknown -x c -c - -o /dev/null 2>/dev/null; }
+if [[ -z "${CC_wasm32_unknown_unknown:-}" ]]; then
+  for cc in "${CC:-clang}" "$(brew --prefix llvm 2>/dev/null)/bin/clang" /opt/homebrew/opt/llvm/bin/clang /usr/local/opt/llvm/bin/clang; do
+    if [[ -x "$(command -v "$cc" 2>/dev/null)" ]] && wasm_cc "$cc"; then
+      export CC_wasm32_unknown_unknown="$cc"
+      ar="$(dirname "$(command -v "$cc")")/llvm-ar"
+      [[ -x "$ar" ]] && export AR_wasm32_unknown_unknown="$ar"
+      break
+    fi
+  done
+  if [[ -z "${CC_wasm32_unknown_unknown:-}" ]]; then
+    echo "a clang with the wasm32 target is required (Apple's clang has none): brew install llvm" >&2
+    exit 1
+  fi
+fi
+
 # Two builds of the same adapter (§28.2): direct (index.html) and Tor (tor.html, cargo feature
 # `tor`: arti + Snowflake inside). The direct page never downloads the Tor build.
 rm -rf app/pkg
