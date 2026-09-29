@@ -115,6 +115,28 @@ try {
     check(`${who} loses the stream: redial, queued message delivered`, again > before, `${Date.now() - t} ms`);
   }
 
+  // A silent peer (§28.5; the iPhone case: network switch or background). Bob's JavaScript is
+  // paused, as iOS stops a background app: no stream end reaches Alice, only silence. Alice
+  // treats the link as lost after 45 s; Bob, resumed, notices the same and redials on fresh
+  // circuits.
+  {
+    const lines = (p, text) => p.locator('#log li', { hasText: text }).count();
+    const t = Date.now();
+    const cdp = await b.context().newCDPSession(b);
+    const [droppedA, backB] = [await lines(a, 'The Tor connection dropped'), await lines(b, 'Reconnected through Tor')];
+    await cdp.send('Debugger.enable');
+    await cdp.send('Debugger.pause');
+    await a.waitForFunction((n) => [...document.querySelectorAll('#log li')].filter((l) => /The Tor connection dropped/.test(l.textContent)).length > n, droppedA, { timeout: 90_000 });
+    const noticed = Date.now() - t;
+    await a.fill('#t-msg', 'while you were away');
+    await a.press('#t-msg', 'Enter');
+    await cdp.send('Debugger.resume');
+    await msgWith(b, 'them', 'while you were away').waitFor({ timeout: T });
+    check('silent peer: noticed within a minute, redialled after resuming, message delivered',
+      (await lines(b, 'Reconnected through Tor')) > backB && noticed < 60_000, `noticed ${noticed} ms, total ${Date.now() - t} ms`);
+    await cdp.send('Debugger.disable');
+  }
+
   // TOR-3 (§28.7): contacts store each other's onion; later Bob dials Alice without a code.
   await a.click('#b-save-contact');
   await b.click('#b-save-contact');

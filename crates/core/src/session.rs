@@ -659,6 +659,13 @@ impl Session {
         self.tor
     }
 
+    /// How long nothing has arrived from the peer (a connected peer PINGs at least every
+    /// `PING_IDLE_MS`).
+    #[inline(always)]
+    pub fn rx_idle_ms(&self, now_ms: u64) -> u64 {
+        now_ms.saturating_sub(self.last_rx_ms)
+    }
+
     /// Tor mode: a contact dial (no invite, §28.7).
     #[inline(always)]
     pub fn contact(&self) -> bool {

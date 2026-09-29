@@ -1096,6 +1096,8 @@ impl App {
             }
         }
         rtc::check_paths(&self.inner);
+        #[cfg(feature = "tor")]
+        tor::tick(&self.inner);
         room::tick(&self.inner);
     }
 
@@ -1113,7 +1115,7 @@ impl App {
                 // Tor: the side that dialled dials again (§28.5); the other side waits.
                 #[cfg(feature = "tor")]
                 if g.links[i].sess.role() == ephem_core::Role::Answerer {
-                    tor::dial(&self.inner, _lid);
+                    tor::dial(&self.inner, _lid, true);
                 }
             }
         }

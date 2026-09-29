@@ -136,7 +136,7 @@ fn start_answer(inner: &Shared, id: u32, privacy: Privacy) {
     #[cfg(feature = "tor")]
     {
         let _ = privacy;
-        tor::dial(inner, id);
+        tor::dial(inner, id, false);
     }
     #[cfg(not(feature = "tor"))]
     rtc::start(inner.clone(), id, privacy, rtc::Step::Answer);

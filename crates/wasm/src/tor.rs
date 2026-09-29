@@ -33,6 +33,10 @@ const NICK: &str = "ephem";
 /// Redial backoff (§12: 1, 2, 4, 8, 16 s).
 const REDIAL_FIRST_MS: u32 = 1_000;
 const REDIAL_MAX_MS: u32 = 16_000;
+/// A connected Tor link that hears nothing for this long is treated as lost (the peer PINGs
+/// every 15 s when idle). arti may report a stream dead only minutes after a network change
+/// (its channel and the Snowflake session wait out long timers); the dialler then redials.
+const SILENT_MS: u64 = 45_000;
 /// One dial attempt (descriptor, introduction, rendezvous) before it counts as failed.
 const DIAL_TIMEOUT_MS: u32 = 30_000;
 /// Reassembly buffer of a stream: one frame plus a read's worth.
@@ -162,7 +166,7 @@ pub(crate) fn join(inner: &Shared, code: &[u8], now_s: u32, scanned: bool) -> Re
         }
         g.add_link(if group { OWNER_IDX } else { 0 }, s, false)
     };
-    dial(inner, lid);
+    dial(inner, lid, false);
     Ok(())
 }
 
@@ -181,7 +185,7 @@ pub(crate) fn call(inner: &Shared, peer: PeerId) -> Result<(), ErrorCode> {
         g.reset();
         g.add_link(0, s, false)
     };
-    dial(inner, lid);
+    dial(inner, lid, false);
     Ok(())
 }
 
@@ -342,7 +346,27 @@ fn lost(inner: &Shared, lid: u32) {
         (l.sess.role() == Role::Answerer && l.sess.state() == State::Suspended).then(|| g.new_path(i))
     };
     if let Some(lid) = redial {
-        dial(inner, lid);
+        // The old circuits may be the broken part: fresh ones from the first attempt.
+        dial(inner, lid, true);
+    }
+}
+
+/// Every second: connected Tor links that went silent are lost (see [`SILENT_MS`]).
+pub(crate) fn tick(inner: &Shared) {
+    let now = now_ms();
+    let silent: Vec<u32> = {
+        let g = inner.borrow();
+        g.links.iter().filter(|l| l.tor.is_some() && l.sess.state() == State::Connected && l.sess.rx_idle_ms(now) > SILENT_MS).map(|l| l.id).collect()
+    };
+    for lid in silent {
+        // A new path id orphans the old stream's reader (it may still report late).
+        let fresh = {
+            let mut g = inner.borrow_mut();
+            g.find(lid).map(|i| g.new_path(i))
+        };
+        if let Some(lid) = fresh {
+            lost(inner, lid);
+        }
     }
 }
 
@@ -412,11 +436,12 @@ async fn incoming(inner: Shared, s: DataStream) {
 
 /// Dials the peer's onion for path `lid` (first connection or redial) until connected or the
 /// chat ends.
-pub(crate) fn dial(inner: &Shared, lid: u32) {
+/// `fresh`: the first attempt already uses new circuits (a redial after a loss).
+pub(crate) fn dial(inner: &Shared, lid: u32, fresh: bool) {
     let inner = inner.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let mut backoff = REDIAL_FIRST_MS;
-        let mut failed = false;
+        let mut failed = fresh;
         loop {
             let (tor, onion) = {
                 let g = inner.borrow();

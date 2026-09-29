@@ -329,7 +329,8 @@ async fn pump(link: &Link, w: &Warm, t0: f64) {
     });
     dc.set_onmessage(Some(on_msg.as_ref().unchecked_ref()));
     link.lock().sess.on_channel();
-    let mut silent_limit;
+    // Since when our data has waited for an acknowledgement (None: nothing outstanding).
+    let mut waiting_since: Option<f64> = None;
     loop {
         {
             let mut g = link.lock();
@@ -344,9 +345,15 @@ async fn pump(link: &Link, w: &Warm, t0: f64) {
                 g.failed = Some(format!("snowflake: {e:?}"));
                 break;
             }
-            silent_limit = if g.sess.unacked() > 0 { STALL_MS } else { SILENT_MS };
+            waiting_since = if g.sess.unacked() > 0 { waiting_since.or(Some(now())) } else { None };
         }
-        if dc.ready_state() != RtcDataChannelState::Open || now() - last_rx.get() > silent_limit {
+        // Silent while idle (keep-alives come every 10 s), or no reply to data we sent: the
+        // stall is timed from the later of our send and the last byte received, not from the
+        // last byte alone (an idle link's next keep-alive would look like a stall).
+        let t = now();
+        let silent = t - last_rx.get() > SILENT_MS;
+        let stalled = waiting_since.is_some_and(|w| t - w.max(last_rx.get()) > STALL_MS);
+        if dc.ready_state() != RtcDataChannelState::Open || silent || stalled {
             tracing::info!("snowflake: proxy lost, switching");
             break;
         }
