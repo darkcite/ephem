@@ -85,6 +85,18 @@ export const toHome = async (page) => {
   await page.click('#b-new');
 };
 
+/** Chats → ＋ New → Add a contact (paste or scan a card; share ours). */
+export const toAdd = async (page) => {
+  await toHome(page);
+  await page.click('#b-go-add');
+  await page.waitForSelector('#v-add:not([hidden])');
+};
+/** A contact's row in the Chats tab (docs/CONTACTS-UX.md). */
+export const contactRow = async (page, name) => {
+  await toChats(page);
+  return page.locator('#contacts li', { hasText: name });
+};
+
 /** Max-connectivity codes (raw local IPs: CI has no mDNS), then back to New chat. */
 export const openSettings = async (page) => {
   await toSettings(page);

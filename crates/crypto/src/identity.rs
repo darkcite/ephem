@@ -24,6 +24,20 @@ impl PeerId {
         out
     }
 
+    /// The contact fingerprint of this peer and `other` (docs/CONTACTS-UX.md §3.2): 12 decimal
+    /// digits from `BLAKE2s("ephem-contact-fp-v1" ‖ min ‖ max)` of the two PeerIds, the same on
+    /// both sides and in every chat. Compared in person, it verifies a contact without a chat
+    /// (the chat's safety code comes from each handshake and exists only during a chat).
+    pub fn fingerprint(&self, other: &PeerId) -> u64 {
+        let (lo, hi) = if self.0 <= other.0 { (self, other) } else { (other, self) };
+        let mut h = Blake2s256::new();
+        h.update(b"ephem-contact-fp-v1");
+        h.update(lo.0);
+        h.update(hi.0);
+        let d = h.finalize();
+        u64::from_le_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]]) % 1_000_000_000_000
+    }
+
     /// Web Lock name that keeps one identity in one tab (§7.2):
     /// `p2pchat-id-` + first 16 hex digits of `BLAKE2s(PeerId)`.
     pub fn lock_name(&self) -> [u8; 27] {
@@ -162,6 +176,14 @@ pub fn verify(sign_pk: &[u8; 32], msg: &[u8], sig: &[u8; 64]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contact_fingerprint_is_symmetric() {
+        let (a, b, c) = (PeerId([1; 32]), PeerId([2; 32]), PeerId([3; 32]));
+        assert_eq!(a.fingerprint(&b), b.fingerprint(&a));
+        assert_ne!(a.fingerprint(&b), a.fingerprint(&c));
+        assert!(a.fingerprint(&b) < 1_000_000_000_000);
+    }
 
     #[test]
     fn deterministic_and_distinct() {

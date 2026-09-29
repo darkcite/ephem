@@ -260,7 +260,7 @@ function renderList() {
     li.dataset.chat = c.id;
     li.className = (c === shown ? 'active ' : '') + (c.cls || '');
     li.innerHTML = '<span class="dot"></span><span class="grow"><b></b><span class="sub"></span></span>';
-    li.querySelector('b').textContent = c.title;
+    li.querySelector('b').textContent = c.title + (c.verified ? ' ✔' : '');
     li.querySelector('.sub').textContent = c.preview || c.label;
     avatar(li, c.title);
     if (c.unread) {
@@ -273,6 +273,9 @@ function renderList() {
     ul.append(li);
   }
   $('chats-empty').hidden = chats.size > 0;
+  // A contact with an open chat is shown by the chat's row. Deferred: the list is redrawn from
+  // event handlers, while Rust still holds its state (reading the contacts there would panic).
+  later(renderContacts);
   $('badge-chats').hidden = !unread;
   $('badge-chats').textContent = String(unread);
 }
@@ -956,6 +959,7 @@ function renderPeer(c) {
   c.$('peer').textContent = contact ? `${nick || handle}${verified ? ' ✔' : ''}` : c.peerNick ? `${handle} “${c.peerNick}”` : handle;
   c.$('peer').title = contact ? `Contact ${handle}` : c.peerNick ? 'The name in quotes is chosen by the peer, not verified' : '';
   c.title = contact ? nick || handle : c.peerNick ? `${c.peerNick} (${handle})` : handle;
+  c.verified = verified;
   c.$('b-save-contact').hidden = !app.identity_label() || contact;
   if (verified) {
     // The key is already pinned by a verified contact: no SAS prompt (§10.4).
@@ -1056,9 +1060,9 @@ function wire(c) {
     later(() => { if (app.select(c.id)) app.close(); });
     ended(c, 'E_SAS_REJECTED');
   });
+  // Saved under the name they gave themselves; rename it in the contact's pane (Chats → Contacts).
   on('b-save-contact', () => {
-    const n = prompt('Save as contact. Name (only you see it):', c.peerNick || c.$('peer').dataset.handle || '');
-    if (n !== null && A(c).save_contact(n) === 0) persist().then(() => renderPeer(c));
+    if (A(c).save_contact(c.peerNick || '') === 0) persist().then(() => renderPeer(c));
   });
   on('b-card-accept', () => answerCardRequest(c, true));
   on('b-card-decline', () => answerCardRequest(c, false));
@@ -1130,8 +1134,7 @@ function renderIdentity() {
     ? `Saved identity “${label}” (${h}). Peers see the same identity every time you use it.`
     : `Temporary identity ${h}. It disappears when you close this tab.`;
   $('b-id-temp').hidden = !label;
-  $('b-card').hidden = !label;
-  if (!label) $('card').hidden = true;
+  $('card-reset').hidden = !label;
   if (document.activeElement !== $('i-nick')) $('i-nick').value = app.nick();
   renderContacts();
   renderSlots();
@@ -1186,53 +1189,156 @@ async function renderSlots() {
   $('backup-stale').hidden = !mine?.stale;
 }
 
+// ---- contacts: people in the Chats tab (docs/CONTACTS-UX.md) ---------------------------------
+// One row per person: a contact with an open chat is shown by its chat row. A row opens the
+// person pane; its button does the primary action (Tor: connect; otherwise: invite).
+const UNDO_MS = 8000;
+let removing = null;                 // { hex, name, timer }: a removal that can still be undone
+let person = null;                   // the contact whose pane is open (hex)
+
+/** Contacts as [{ hex, flags, nick, handle, name, verified, onion }] (none for a temporary identity). */
+function contactRows() {
+  if (!app.identity_label()) return [];
+  return app.contacts().split('\n').filter(Boolean).map((l) => {
+    const [hex, flags, nick, handle] = l.split('\t');
+    return { hex, flags: Number(flags), nick, handle, name: nick || handle, verified: (Number(flags) & 1) === 1, onion: (Number(flags) & CONTACT_HAS_ONION) !== 0 };
+  }).filter((r) => r.hex !== removing?.hex);
+}
+
 function renderContacts() {
   const saved = !!app.identity_label();
-  $('contacts-card').hidden = !saved;
-  const rows = saved ? app.contacts().split('\n').filter(Boolean).map((l) => l.split('\t')) : [];
-  $('contacts-count').textContent = `${rows.length} / 256`;
+  const rows = contactRows();
+  const inChat = new Set([...chats.values()].filter((c) => !c.room).map((c) => c.$('peer')?.dataset.handle).filter(Boolean));
   const ul = $('contacts');
-  const side = $('chat-contacts');
   ul.replaceChildren();
-  side.replaceChildren();
-  for (const [hex, flags, nick, handle] of rows) {
+  for (const r of rows) {
+    if (inChat.has(r.handle)) continue;
     const li = document.createElement('li');
-    const name = document.createElement('span');
-    name.className = 'grow';
-    name.innerHTML = '<b></b> <span class="ok"></span> <span class="dim"></span>';
-    name.querySelector('b').textContent = nick || handle;
-    name.querySelector('.ok').textContent = Number(flags) & 1 ? '✔' : '';
-    name.querySelector('.dim').textContent = handle;
-    const rename = document.createElement('button');
-    rename.textContent = 'Rename';
-    rename.onclick = () => {
-      const n = prompt('Name for this contact (only you see it)', nick);
-      if (n !== null && app.rename_contact(hex, n) === 0) persist();
-    };
-    const del = document.createElement('button');
-    del.textContent = 'Remove';
-    del.onclick = () => {
-      if (confirm(`Remove ${nick || handle} from your contacts?`) && app.remove_contact(hex) === 0) persist();
-    };
-    li.append(name);
-    // Tor mode: a contact with an onion key is dialled directly, no code (§28.7).
-    if (TOR && Number(flags) & CONTACT_HAS_ONION) {
-      const call = document.createElement('button');
-      call.textContent = 'Connect';
-      call.className = 'primary';
-      call.onclick = () => connectContact(hex, nick || handle);
-      li.append(call);
-      const row = document.createElement('li');
-      row.innerHTML = '<span class="dot"></span><span class="grow"><b></b><span class="sub">Connect through Tor</span></span>';
-      row.querySelector('b').textContent = `${nick || handle}${Number(flags) & 1 ? ' ✔' : ''}`;
-      avatar(row, nick || handle);
-      row.onclick = () => connectContact(hex, nick || handle);
-      side.append(row);
-    }
-    li.append(rename, del);
+    li.dataset.hex = r.hex;
+    li.innerHTML = '<span class="dot"></span><span class="grow"><b></b><span class="sub"></span></span><button class="act"></button>';
+    li.querySelector('b').textContent = `${r.name}${r.verified ? ' ✔' : ''}`;
+    avatar(li, r.name);
+    const tor = TOR && r.onion;
+    li.querySelector('.sub').textContent = tor ? 'Connect through Tor' : TOR ? 'Invite needed (no Tor address)' : 'Invite to chat';
+    const act = li.querySelector('.act');
+    act.textContent = tor ? 'Connect' : 'Invite';
+    act.onclick = (e) => { e.stopPropagation(); contactAction(r); };
+    li.onclick = () => showPerson(r.hex);
+    if (person === r.hex && !$('v-person').hidden) li.classList.add('active');
     ul.append(li);
   }
-  if (!rows.length) ul.innerHTML = '<li class="dim">No contacts yet. Add one from their contact card below, or after a chat use “＋ contact”.</li>';
+  $('contacts-note').replaceChildren();
+  if (!saved) {
+    $('contacts-note').append('Contacts are kept in a saved identity. ');
+    const b = document.createElement('button');
+    b.textContent = 'Save your identity';
+    b.onclick = () => openSettings('identity-card');
+    $('contacts-note').append(b);
+  } else if (!rows.length) {
+    $('contacts-note').textContent = 'No contacts yet. Add one from their contact card (＋ New → Add a contact), or with “Add to contacts” in a chat.';
+  }
+  $('contacts-note').hidden = saved && rows.length > 0;
+  $('share-strip').hidden = !saved || rows.length >= 3;
+  if (person && !$('v-person').hidden) renderPerson();
+  filterPeople();
+}
+
+/** The search field appears once there are 8 rows or more; it filters chats and contacts. */
+function filterPeople() {
+  const rows = [...document.querySelectorAll('#chats li, #contacts li')];
+  $('i-people').hidden = rows.length < 8 && !$('i-people').value;
+  const q = $('i-people').value.trim().toLowerCase();
+  for (const li of rows) li.hidden = !!q && !li.textContent.toLowerCase().includes(q);
+}
+
+function contactAction(r) {
+  if (TOR && r.onion) return connectContact(r.hex, r.name);
+  // An invite: the chat then recognises the pinned key (name and ✔).
+  home();
+  $('b-invite').click();
+  setStatus(`invite for ${r.name}: send it to them`);
+}
+
+function showPerson(hex) {
+  person = hex;
+  if (shown) shown.root.remove();
+  shown = null;
+  setTab('chats');
+  showPane('v-person');
+  renderPerson();
+  renderList();
+  renderContacts();
+}
+
+function renderPerson() {
+  const r = contactRows().find((x) => x.hex === person);
+  if (!r) {
+    person = null;
+    return home();
+  }
+  if (document.activeElement !== $('p-name')) $('p-name').value = r.nick;
+  $('p-name').placeholder = r.handle;
+  $('p-avatar').className = 'dot';
+  avatar($('p-avatar').parentElement, r.name);
+  $('p-verified').textContent = r.verified ? 'verified ✔' : 'not verified';
+  $('p-verified').className = 'pill' + (r.verified ? ' ok' : '');
+  $('p-handle').textContent = `${r.handle} · the handle comes from their key; the name above is yours for them.`;
+  const tor = TOR && r.onion;
+  $('b-p-go').textContent = tor ? 'Connect through Tor' : 'Invite to a chat';
+  $('p-mode').textContent = tor ? 'Their Ephem must be open in Tor mode. No code is needed.'
+    : TOR ? 'This contact was added without a Tor address: send them an invite; after one Tor chat, “Connect” works.'
+      : 'Direct mode: a chat still needs an invite (two codes). The contact pins their key and name, so the chat shows who it is.';
+  $('p-who').textContent = r.name;
+  $('p-fp').textContent = app.contact_fingerprint(r.hex);
+  $('b-p-verify').hidden = r.verified;
+}
+
+function removeContact() {
+  const r = contactRows().find((x) => x.hex === person);
+  if (!r) return;
+  finishRemoval();
+  removing = { hex: r.hex, name: r.name, timer: setTimeout(finishRemoval, UNDO_MS) };
+  person = null;
+  $('toast-text').textContent = `${r.name} removed.`;
+  $('toast').hidden = false;
+  home();
+  renderContacts();
+}
+
+/** The removal becomes final (the undo window closed, or another one starts). */
+function finishRemoval() {
+  if (!removing) return;
+  clearTimeout(removing.timer);
+  const { hex } = removing;
+  removing = null;
+  $('toast').hidden = true;
+  if (app.remove_contact(hex) === 0) persist();
+  else renderContacts();
+}
+
+function undoRemoval() {
+  if (!removing) return;
+  clearTimeout(removing.timer);
+  removing = null;
+  $('toast').hidden = true;
+  renderContacts();
+}
+
+/** ＋ New → Add a contact: paste or scan a card, and share ours. */
+function showAdd(text = '') {
+  if (shown) shown.root.remove();
+  shown = null;
+  setTab('chats');
+  showPane('v-add');
+  const saved = !!app.identity_label();
+  $('card').hidden = !saved;
+  $('card-none').hidden = saved;
+  if (saved) renderCard();
+  if (text) {
+    $('t-card').value = text;
+    $('i-card-name').value = app.card_nick(text) || '';
+    $('i-card-name').focus();
+  }
 }
 
 // After a change of contacts, nickname or settings: re-encrypt (the file key stays in wasm
@@ -1296,7 +1402,7 @@ function applyCode(raw, scanned) {
   const v = raw.trim();
   if (!v) return;
   closeCodeSheet();
-  if (app.card_nick(v) !== undefined) return addCard(v);
+  if (app.card_nick(v) !== undefined) return showAdd(v);
   if (/#c=/.test(v)) return channels.openLink(v);
   const info = app.code_info(v);
   let sending = false;
@@ -1645,16 +1751,15 @@ function renderCard() {
   $('card-expiry').textContent = exp ? `This card works until ${new Date(exp * 1000).toLocaleDateString()}.` : 'This card never expires.';
 }
 
-function addCard(text) {
+function addCard(text, name) {
   if (!app.identity_label()) return error('Sign in with a saved identity first: contacts live in its key file.');
-  const suggested = app.card_nick(text) || '';
-  const name = prompt(`Add ${suggested ? `“${suggested}”` : 'the owner of this card'} as a contact? Name (only you see it):`, suggested);
-  if (name === null) return;
-  if (app.add_card(text, name) !== 0) return;
+  if (app.add_card(text, name ?? app.card_nick(text) ?? '') !== 0) return;
   persist();
   $('t-code').value = '';
   $('t-card').value = '';
+  $('i-card-name').value = '';
   setStatus(TOR ? 'contact added: Connect to chat' : 'contact added');
+  home();
 }
 
 // The chat came through our card from someone who is not a contact yet (§28.4 case 3).
@@ -1906,8 +2011,14 @@ async function main() {
   $('b-code-close').onclick = closeCodeSheet;
   $('code-sheet').onclick = (e) => { if (e.target === $('code-sheet')) closeCodeSheet(); };
   $('b-apply').onclick = () => applyCode($('t-code').value, false);
-  const cardOnly = (t) => (app.card_nick(t.trim()) !== undefined ? addCard(t.trim()) : error('That is not a contact card. Cards are links with #k=; invites go in “Got a code?”.'));
-  $('b-add-card').onclick = () => cardOnly($('t-card').value);
+  const notCard = () => error('That is not a contact card. Cards are links with #k=; invites go in ⌗ Code.');
+  $('b-add-card').onclick = () => {
+    const t = $('t-card').value.trim();
+    if (app.card_nick(t) === undefined) return notCard();
+    addCard(t, $('i-card-name').value.trim() || app.card_nick(t) || '');
+  };
+  $('t-card').oninput = () => { if (!$('i-card-name').value) $('i-card-name').value = app.card_nick($('t-card').value.trim()) || ''; };
+  const cardOnly = (t) => (app.card_nick(t.trim()) !== undefined ? showAdd(t.trim()) : notCard());
   $('r-br-auto').onchange = $('r-br-custom').onchange = () => { $('br-custom').hidden = !$('r-br-custom').checked; };
   $('b-br-apply').onclick = applyBridges;
   $('t-bridges').oninput = () => { $('t-bridges').dataset.draft = '1'; };
@@ -1943,7 +2054,15 @@ async function main() {
     if (c) c.transferring = 'receiver';
   };
   $('b-backup').onclick = downloadBackup;
-  $('b-card').onclick = () => { $('card').hidden = !$('card').hidden; if (!$('card').hidden) renderCard(); };
+  $('b-go-add').onclick = () => showAdd();
+  $('b-share-card').onclick = () => showAdd();
+  $('b-card-save').onclick = () => openSettings('identity-card');
+  $('i-people').oninput = filterPeople;
+  $('p-name').onchange = () => { if (person && app.rename_contact(person, $('p-name').value) === 0) persist(); };
+  $('b-p-go').onclick = () => { const r = contactRows().find((x) => x.hex === person); if (r) contactAction(r); };
+  $('b-p-verify').onclick = () => { if (person && app.verify_contact(person) === 0) persist(); };
+  $('b-p-remove').onclick = removeContact;
+  $('b-undo').onclick = undoRemoval;
   $('b-card-reset').onclick = () => {
     if (!confirm('Reset your contact card? Every card you shared stops working for a first contact.')) return;
     app.my_card(true, Number($('s-card-ttl').value));

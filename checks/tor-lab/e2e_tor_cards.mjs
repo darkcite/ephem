@@ -9,7 +9,7 @@
 //   contact (his card secret was dropped after the first connection).
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network.
-import { check, finish, launch, msgWith, PASS, problems, toChats, toHome, toSettings, watch, openCode } from '../e2e_lib.mjs';
+import { check, finish, launch, msgWith, PASS, problems, toAdd, toChats, toHome, toSettings, watch, openCode } from '../e2e_lib.mjs';
 import { T, dumpLogs, record, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
@@ -44,27 +44,27 @@ async function open(who, nick) {
 }
 
 const connectTo = async (p, name) => {
-  await toSettings(p);
+  await toChats(p);
   await p.locator('#contacts li', { hasText: name }).locator('button', { hasText: 'Connect' }).click();
 };
 
 let a, b, c;
 try {
   [a, b, c] = await Promise.all([open('alice', 'Alice'), open('bob', 'Bob'), open('carol', 'Carol')]);
-  await toSettings(a);
-  await a.click('#b-card');
+  await toAdd(a);
   await a.waitForFunction(() => document.querySelector('#card .link')?.value.includes('#k='));
   const card = await a.inputValue('#card .link');
   for (const p of [b, c]) {
-    p.answers.push('Alice');
     await toHome(p);
     await openCode(p);
     await p.fill('#t-code', card);
     await p.click('#b-apply');
-    await toSettings(p);
+    await p.waitForSelector('#v-add:not([hidden])'); // ⌗ Code opens Add a contact, name suggested
+    await p.click('#b-add-card');
+    await toChats(p);
     await p.locator('#contacts li', { hasText: 'Alice' }).waitFor({ timeout: 10_000 });
   }
-  await toSettings(b);
+  await toChats(b);
   check('Bob and Carol add Alice from her card (Connect offered)', await b.locator('#contacts li', { hasText: 'Alice' }).locator('button', { hasText: 'Connect' }).isVisible());
 
   const t1 = Date.now();
@@ -76,8 +76,8 @@ try {
   await a.waitForSelector('#card-req:not([hidden])', { timeout: T });
   check('Alice is asked first; no chat shown before she accepts', /from your contact card/.test(await a.textContent('#card-req-text')) && await a.isHidden('#log') && await a.isHidden('#f-send'), `${Date.now() - t1} ms`);
   await a.click('#b-card-accept');
-  await toSettings(a);
-  await a.locator('#contacts li', { hasText: 'Bob' }).waitFor({ state: 'attached', timeout: T });
+  // Bob is Alice's contact now: the chat header names him as one (no quotes: not self-chosen).
+  await a.waitForFunction(() => /^Bob/.test(document.querySelector('#peer')?.textContent) && !/“/.test(document.querySelector('#peer')?.textContent), null, { timeout: T });
   await toChats(b);
   await b.fill('#t-msg', 'hello via your card');
   await b.press('#t-msg', 'Enter');
@@ -94,7 +94,6 @@ try {
   await Promise.all([a.click('#b-again'), b.click('#b-again')]);
   a.answers.push(true);
   await toSettings(a);
-  if (await a.isHidden('#card')) await a.click('#b-card');
   await a.click('#b-card-reset');
 
   // Carol's card is now stale: her dial is dropped unanswered.

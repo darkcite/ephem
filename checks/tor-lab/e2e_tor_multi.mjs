@@ -101,7 +101,7 @@ try {
   await c.click('#b-again');
   await pick(a, 'Bob');
   const before = await a.$$eval('#chats li', (l) => l.length);
-  await toSettings(c);
+  await toChats(c);
   await c.locator('#contacts li', { hasText: 'Alice' }).locator('button', { hasText: 'Connect' }).click();
   await toChats(c);
   await c.waitForSelector('#v-chat:not([hidden])', { timeout: T });

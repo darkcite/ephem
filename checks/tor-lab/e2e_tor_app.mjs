@@ -18,6 +18,9 @@ const browsers = [];
 /** Saves the tab's identity (contacts need one, §7.5); returns the key text. */
 async function saveIdentity(p, label) {
   await toSettings(p);
+  // Contacts are saved under the name the peer gives itself (rename later in its pane).
+  await p.fill('#i-nick', label === 'A' ? 'Alice' : 'Bob');
+  await p.dispatchEvent('#i-nick', 'change');
   await p.click('#b-id-save');
   await p.fill('#i-label', label);
   await p.fill('#i-pass', PASS);
@@ -152,7 +155,7 @@ try {
   await b.click('#b-leave');
   await a.waitForSelector('#v-note:not([hidden])', { timeout: T });
   await b.click('#b-again');
-  await toSettings(b);
+  await toChats(b);
   const connect = b.locator('#contacts li', { hasText: 'Alice' }).locator('button', { hasText: 'Connect' });
   check('contact saved from a Tor chat offers "Connect"', await connect.isVisible());
   const t3 = Date.now();
@@ -184,7 +187,8 @@ try {
 } catch (e) {
   check('tor app flow', false, e.message.split('\n')[0]);
   for (const b of browsers) for (const c of b.contexts()) for (const p of c.pages()) {
-    console.log('  tor state:', await p.textContent('#tor-state').catch(() => '?'), '| status:', await p.textContent('#status').catch(() => '?'));
+    console.log('  tor state:', await p.textContent('#tor-state').catch(() => '?'), '| status:', await p.textContent('#status').catch(() => '?'),
+      '| contacts:', await p.textContent('#contacts').catch(() => '?'), '| note:', await p.textContent('#contacts-note').catch(() => '?'), '| chats:', await p.textContent('#chats').catch(() => '?'));
   }
   dumpLogs(60);
 } finally {

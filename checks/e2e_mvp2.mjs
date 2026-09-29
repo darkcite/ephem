@@ -8,7 +8,7 @@
 //   identity transfer to a new device (SAS on both, encrypted key file incl. contacts).
 //
 // Usage: node checks/e2e_mvp2.mjs   (build first with ./build.sh; E2E_BROWSER=chrome for installed Chrome)
-import { check, connect, finish, launch, msgWith, PASS, problems, serve, toChats, toSettings, watch, openCode } from './e2e_lib.mjs';
+import { check, connect, contactRow, finish, launch, msgWith, PASS, problems, serve, toChats, toSettings, watch, openCode } from './e2e_lib.mjs';
 
 const srv = await serve();
 const base = `http://127.0.0.1:${srv.address().port}`;
@@ -58,9 +58,8 @@ try {
   check('peer nickname shown, marked as self-chosen', (await b.textContent('#peer')) === `${handleA} “Alice”`);
   check('"+ contact" only for saved identities', (await a.isVisible('#b-save-contact')) && !(await b.isVisible('#b-save-contact')));
   await a.click('#b-sas-ok');
-  answer(a, 'Bobby');
-  await a.click('#b-save-contact');
-  await a.waitForFunction(() => document.querySelector('#peer')?.textContent === 'Bobby ✔');
+  await a.click('#b-save-contact'); // saved under the name they gave themselves
+  await a.waitForFunction(() => document.querySelector('#peer')?.textContent === 'Bob ✔');
   check('contact saved, verified by the SAS', (await a.textContent('#verified')) === 'verified contact');
 
   await a.fill('#t-msg', 'react to this');
@@ -90,7 +89,12 @@ try {
   await toSettings(a);
   await a.waitForSelector('#backup-stale:not([hidden])');
   check('backup marked out of date after the contact change', /Backup out of date/.test(await a.textContent('#backup-stale')));
-  check('contacts list shows the verified contact', /Bobby\s*✔/.test(await a.textContent('#contacts')));
+  // Renamed in the contact's pane (Chats → Contacts), inline.
+  await (await contactRow(a, 'Bob')).click();
+  await a.fill('#p-name', 'Bobby');
+  await a.dispatchEvent('#p-name', 'change');
+  await a.waitForFunction(() => /Bobby\s*✔/.test(document.querySelector('#contacts')?.textContent));
+  check('contacts list (Chats) shows the verified contact, renamed', true);
 
   // A verified contact skips the SAS prompt (§10.4).
   await connect(a, b);

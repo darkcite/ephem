@@ -49,7 +49,18 @@ button.wide { width: 100%; }
 .rows .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
 .rows li.ok .dot { background: var(--ok); }
 .rows li.bad .dot { background: var(--bad); }
-.rows .avatar { width: 30px; height: 30px; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #fff;
+/* Contacts (docs/CONTACTS-UX.md): a row's primary action, the person pane, the undo toast. */
+.rows li .act { margin: 0; padding: 4px 10px; font-size: 12px; flex: none; }
+.side .search { margin: 6px 0; width: 100%; }
+#contacts-h { margin: 14px 0 2px; font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+.person-head { display: flex; align-items: center; gap: 10px; }
+.person-head input { flex: 1; margin: 0; font-weight: 600; }
+.fp { font: 600 22px/1.2 var(--mono); letter-spacing: .08em; color: var(--fg); margin: 6px 0 10px; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 30;
+  display: flex; gap: 12px; align-items: center; padding: 8px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .45); }
+.toast button { margin: 0; }
+.rows .avatar, .person-head .avatar { width: 30px; height: 30px; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #fff;
   background: hsl(var(--hue, 210) 45% 38%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--line); }
 .rows li.ok .avatar { background: hsl(var(--hue, 210) 45% 38%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ok); }
 .rows li.bad .avatar { background: hsl(var(--hue, 210) 20% 30%); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--bad); }

@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
 <!-- Copyright 2026 Anton (darkcite) -->
-# Contacts: one coherent place in the UI (proposal, not built)
+# Contacts: one coherent place in the UI
 
-**Status:** proposal, 2026-09-29. It rearranges what exists (§7 identity, §28.7 Tor contacts,
-contact cards, Appendix F tabs); the protocol and the key file do not change. Decisions for the
-owner are in §8.
+**Status:** built 2026-09-29 (CU-1…CU-3, and CU-4's search), with the recommended answers to
+C1–C5 (§8). It rearranges what exists (§7 identity, §28.7 Tor contacts, contact cards,
+Appendix F tabs); the protocol and the key file do not change. §9 lists how the build differs
+from the proposal.
 
 ## 1. Where contacts live today (and why it feels scattered)
 
@@ -143,3 +144,19 @@ owner are in §8.
 | C3 | A contact fingerprint (from both static keys) in the person pane, to verify without a chat? | **Yes** (the chat safety code is per-session and cannot be shown outside a chat) |
 | C4 | Remove: undo toast instead of a confirmation? | **Yes**, 8 s |
 | C5 | Share my card: always visible in Chats while < 3 contacts? | **Yes**, then only in the ＋ menu |
+
+The owner accepted all five recommendations (2026-09-29).
+
+## 9. As built (2026-09-29)
+
+| Proposal | Built |
+|---|---|
+| Merged people list (§3.1) | `#contacts` in the Chats list, both modes: a row per contact (avatar, name ✔, the state of §4, a **Connect** or **Invite** button); a contact with an open 1:1 chat is shown only by the chat row, which carries its name and ✔. Temporary identity: "Contacts are kept in a saved identity. [Save your identity]". Fewer than 3 contacts: "Share your contact card" |
+| ＋ menu, Add sheet (§3.3) | `＋ New` opens the New page with a third card, **Add a contact**, which opens `v-add`: paste/scan a card with the suggested name in a field (no dialog), and **Share yours** (QR, link, share; validity). ⌗ Code with a card opens the same pane pre-filled, so nothing is added without a look |
+| Person pane (§3.2) | `v-person`: name edited inline (saved on change), handle, verified pill, the primary action with a line on what it needs in this mode, the **contact fingerprint** (`Identity`… `PeerId::fingerprint`, `App::contact_fingerprint`; 12 digits, the same on both sides) and "It matches: mark as verified" (`App::verify_contact`), and Remove with an **8 s undo** toast (the key file changes only when the window closes) |
+| Chat header | "＋ Add to contacts" saves at once under the name the peer gave itself (no dialog); rename in the pane |
+| Settings (§3.4) | The Contacts card and "My contact card" are gone; "Reset my contact card" stays in Your identity (with a confirmation: it cannot be undone) |
+| Search (CU-4) | Appears at 8 rows (chats + contacts), filters both |
+| Key-changed warning (§4) | **Not built**: a peer with another key is another PeerId, so there is nothing to compare against except the self-chosen name, which the impersonation warning (§7.5) already covers |
+| Tests | `checks/e2e_cards.mjs` (15 checks: Add pane, suggested name, person pane, fingerprint equal on both sides, rename, undo, one row per person, verify without a chat, reset); `e2e_mvp2.mjs`, `tor-lab/e2e_tor_cards.mjs`, `e2e_tor_app.mjs`, `e2e_tor_multi.mjs` follow the new places |
+| Found on the way | The chat list is redrawn from event handlers while Rust holds its state; reading the contacts there panicked (`unreachable`). The contact rows are redrawn right after the call instead |

@@ -833,6 +833,26 @@ impl App {
         out
     }
 
+    /// The contact fingerprint with contact `peer_hex` as `"1234 5678 9012"` (docs/CONTACTS-UX.md
+    /// §3.2); empty if it is not a contact.
+    pub fn contact_fingerprint(&self, peer_hex: &str) -> String {
+        let g = self.inner.borrow();
+        let Some(p) = peer_from_hex(peer_hex).filter(|p| g.saved.as_ref().is_some_and(|s| s.contacts.get(p).is_some())) else { return String::new() };
+        let d = format!("{:012}", g.id.peer_id().fingerprint(&p));
+        format!("{} {} {}", &d[..4], &d[4..8], &d[8..])
+    }
+
+    /// Marks contact `peer_hex` verified (its fingerprint was compared in person). Re-save after.
+    pub fn verify_contact(&self, peer_hex: &str) -> u32 {
+        let mut g = self.inner.borrow_mut();
+        let r = match (peer_from_hex(peer_hex), g.saved.as_mut()) {
+            (Some(p), Some(sv)) => sv.contacts.set_verified(&p).map_err(contact_err),
+            _ => Err(ErrorCode::NotAContact),
+        };
+        drop(g);
+        status(r)
+    }
+
     /// Saves the peer of the 1:1 chat as a contact (verified if the SAS was confirmed).
     pub fn save_contact(&self, nick: &str) -> u32 {
         let mut g = self.inner.borrow_mut();
