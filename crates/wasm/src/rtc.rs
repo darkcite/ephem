@@ -35,6 +35,23 @@ const _: () = {
     }
 };
 
+/// The most STUN servers a user may set.
+pub const MAX_STUN: usize = 4;
+
+/// The user's STUN list (setup path): `stun:host[:port]` only (never `turn:`, §9.2), each at
+/// most 128 bytes of host characters; empty = the default list. `None` if any entry is invalid.
+pub fn parse_stun(list: &str) -> Option<Vec<String>> {
+    let v: Vec<String> = list.split(|c: char| c == ',' || c.is_whitespace()).filter(|x| !x.is_empty()).map(str::to_owned).collect();
+    if v.is_empty() {
+        return Some(STUN.iter().map(|&u| u.to_owned()).collect());
+    }
+    let valid = |u: &String| {
+        u.len() <= 128
+            && u.strip_prefix("stun:").is_some_and(|h| !h.is_empty() && h.bytes().all(|b| b.is_ascii_alphanumeric() || b".-:[]".contains(&b)))
+    };
+    (v.len() <= MAX_STUN && v.iter().all(valid)).then_some(v)
+}
+
 /// Gathering for a code (§9.5).
 const GATHER_AFTER_SRFLX_MS: f64 = 1500.0;
 const GATHER_CAP_MS: f64 = 3000.0;
@@ -153,7 +170,11 @@ fn build(inner: &Shared, id: u32, privacy: Privacy, srflx_at: Rc<Cell<f64>>) -> 
     let cfg = RtcConfiguration::new();
     let servers = js_sys::Array::new();
     if privacy != Privacy::LanOnly {
-        for url in STUN {
+        // Links start outside any core call, so the state is free to borrow here.
+        let g = inner.try_borrow();
+        debug_assert!(g.is_ok(), "rtc::build inside a borrow of the state");
+        let stun: Vec<String> = g.map_or_else(|_| STUN.iter().map(|&u| u.to_owned()).collect(), |g| g.stun.clone());
+        for url in &stun {
             let s = RtcIceServer::new();
             s.set_urls_str(url);
             servers.push(&s);

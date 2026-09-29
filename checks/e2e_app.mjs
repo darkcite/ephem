@@ -111,6 +111,13 @@ try {
   check('same identity in a second tab refused (Web Lock)', /already open in another tab/.test(await a3.textContent('#error')) && (await a3.textContent('#me')) !== savedHandle);
   await a3.close();
 
+  // ---- own STUN servers (§9.3) ----
+  await toSettings(a);
+  const stun = async (t) => { await a.fill('#t-stun', t); await a.dispatchEvent('#t-stun', 'change'); return a.textContent('#stun-state'); };
+  check('own STUN servers: TURN refused', /Not used/.test(await stun('turn:relay.example:3478')));
+  check('own STUN servers: set, kept for the next visit', /this STUN server/.test(await stun('stun:127.0.0.1:3478')) && await a.evaluate(() => localStorage.getItem('ephem-stun')) === 'stun:127.0.0.1:3478');
+  check('own STUN servers: empty = the defaults', /default STUN/.test(await stun('')) && await a.evaluate(() => localStorage.getItem('ephem-stun')) === null);
+
   // ---- invite ----
   await openSettings(a);
   await toHome(a);

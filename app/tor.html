@@ -6,13 +6,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-yBgYikz8DUIkn5XUf49axcX8PfESW+tFP3UdqnA96gE='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="c6273caa06c2">
-<meta name="ephem-wasm" content="sha384-VYscuPOMtLHmo64r+pcEURCHdmWaNqp8xgBypgdvAQ+YhUIc6cZ8WHRA/MnEpCbm">
-<meta name="ephem-tor-wasm" content="sha384-VYscuPOMtLHmo64r+pcEURCHdmWaNqp8xgBypgdvAQ+YhUIc6cZ8WHRA/MnEpCbm">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-H5xyoMxL/3+XzzoNiY3CZxD7kGNfmmiIyGxzGRkr/EA='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="33b1ece3d0fa">
+<meta name="ephem-wasm" content="sha384-d19LHYBqwtnIA9V0vzynIfbqy6WEhpQDiXMMpcb+gMantD0s2RAAukDUzGQ+Fe7a">
+<meta name="ephem-tor-wasm" content="sha384-d19LHYBqwtnIA9V0vzynIfbqy6WEhpQDiXMMpcb+gMantD0s2RAAukDUzGQ+Fe7a">
 <link rel="stylesheet" href="app.css" integrity="sha384-S/izUMsedNPrsUM27Xx8rGrqK+zDqoQgct4axNGtqaG0GX+MOvGHbVNFcIe87ViQ">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-Ks4TliEOCLHMgisIlVyeonIFRfSvogSnByAQ1OEH/RXvP2g4i/0gi/zuCn1XLDpe","./slots.js":"sha384-IlHgZ/G7YQmb6j7JCXNAbe997AcQ0jgf9kFcPNaROP0AcYmGBAzZ9Okdm4ch/5yC","./bridges.js":"sha384-XinMCx7qqD+BIl3mImyuYX0YNpqx/XA/fy1rBXFb3VrD/Hp62Vg7zBWO5+v1qTAV","./channels.js":"sha384-DX3VAD/n3UhadC5485wo2e+XvVshNua1fdfxu8+KaTbduxBs191dwMy5Gq4QzMN0","./ui.js":"sha384-Dg5+MKtdFNG4n1QschjGOvWfALXvB+/c+rOXQZOFRC3N7R0ouVLg7exIRd33Txvx","./pkg/ephem_tor.js":"sha384-aWRF6zsqyM+dzLghCYTQjT6rIxpv2mi90ZmOn/Q+vicuWBVOWMeQguVxfNltclWo"}}</script>
-<script type="module" src="app.js" integrity="sha384-Ks4TliEOCLHMgisIlVyeonIFRfSvogSnByAQ1OEH/RXvP2g4i/0gi/zuCn1XLDpe"></script>
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-4JsKrbh0JbqWjJnWdUPlq6NdMHl/Toyz4KM++kg34U0pefXjDztEnROoA34ZibiL","./slots.js":"sha384-IlHgZ/G7YQmb6j7JCXNAbe997AcQ0jgf9kFcPNaROP0AcYmGBAzZ9Okdm4ch/5yC","./bridges.js":"sha384-XinMCx7qqD+BIl3mImyuYX0YNpqx/XA/fy1rBXFb3VrD/Hp62Vg7zBWO5+v1qTAV","./channels.js":"sha384-DX3VAD/n3UhadC5485wo2e+XvVshNua1fdfxu8+KaTbduxBs191dwMy5Gq4QzMN0","./ui.js":"sha384-Dg5+MKtdFNG4n1QschjGOvWfALXvB+/c+rOXQZOFRC3N7R0ouVLg7exIRd33Txvx","./pkg/ephem_tor.js":"sha384-pAOI1Bm2RblwY8c93vpj2mm3Cc9wMZnoctoEsLUAPBXPEJa/R0SrsKxk5RcV1woO"}}</script>
+<script type="module" src="app.js" integrity="sha384-4JsKrbh0JbqWjJnWdUPlq6NdMHl/Toyz4KM++kg34U0pefXjDztEnROoA34ZibiL"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -199,6 +199,9 @@
           </select>
         </label>
         <label class="row direct-only"><input id="c-v6" type="checkbox"> Drop IPv6 addresses</label>
+        <label class="direct-only">Own STUN servers (optional: where the defaults are blocked; up to 4, empty = default)
+          <textarea id="t-stun" rows="2" placeholder="stun:stun.l.google.com:19302, stun:stun.cloudflare.com:3478" spellcheck="false" autocomplete="off"></textarea></label>
+        <p id="stun-state" class="note direct-only"></p>
         <label class="row"><input id="c-read" type="checkbox" checked> Send read receipts (and see the peer's)</label>
         <label class="row"><input id="c-typing" type="checkbox" checked> Send typing notifications (and see the peer's)</label>
         <label>Code lifetime

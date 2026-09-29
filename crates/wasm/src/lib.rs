@@ -255,6 +255,8 @@ pub(crate) struct Inner {
     meta: Box<[u8; meta::LEN]>,
     /// RGBA camera frame for the QR scanner; sized on first use (setup path).
     scan: Vec<u8>,
+    /// STUN servers of direct mode (§9.3): the default list, or the user's own.
+    pub(crate) stun: Vec<String>,
     /// Tor build: arti and our onion service (§28).
     #[cfg(feature = "tor")]
     tor: tor::TorState,
@@ -693,6 +695,7 @@ impl App {
                 scratch: Box::new([0; 1024]),
                 meta: Box::new([0; meta::LEN]),
                 scan: Vec::new(),
+                stun: rtc::STUN.iter().map(|&u| u.to_owned()).collect(),
                 #[cfg(feature = "tor")]
                 tor: tor::TorState::default(),
             })),
@@ -981,6 +984,21 @@ impl App {
         let mut g = self.inner.borrow_mut();
         let settings = Settings { read_receipts, typing, ..g.prefs.settings };
         g.prefs = Prefs { privacy: Privacy::from_u8(privacy), drop_ipv6, settings };
+    }
+
+    /// The user's own STUN servers (§9.3, where the defaults are blocked): up to
+    /// [`rtc::MAX_STUN`] `stun:host[:port]` URLs, separated by commas, spaces or new lines;
+    /// empty = the default list. Used by links started from now on. Returns how many are used, or
+    /// 0 if one is not a valid `stun:` URL (then nothing changes: TURN is never accepted, §9.2).
+    pub fn set_stun(&self, list: &str) -> u32 {
+        match rtc::parse_stun(list) {
+            Some(v) => {
+                let n = v.len() as u32;
+                self.inner.borrow_mut().stun = v;
+                n
+            }
+            None => 0,
+        }
     }
 
     // ---- buffers shared with JS ----
@@ -1487,6 +1505,16 @@ fn decode_text(text: &str) -> Option<([u8; MAX_CODE_LEN], usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn own_stun_servers() {
+        assert_eq!(rtc::parse_stun("").unwrap().len(), rtc::STUN.len(), "empty: the defaults");
+        assert_eq!(rtc::parse_stun(" stun:a.example:3478,\nstun:[2001:db8::1]:3478 ").unwrap(), ["stun:a.example:3478", "stun:[2001:db8::1]:3478"]);
+        assert!(rtc::parse_stun("turn:relay.example:3478").is_none(), "never TURN");
+        assert!(rtc::parse_stun("stun:a stun:b stun:c stun:d stun:e").is_none(), "at most 4");
+        assert!(rtc::parse_stun("stun:a?transport=tcp").is_none());
+        assert!(rtc::parse_stun("stun:").is_none());
+    }
 
     /// A chat with one waiting link (a hosted Tor session: pure core, no browser).
     fn chat_with_link(g: &mut Inner) -> (u8, u32) {

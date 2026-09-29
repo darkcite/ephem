@@ -1962,6 +1962,16 @@ async function main() {
   $('b-id-do-save').onclick = saveIdentity;
   $('b-id-do-load').onclick = loadIdentity;
   for (const id of ['s-privacy', 'c-v6', 'c-read', 'c-typing']) $(id).onchange = applyPrefs;
+  // Own STUN servers (§9.3; direct mode): kept in localStorage, not secret (§17.5).
+  const stun = (text, save) => {
+    const n = app.set_stun(text);
+    $('stun-state').textContent = n === 0 ? 'Not used: only stun:host[:port] addresses, at most 4 (never turn:).'
+      : text.trim() ? `New chats use ${n === 1 ? 'this STUN server' : `these ${n} STUN servers`}.` : 'New chats use the default STUN servers.';
+    if (n && save) try { text.trim() ? localStorage.setItem('ephem-stun', text.trim()) : localStorage.removeItem('ephem-stun'); } catch { /* private mode */ }
+  };
+  try { $('t-stun').value = localStorage.getItem('ephem-stun') || ''; } catch { /* private mode */ }
+  if ($('t-stun').value) stun($('t-stun').value, false);
+  $('t-stun').onchange = () => stun($('t-stun').value, true);
   $('c-notify').checked = notifyOn();
   $('c-notify').onchange = async () => {
     let on = $('c-notify').checked;
