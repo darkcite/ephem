@@ -6,8 +6,13 @@
 //! Extra fixed-layout fields of an event are written to the `meta` block (see [`meta`]); every
 //! event of a link carries that link's member index at [`meta::MEMBER`].
 //!
-//! State: a set of **links** (one pairwise session + RTCPeerConnection each): exactly one for a
-//! 1:1 chat, up to 15 in a room (§14), plus the room itself ([`room::Room`]).
+//! State: up to [`MAX_CHATS`] **chats** (Appendix F.3.2). A chat is a set of **links** (one
+//! pairwise session + RTCPeerConnection or Tor stream each): exactly one for a 1:1 chat, up to 15
+//! in a room (§14), plus the room itself ([`room::Room`]). One chat is *loaded* in [`Inner`]
+//! (`links`, `room`, `inbox`) and the others are parked; every entry point loads the chat it acts
+//! on first ([`Inner::focus`], or [`Inner::find`] by link id), which swaps a few words. So the
+//! chat code below works on "the chat" and never mixes two. Events carry the chat's id at
+//! [`meta::CHAT`]; the page selects a chat (`App::select`) right before each call for it.
 //!
 //! **Re-entrancy rule for JS:** an `ephemEvent` handler must not call back into `App`
 //! synchronously (it may update the DOM; anything else goes through `queueMicrotask`).
@@ -126,6 +131,8 @@ pub mod meta {
     pub const RESUMED: usize = 0;
     /// Member index of the peer of the link that produced the event (0xFF: not admitted yet).
     pub const MEMBER: usize = 16;
+    /// Id of the chat the event belongs to (Appendix F.3.2).
+    pub const CHAT: usize = 17;
     pub const LEN: usize = 24;
 }
 
@@ -203,16 +210,39 @@ pub(crate) struct PeerInfo {
     pub(crate) sas: u32,
 }
 
+/// Most chats (1:1 or rooms) a tab holds at once (decision D6).
+pub const MAX_CHATS: usize = 16;
+
+/// A chat that is not loaded (see [`Inner::focus`]): its links, room and room inbox.
+pub(crate) struct Chat {
+    id: u8,
+    links: Vec<Link>,
+    room: Option<room::Room>,
+    inbox: Vec<(u32, u8, Vec<u8>)>,
+}
+
+impl Chat {
+    fn shell() -> Self {
+        Chat { id: 0, links: Vec::with_capacity(ephem_core::room::MAX_MEMBERS), room: None, inbox: Vec::new() }
+    }
+}
+
 /// Everything the tab owns. Buffers are allocated once at start and reused.
 pub(crate) struct Inner {
     id: Identity,
     saved: Option<Saved>,
     prefs: Prefs,
+    /// The loaded chat: its id, links and room.
+    chat: u8,
     pub(crate) links: Vec<Link>,
     pub(crate) room: Option<room::Room>,
-    next_id: u32,
     /// Room records from link events (link id, record type, body), handled after the core call.
     pub(crate) inbox: Vec<(u32, u8, Vec<u8>)>,
+    /// The other chats (never empty ones), and unused chat shells (allocated at start).
+    parked: Vec<Chat>,
+    spare: Vec<Chat>,
+    next_chat: u8,
+    next_id: u32,
     rx: Box<[u8; MAX_FRAME]>,
     text: Box<[u8; MAX_TEXT]>,
     /// Encoded codes and small event payloads.
@@ -242,9 +272,94 @@ macro_rules! on_link {
 pub(crate) use on_link;
 
 impl Inner {
+    /// Link path `id` in whichever chat holds it; that chat is loaded first.
     #[inline]
-    pub(crate) fn find(&self, id: u32) -> Option<usize> {
+    pub(crate) fn find(&mut self, id: u32) -> Option<usize> {
+        if let Some(i) = self.links.iter().position(|l| l.id == id) {
+            return Some(i);
+        }
+        let c = self.parked.iter().find(|c| c.links.iter().any(|l| l.id == id))?.id;
+        self.focus(c);
         self.links.iter().position(|l| l.id == id)
+    }
+
+    /// Whether the loaded chat holds nothing (never started, or closed).
+    fn empty(&self) -> bool {
+        self.links.is_empty() && self.room.is_none()
+    }
+
+    /// Loads chat `id` (parking the loaded one; an empty one goes back to the spares). False if
+    /// there is no such chat. Stamps `id` into the event meta.
+    pub(crate) fn focus(&mut self, id: u8) -> bool {
+        if self.chat != id {
+            let Some(p) = self.parked.iter().position(|c| c.id == id) else { return false };
+            let mut c = self.parked.swap_remove(p);
+            core::mem::swap(&mut self.links, &mut c.links);
+            core::mem::swap(&mut self.room, &mut c.room);
+            core::mem::swap(&mut self.inbox, &mut c.inbox);
+            core::mem::swap(&mut self.chat, &mut c.id);
+            if c.links.is_empty() && c.room.is_none() {
+                c.inbox.clear();
+                self.spare.push(c);
+            } else {
+                self.parked.push(c);
+            }
+        }
+        self.meta[meta::CHAT] = id;
+        true
+    }
+
+    /// Loads a new, empty chat for a new conversation (an empty loaded chat is reused under a
+    /// new id, so the page never mixes it up with one that ended).
+    pub(crate) fn fresh(&mut self) -> Result<u8, ErrorCode> {
+        if !self.empty() {
+            let mut c = self.spare.pop().ok_or(ErrorCode::TooManyChats)?;
+            core::mem::swap(&mut self.links, &mut c.links);
+            core::mem::swap(&mut self.room, &mut c.room);
+            core::mem::swap(&mut self.inbox, &mut c.inbox);
+            c.id = self.chat;
+            self.parked.push(c);
+        }
+        self.inbox.clear();
+        // A new id, unused by any parked chat (at most MAX_CHATS - 1 of them).
+        loop {
+            self.next_chat = if self.next_chat >= 254 { 0 } else { self.next_chat + 1 };
+            let n = self.next_chat;
+            if !self.parked.iter().any(|c| c.id == n) {
+                break;
+            }
+        }
+        self.chat = self.next_chat;
+        self.meta[meta::CHAT] = self.chat;
+        Ok(self.chat)
+    }
+
+    /// The first link, in any chat, for which `f` holds; its chat is loaded first.
+    fn load_where(&mut self, f: impl Fn(&Link) -> bool) -> Option<usize> {
+        if let Some(i) = self.links.iter().position(&f) {
+            return Some(i);
+        }
+        let c = self.parked.iter().find(|c| c.links.iter().any(&f))?.id;
+        self.focus(c);
+        self.links.iter().position(f)
+    }
+
+    /// Ids of every chat (the loaded one first), without allocating.
+    pub(crate) fn chat_ids(&self) -> ([u8; MAX_CHATS], usize) {
+        let mut ids = [0u8; MAX_CHATS];
+        ids[0] = self.chat;
+        let mut n = 1;
+        for c in &self.parked {
+            ids[n] = c.id;
+            n += 1;
+        }
+        (ids, n)
+    }
+
+    /// Whether any chat has a live link (sign-in and sign-out wait for none).
+    fn busy(&self) -> bool {
+        let live = |l: &Link| l.sess.state() != State::Closed;
+        self.links.iter().any(live) || self.parked.iter().any(|c| c.links.iter().any(live))
     }
 
     #[inline]
@@ -289,7 +404,7 @@ impl Inner {
         }
     }
 
-    /// Ends everything: every link and the room.
+    /// Ends the loaded chat: every link and the room.
     fn reset(&mut self) {
         while !self.links.is_empty() {
             self.close_link(self.links.len() - 1);
@@ -425,12 +540,12 @@ fn contact_err(e: ContactError) -> ErrorCode {
     }
 }
 
-#[inline]
 /// The key-file sections the page may read and write (`App::section`).
 fn settings_section(t: u8) -> bool {
     matches!(t, contacts::TLV_TOR_BRIDGES | contacts::TLV_FOLLOWS | contacts::TLV_CHANNELS)
 }
 
+#[inline]
 fn status(r: Result<(), ErrorCode>) -> u32 {
     match r {
         Ok(()) => 0,
@@ -537,10 +652,14 @@ impl App {
                 id: Identity::generate(),
                 saved: None,
                 prefs: Prefs { privacy: Privacy::Default, drop_ipv6: false, settings: Settings::default() },
+                chat: 0,
                 links: Vec::with_capacity(ephem_core::room::MAX_MEMBERS),
                 room: None,
-                next_id: 0,
                 inbox: Vec::new(),
+                parked: Vec::with_capacity(MAX_CHATS),
+                spare: (1..MAX_CHATS).map(|_| Chat::shell()).collect(),
+                next_chat: 0,
+                next_id: 0,
                 rx: Box::new([0; MAX_FRAME]),
                 text: Box::new([0; MAX_TEXT]),
                 scratch: Box::new([0; 1024]),
@@ -634,7 +753,7 @@ impl App {
     }
 
     fn busy(&self) -> bool {
-        self.inner.borrow().links.iter().any(|l| l.sess.state() != State::Closed)
+        self.inner.borrow().busy()
     }
 
     /// Our nickname, sent to peers in HELLO and kept in the key file (§7.3).
@@ -893,7 +1012,11 @@ impl App {
         let (inv, room) = ids();
         let (id, privacy) = {
             let mut g = self.inner.borrow_mut();
-            g.reset();
+            if let Err(e) = g.fresh() {
+                drop(g);
+                status(Err(e));
+                return;
+            }
             let p = g.prefs;
             let expires = now_s + ttl_s.clamp(60, 1800);
             let s = if extra & flags::TRANSFER != 0 {
@@ -948,12 +1071,13 @@ impl App {
     pub fn code_fits(&self, text: &str) -> bool {
         let Some((bin, n)) = decode_text(text) else { return false };
         let Ok(c) = Code::decode(&bin[..n]) else { return false };
-        let g = self.inner.borrow();
-        g.links.iter().any(|l| match c.kind {
+        let fits = |l: &Link| match c.kind {
             Kind::Answer | Kind::ResumeAnswer => l.sess.state() == State::AwaitingAnswer && l.sess.invite_id() == c.invite_id,
             Kind::ResumeInvite => l.sess.ever_connected() && l.sess.state() != State::Closed && l.sess.room_id() == c.room_id && l.sess.remote().0 == c.static_pk,
             Kind::Invite | Kind::TorInvite => false,
-        })
+        };
+        let g = self.inner.borrow();
+        g.links.iter().any(fits) || g.parked.iter().any(|ch| ch.links.iter().any(fits))
     }
 
     /// Applies a code: a full link, `#i=` / `#a=` / `#r=` / `#q=`, or bare base64url.
@@ -988,7 +1112,7 @@ impl App {
                         p.settings.typing = false;
                     }
                     let s = Session::answerer(&g.id, code, now_s, p.privacy, p.drop_ipv6, p.settings, scanned)?;
-                    g.reset();
+                    g.fresh()?;
                     if group {
                         g.room = Some(room::Room::joining(c.flags & flags::OBSERVER != 0));
                     }
@@ -1001,7 +1125,7 @@ impl App {
             Kind::ResumeInvite => {
                 let (id, privacy) = {
                     let mut g = self.inner.borrow_mut();
-                    let i = g.links.iter().position(|l| l.sess.remote().0 == c.static_pk && l.sess.room_id() == c.room_id).ok_or(ErrorCode::InvalidRoom)?;
+                    let i = g.load_where(|l| l.sess.remote().0 == c.static_pk && l.sess.room_id() == c.room_id).ok_or(ErrorCode::InvalidRoom)?;
                     let Inner { id, links, .. } = &mut *g;
                     links[i].sess.accept_resume(id, code, now_s)?;
                     let privacy = links[i].sess.privacy();
@@ -1017,7 +1141,7 @@ impl App {
             Kind::Answer | Kind::ResumeAnswer => {
                 let id = {
                     let mut g = self.inner.borrow_mut();
-                    let i = g.links.iter().position(|l| l.sess.invite_id() == c.invite_id && l.sess.state() == State::AwaitingAnswer).ok_or(ErrorCode::AnswerMismatch)?;
+                    let i = g.load_where(|l| l.sess.invite_id() == c.invite_id && l.sess.state() == State::AwaitingAnswer).ok_or(ErrorCode::AnswerMismatch)?;
                     let Inner { id, links, .. } = &mut *g;
                     links[i].sess.apply_answer(id, code, now_s, scanned)?;
                     links[i].id
@@ -1049,16 +1173,20 @@ impl App {
 
     // ---- rooms (§14) ----
 
-    /// Creates a room owned by us (everything else is closed). Invite members next.
-    pub fn create_room(&self) {
+    /// Creates a room owned by us, as a new chat. Invite members next.
+    pub fn create_room(&self) -> u32 {
         {
             let mut g = self.inner.borrow_mut();
-            g.reset();
+            if let Err(e) = g.fresh() {
+                drop(g);
+                return status(Err(e));
+            }
             let (_, room_id) = ids();
             let r = room::Room::owned(room_id, &g.id);
             g.room = Some(r);
         }
         room::emit_state(&self.inner.borrow());
+        0
     }
 
     /// Owner: an invite for one more member (or read-only observer). Emits CODE(1).
@@ -1169,7 +1297,10 @@ impl App {
     /// In-band ICE restart (§13 T1) of every connected link: diagnostics button, or the network
     /// changed (`online`, `navigator.connection` change).
     pub fn restart_ice(&self) {
-        let ids: Vec<u32> = self.inner.borrow().links.iter().map(|l| l.id).collect();
+        let ids: Vec<u32> = {
+            let g = self.inner.borrow();
+            g.links.iter().chain(g.parked.iter().flat_map(|c| c.links.iter())).map(|l| l.id).collect()
+        };
         for id in ids {
             rtc::restart(self.inner.clone(), id);
         }
@@ -1199,17 +1330,23 @@ impl App {
 
     /// Timer (JS calls it every second). `hidden` = `document.hidden`, carried in PING.
     pub fn tick(&self, hidden: bool) {
-        {
-            let mut g = self.inner.borrow_mut();
-            let now = now_ms();
-            for i in 0..g.links.len() {
-                on_link!(g, i, |s, k, _t| s.tick(now, hidden, &mut k));
+        let (ids, n) = self.inner.borrow().chat_ids();
+        for &c in &ids[..n] {
+            {
+                let mut g = self.inner.borrow_mut();
+                if !g.focus(c) {
+                    continue;
+                }
+                let now = now_ms();
+                for i in 0..g.links.len() {
+                    on_link!(g, i, |s, k, _t| s.tick(now, hidden, &mut k));
+                }
             }
+            rtc::check_paths(&self.inner);
+            #[cfg(feature = "tor")]
+            tor::tick(&self.inner);
+            room::tick(&self.inner);
         }
-        rtc::check_paths(&self.inner);
-        #[cfg(feature = "tor")]
-        tor::tick(&self.inner);
-        room::tick(&self.inner);
     }
 
     /// Drops network paths without leaving, as a network change would. Diagnostics ("Simulate
@@ -1232,11 +1369,41 @@ impl App {
         }
     }
 
-    /// Leaves the chat or room (a member first tells the owner; GOODBYE on every link), wipes
-    /// session keys and messages.
+    /// Leaves the selected chat or room (a member first tells the owner; GOODBYE on every
+    /// link), wipes its session keys and messages. The chat is gone afterwards.
     pub fn close(&self) {
         room::leave(&self.inner);
         self.inner.borrow_mut().reset();
+    }
+
+    /// Leaves every chat (the tab closes).
+    pub fn close_all(&self) {
+        let (ids, n) = self.inner.borrow().chat_ids();
+        for &c in &ids[..n] {
+            if self.select(c) {
+                self.close();
+            }
+        }
+    }
+
+    // ---- chats (Appendix F.3.2) ----
+
+    /// Selects chat `id` for the calls that follow (call it right before them, in the same
+    /// task: network events may load another chat in between). False if there is no such chat.
+    pub fn select(&self, id: u8) -> bool {
+        self.inner.borrow_mut().focus(id)
+    }
+
+    /// The id of the selected chat: after a call that starts a conversation (invite, answer,
+    /// room, contact dial), the new chat's.
+    pub fn chat(&self) -> u8 {
+        self.inner.borrow().chat
+    }
+
+    /// How many chats the tab holds (at most [`MAX_CHATS`]).
+    pub fn chat_count(&self) -> u32 {
+        let g = self.inner.borrow();
+        (g.parked.len() + usize::from(!g.empty())) as u32
     }
 
     /// 1:1 chat or link to the room owner: 0 none, 1 gathering, 2 awaiting answer,
@@ -1291,6 +1458,62 @@ fn decode_text(text: &str) -> Option<([u8; MAX_CODE_LEN], usize)> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// A chat with one waiting link (a hosted Tor session: pure core, no browser).
+    fn chat_with_link(g: &mut Inner) -> (u8, u32) {
+        let c = g.fresh().unwrap();
+        let (inv, room) = ([1; 16], [2; 16]);
+        let s = Session::tor_host(g.identity(), inv, room, 2_000_000_000, g.settings());
+        (c, g.add_link(1, s, false))
+    }
+
+    #[test]
+    fn chats_park_load_and_recycle() {
+        let app = App::new();
+        let mut g = app.inner.borrow_mut();
+        assert!(g.empty() && g.chat_ids().1 == 1);
+        let (a, la) = chat_with_link(&mut g);
+        let (b, lb) = chat_with_link(&mut g);
+        assert_ne!(a, b);
+        assert_eq!((g.chat, g.meta[meta::CHAT]), (b, b), "the new chat is loaded and stamped");
+        // A link id loads its chat; the other one is parked, untouched.
+        let i = g.find(la).unwrap();
+        assert_eq!((g.chat, g.links[i].id, g.meta[meta::CHAT]), (a, la, a));
+        assert_eq!(g.parked.len(), 1);
+        assert!(g.focus(b) && g.links[0].id == lb);
+        assert!(!g.focus(200), "no such chat");
+        // Closing a chat empties it (`reset` without the browser clock); switching away returns
+        // its shell to the spares.
+        g.links.clear();
+        assert!(g.empty());
+        let spares = g.spare.len();
+        assert!(g.focus(a));
+        assert_eq!((g.spare.len(), g.parked.len()), (spares + 1, 0));
+        assert!(!g.focus(b), "a closed chat is gone");
+        assert!(g.find(lb).is_none());
+    }
+
+    #[test]
+    fn at_most_max_chats() {
+        let app = App::new();
+        let mut g = app.inner.borrow_mut();
+        let mut ids = Vec::new();
+        for _ in 0..MAX_CHATS {
+            ids.push(chat_with_link(&mut g).0);
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), MAX_CHATS, "distinct ids");
+        assert_eq!(g.fresh(), Err(ErrorCode::TooManyChats));
+        // An empty loaded chat is reused (under a new id) even when full.
+        g.links.clear();
+        let old = g.chat;
+        let reused = g.fresh().unwrap();
+        assert_ne!(reused, old);
+        assert_eq!(g.chat_ids().1, MAX_CHATS);
+    }
+
     #[test]
     fn payload_forms() {
         assert_eq!(super::extract_payload("https://x.io/ephem/app/#i=AbC"), "AbC");

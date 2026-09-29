@@ -59,7 +59,7 @@ try {
   await a.waitForSelector('#card-req:not([hidden])', { timeout: T });
   check('Alice is asked first; no chat shown before she accepts', /from your contact card/.test(await a.textContent('#card-req-text')) && await a.isHidden('#log') && await a.isHidden('#f-send'), `${Date.now() - t1} ms`);
   await a.click('#b-card-accept');
-  await a.locator('#contacts li', { hasText: 'Bob' }).waitFor({ state: 'attached', timeout: 10_000 });
+  await a.locator('#contacts li', { hasText: 'Bob' }).waitFor({ state: 'attached', timeout: T });
   await b.fill('#t-msg', 'hello via your card');
   await b.press('#t-msg', 'Enter');
   await msgWith(a, 'them', 'hello via your card').waitFor({ timeout: 60_000 });

@@ -325,8 +325,9 @@ pub(crate) fn apply_answer(inner: Shared, id: u32) {
 }
 
 fn remote_description(inner: &Shared, id: u32, ty: RtcSdpType) -> Result<(RtcPeerConnection, RtcSessionDescriptionInit), ErrorCode> {
-    let g = inner.borrow();
-    let l = g.find(id).map(|i| &g.links[i]).ok_or(ErrorCode::NotPermitted)?;
+    let mut g = inner.borrow_mut();
+    let i = g.find(id).ok_or(ErrorCode::NotPermitted)?;
+    let l = &g.links[i];
     let r = l.rtc.as_ref().ok_or(ErrorCode::NotPermitted)?;
     let mut sdp = [0u8; MAX_SDP_LEN];
     let text = l.sess.remote_sdp(&mut sdp)?;
@@ -531,8 +532,9 @@ async fn set_local(pc: &RtcPeerConnection, ty: RtcSdpType, created: &JsValue, sr
 /// Triggered by a path stuck in `disconnected`, a network change, or the diagnostics button.
 pub(crate) fn restart(inner: Shared, id: u32) {
     let (pc, srflx) = {
-        let g = inner.borrow();
-        let Some(l) = g.find(id).map(|i| &g.links[i]) else { return };
+        let mut g = inner.borrow_mut();
+        let Some(i) = g.find(id) else { return };
+        let l = &g.links[i];
         match l.rtc.as_ref() {
             Some(r) if l.sess.state() == State::Connected && !r.making_offer.get() => {
                 r.making_offer.set(true);
@@ -554,7 +556,7 @@ pub(crate) fn restart(inner: Shared, id: u32) {
             on_link!(g, i, |s, k, _t| s.signal(now, true, &sdp, &mut k))
         };
         let r = res.await;
-        let g = inner.borrow();
+        let mut g = inner.borrow_mut();
         if r.is_err()
             && let Some(rtc) = g.find(id).and_then(|i| g.links[i].rtc.as_ref())
         {
@@ -588,7 +590,7 @@ async fn handle_signal(inner: &Shared, id: u32, offer: bool, ice: IceParams) -> 
     }
     wait(pc.set_remote_description(&desc)).await?;
     if !offer {
-        let g = inner.borrow();
+        let mut g = inner.borrow_mut();
         if let Some(r) = g.find(id).and_then(|i| g.links[i].rtc.as_ref()) {
             r.making_offer.set(false);
         }

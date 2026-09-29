@@ -94,6 +94,23 @@ export class App {
         }
     }
     /**
+     * How many chats the tab holds (at most [`MAX_CHATS`]).
+     * @returns {number}
+     */
+    chat_count() {
+        const ret = wasm.app_chat_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * The id of the selected chat: after a call that starts a conversation (invite, answer,
+     * room, contact dial), the new chat's.
+     * @returns {number}
+     */
+    chat() {
+        const ret = wasm.app_chat(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * The chat's self-destruct timer in seconds (0 = off).
      * @returns {number}
      */
@@ -102,8 +119,14 @@ export class App {
         return ret >>> 0;
     }
     /**
-     * Leaves the chat or room (a member first tells the owner; GOODBYE on every link), wipes
-     * session keys and messages.
+     * Leaves every chat (the tab closes).
+     */
+    close_all() {
+        wasm.app_close_all(this.__wbg_ptr);
+    }
+    /**
+     * Leaves the selected chat or room (a member first tells the owner; GOODBYE on every
+     * link), wipes its session keys and messages. The chat is gone afterwards.
      */
     close() {
         wasm.app_close(this.__wbg_ptr);
@@ -190,10 +213,12 @@ export class App {
         return ret >>> 0;
     }
     /**
-     * Creates a room owned by us (everything else is closed). Invite members next.
+     * Creates a room owned by us, as a new chat. Invite members next.
+     * @returns {number}
      */
     create_room() {
-        wasm.app_create_room(this.__wbg_ptr);
+        const ret = wasm.app_create_room(this.__wbg_ptr);
+        return ret >>> 0;
     }
     /**
      * New device (§7.6): an invite asking another device for its identity. Emits CODE(1).
@@ -733,6 +758,16 @@ export class App {
         }
     }
     /**
+     * Selects chat `id` for the calls that follow (call it right before them, in the same
+     * task: network events may load another chat in between). False if there is no such chat.
+     * @param {number} id
+     * @returns {boolean}
+     */
+    select(id) {
+        const ret = wasm.app_select(this.__wbg_ptr, id);
+        return ret !== 0;
+    }
+    /**
      * Sends `len` bytes previously written at `text_ptr()`. `reply_seq` = 0 for no reply,
      * otherwise the quoted message `(reply_sender, reply_seq)`. Returns chat_seq or -error code.
      * @param {number} len
@@ -1039,7 +1074,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_5900(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_5911(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -1124,7 +1159,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_5900_69(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_5911_73(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -1321,17 +1356,17 @@ function __wbg_get_imports() {
         },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 839, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_5865);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_5876);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000002: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 653, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_4065);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_4077);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000003: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 352, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_2170);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_2182);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000004: function(arg0, arg1) {
@@ -1358,26 +1393,26 @@ function __wbg_get_imports() {
     };
 }
 
-function __wasm_bindgen_func_elem_2170(arg0, arg1) {
-    wasm.__wasm_bindgen_func_elem_2170(arg0, arg1);
+function __wasm_bindgen_func_elem_2182(arg0, arg1) {
+    wasm.__wasm_bindgen_func_elem_2182(arg0, arg1);
 }
 
-function __wasm_bindgen_func_elem_4065(arg0, arg1, arg2) {
-    wasm.__wasm_bindgen_func_elem_4065(arg0, arg1, addHeapObject(arg2));
+function __wasm_bindgen_func_elem_4077(arg0, arg1, arg2) {
+    wasm.__wasm_bindgen_func_elem_4077(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_5900(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_5900(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_5911(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_5911(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_5900_69(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_5900_69(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_5911_73(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_5911_73(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_5865(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_5876(arg0, arg1, arg2) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        wasm.__wasm_bindgen_func_elem_5865(retptr, arg0, arg1, addHeapObject(arg2));
+        wasm.__wasm_bindgen_func_elem_5876(retptr, arg0, arg1, addHeapObject(arg2));
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         if (r1) {

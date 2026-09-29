@@ -123,7 +123,7 @@ pub(crate) fn invite(inner: &Shared, ttl_s: u32) -> Result<(), ErrorCode> {
         if g.tor.tor.is_none() {
             return Err(ErrorCode::TorUnavailable);
         }
-        g.reset();
+        g.fresh()?;
         let s = Session::tor_host(g.identity(), inv, room, now_s + ttl_s.clamp(60, 1800), g.settings());
         g.add_link(1, s, false)
     };
@@ -137,7 +137,7 @@ pub(crate) fn offer(inner: &Shared, id: u32) {
     // Copy of the 104-byte code out of the session (setup path): sending it borrows the tab.
     let mut code = [0u8; TOR_CODE_LEN];
     let (i, via_owner) = {
-        let g = inner.borrow();
+        let mut g = inner.borrow_mut();
         let Some(i) = g.find(id) else { return };
         code.copy_from_slice(g.links[i].sess.local_code());
         (i, g.links[i].via_owner)
@@ -160,7 +160,7 @@ pub(crate) fn join(inner: &Shared, code: &[u8], now_s: u32, scanned: bool) -> Re
         // Room links: no read receipts, no typing (§11.7).
         let settings = if group { room::room_settings(&g) } else { g.settings() };
         let s = Session::tor_dialer(g.identity(), code, now_s, settings, scanned)?;
-        g.reset();
+        g.fresh()?;
         if group {
             g.room = Some(room::Room::joining(f & flags::OBSERVER != 0));
         }
@@ -185,25 +185,25 @@ pub(crate) fn call(inner: &Shared, peer: PeerId) -> Result<(), ErrorCode> {
         let secret = if c.flags & cflags::FROM_CARD != 0 { c.card_secret } else { [0; 16] };
         tracing::info!("tor: dialling a contact{}", if secret == [0; 16] { "" } else { " with their card's secret" });
         let s = Session::tor_contact_dialer(g.identity(), peer, c.onion_pk, g.settings(), secret);
-        g.reset();
+        g.fresh()?;
         g.add_link(0, s, false)
     };
     dial(inner, lid, false);
     Ok(())
 }
 
-/// A contact dials while the tab has no chat (§28.7), or someone with our live contact card
-/// (§28.4 case 3: any key, the user is asked next). Returns the new link's index and whether
-/// it came through the card.
+/// A contact dials (§28.7), or someone with our live contact card (§28.4 case 3: any key, the
+/// user is asked next): a new chat. Returns the new link's index (in the loaded new chat) and
+/// whether it came through the card.
 fn contact_host(g: &mut Inner, now: u64, frame: &[u8], wire: &TorWire) -> Option<(usize, bool)> {
-    if g.room.is_some() || g.links.iter().any(|l| l.sess.state() != State::Closed) {
-        return None;
-    }
     let sv = g.saved.as_ref()?;
     let now_s = (now / 1000) as u32;
     let card = sv.contacts.card.filter(|k| k.live(now_s)).map(|k| k.secret);
     let contacts = !sv.contacts.list().is_empty();
-    g.reset();
+    if !contacts && card.is_none() {
+        return None;
+    }
+    g.fresh().ok()?;
     // Contacts (zero secret, known keys only), then the card (its secret, any key).
     for secret in [contacts.then_some([0u8; 16]), card].into_iter().flatten() {
         let s = Session::tor_contact_host(g.identity(), g.settings(), secret);
@@ -435,20 +435,25 @@ async fn incoming(inner: Shared, s: DataStream) {
         let mut taken = None;
         // The path id the taking link gets (new_path below), so its events already carry it.
         let next = g.next_id.wrapping_add(1);
-        for i in 0..g.links.len() {
-            if !g.links[i].sess.tor() {
-                continue;
-            }
-            // A link to a room member takes only the key the signed state names (§14.4).
-            let pinned = g.links[i].via_owner.then(|| g.room.as_ref().and_then(|r| r.member_key(g.links[i].member)));
-            let Inner { id, links, meta, inbox, .. } = &mut *g;
-            let Link { sess, rtc, member, peer, .. } = &mut links[i];
-            // Our reply (IK message 2) goes to this new stream.
-            let mut out = Out { rtc: rtc.as_ref(), tor: Some(&wire), meta, inbox, peer, link: next, member: *member };
-            let allow = |k: &PeerId| pinned.is_none_or(|p| p == Some(*k));
-            if sess.tor_accept(id, now, &buf[2..2 + n], allow, &mut |e| on_event(&mut out, e)) == Ok(true) {
-                taken = Some(i);
-                break;
+        // Every chat's waiting Tor links, the loaded chat first.
+        let (ids, count) = g.chat_ids();
+        'chats: for &c in &ids[..count] {
+            g.focus(c);
+            for i in 0..g.links.len() {
+                if !g.links[i].sess.tor() {
+                    continue;
+                }
+                // A link to a room member takes only the key the signed state names (§14.4).
+                let pinned = g.links[i].via_owner.then(|| g.room.as_ref().and_then(|r| r.member_key(g.links[i].member)));
+                let Inner { id, links, meta, inbox, .. } = &mut *g;
+                let Link { sess, rtc, member, peer, .. } = &mut links[i];
+                // Our reply (IK message 2) goes to this new stream.
+                let mut out = Out { rtc: rtc.as_ref(), tor: Some(&wire), meta, inbox, peer, link: next, member: *member };
+                let allow = |k: &PeerId| pinned.is_none_or(|p| p == Some(*k));
+                if sess.tor_accept(id, now, &buf[2..2 + n], allow, &mut |e| on_event(&mut out, e)) == Ok(true) {
+                    taken = Some(i);
+                    break 'chats;
+                }
             }
         }
         match taken {
@@ -473,8 +478,7 @@ async fn incoming(inner: Shared, s: DataStream) {
     }
     if taken.is_none() {
         let g = inner.borrow();
-        let busy = g.room.is_some() || g.links.iter().any(|l| l.sess.state() != State::Closed);
-        tracing::warn!("tor: an incoming stream matched no chat (busy: {busy}, links: {}); dropped", g.links.len());
+        tracing::warn!("tor: an incoming stream matched no chat ({} chats, signed in: {}); dropped", g.chat_ids().1, g.saved.is_some());
     }
     // A stream for none of our chats is dropped unanswered (§28.4).
     if let Some(lid) = taken {
@@ -494,7 +498,7 @@ pub(crate) fn dial(inner: &Shared, lid: u32, fresh: bool) {
         let mut failed = fresh;
         loop {
             let (tor, onion) = {
-                let g = inner.borrow();
+                let mut g = inner.borrow_mut();
                 let Some(i) = g.find(lid) else { return };
                 if g.links[i].sess.state() == State::Closed {
                     return;

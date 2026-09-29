@@ -1668,7 +1668,7 @@ async function main() {
     const s = codeExpires ? Math.max(0, Math.round((codeExpires - Date.now()) / 1000)) : -1;
     $('expiry').textContent = s >= 0 && !$('v-code').hidden ? `Code expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : '';
   }, 1000);
-  addEventListener('pagehide', () => app.close());
+  addEventListener('pagehide', () => app.close_all());
 
   $('ios-note').hidden = navigator.standalone !== true;
   const build = document.querySelector('meta[name="ephem-build"]')?.content;

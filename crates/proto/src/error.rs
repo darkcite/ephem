@@ -27,6 +27,8 @@ pub enum ErrorCode {
     MessageTooLarge = 0x0041,
     Backpressure = 0x0042,
     NotPermitted = 0x0043,
+    /// The tab already holds the most chats it can (Appendix F.3.2).
+    TooManyChats = 0x0044,
     BrowserUnsupported = 0x0050,
     KeyfileInvalid = 0x0060,
 }
@@ -64,6 +66,7 @@ impl ErrorCode {
             Self::MessageTooLarge => "E_MESSAGE_TOO_LARGE",
             Self::Backpressure => "E_BACKPRESSURE",
             Self::NotPermitted => "E_NOT_PERMITTED",
+            Self::TooManyChats => "E_TOO_MANY_CHATS",
             Self::BrowserUnsupported => "E_BROWSER_UNSUPPORTED",
             Self::KeyfileInvalid => "E_KEYFILE_INVALID",
         }

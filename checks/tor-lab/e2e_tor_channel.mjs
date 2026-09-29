@@ -14,7 +14,7 @@ import * as https from 'node:https';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { PASS, check, finish, launch, problems, watch } from '../e2e_lib.mjs';
-import { T, dumpLogs, record, serveTor, torContext, unexpected } from './tor_env.mjs';
+import { LIVE, T, dumpLogs, record, serveTor, torContext, unexpected } from './tor_env.mjs';
 
 // A stand-in public IPFS gateway (§D.6.2) for the no-Tor reader: it serves what a follower's
 // Kubo mirror would (the CAR and record the reader downloads with "For IPFS (Kubo)").
@@ -121,25 +121,30 @@ try {
   await r.waitForFunction(() => /version 6/.test(document.querySelector('#r-source').textContent), null, { timeout: T });
   check('owner signs the mirror list; the reader sees the new version (and mirrors it)', true, await r.textContent('#r-source'));
 
-  // ---- C-P3: a channel of 1 000 posts over an onion ----
-  const t3 = Date.now();
-  await o.evaluate(() => { for (let i = 1; i <= 1000; i++) globalThis.ephemChannel.post(`bulk post ${i}`, 0); });
-  const ownerMs = Date.now() - t3;
-  const size = await o.evaluate(() => globalThis.ephemChannel.car().length);
-  const t4 = Date.now();
-  await r.click('#b-refresh');
-  await r.waitForFunction(() => document.querySelectorAll('#r-posts li').length >= 1003, null, { timeout: T });
-  check('C-P3: 1 000 more posts; a reader fetches and verifies them over the onion', true,
-    `owner ${ownerMs} ms for 1 000 posts, CAR ${Math.round(size / 1024)} KB; reader ${Date.now() - t4} ms (fetch + verify + render)`);
+  // C-P3 and IPNS publishing drive the page through the lab hook and the lab's stand-in
+  // routing host: lab only.
+  if (!LIVE) {
+    // ---- C-P3: a channel of 1 000 posts over an onion ----
+    const t3 = Date.now();
+    await o.evaluate(() => { for (let i = 1; i <= 1000; i++) globalThis.ephemChannel.post(`bulk post ${i}`, 0); });
+    const ownerMs = Date.now() - t3;
+    const size = await o.evaluate(() => globalThis.ephemChannel.car().length);
+    const t4 = Date.now();
+    await r.click('#b-refresh');
+    await r.waitForFunction(() => document.querySelectorAll('#r-posts li').length >= 1003, null, { timeout: T });
+    check('C-P3: 1 000 more posts; a reader fetches and verifies them over the onion', true,
+      `owner ${ownerMs} ms for 1 000 posts, CAR ${Math.round(size / 1024)} KB; reader ${Date.now() - t4} ms (fetch + verify + render)`);
 
-  // ---- optional IPNS publishing through a Tor exit (§D.5.2) ----
-  await o.click('#b-publish');
-  await o.waitForFunction(() => /published|failed/.test(document.querySelector('#publish-state').textContent), null, { timeout: T });
-  const put = routed[0];
-  const ownRecord = Buffer.from(await o.evaluate(() => Array.from(globalThis.ephemChannel.record())));
-  check('owner publishes the IPNS record through a Tor exit (HTTPS PUT, routing API)',
-    /published/.test(await o.textContent('#publish-state')) && put?.method === 'PUT' && put.url === `/routing/v1/ipns/${link.match(/#c=([^&]+)/)[1]}` && put.type === 'application/vnd.ipfs.ipns-record' && put.body.equals(ownRecord),
-    await o.textContent('#publish-state'));
+    // ---- optional IPNS publishing through a Tor exit (§D.5.2) ----
+    await o.click('#b-publish');
+    await o.waitForFunction(() => /published|failed/.test(document.querySelector('#publish-state').textContent), null, { timeout: T });
+    const put = routed[0];
+    const ownRecord = Buffer.from(await o.evaluate(() => Array.from(globalThis.ephemChannel.record())));
+    check('owner publishes the IPNS record through a Tor exit (HTTPS PUT, routing API)',
+      /published/.test(await o.textContent('#publish-state')) && put?.method === 'PUT' && put.url === `/routing/v1/ipns/${link.match(/#c=([^&]+)/)[1]}` && put.type === 'application/vnd.ipfs.ipns-record' && put.body.equals(ownRecord),
+      await o.textContent('#publish-state'));
+
+  }
 
   // ---- the owner's store survives a reload; the backup exports ----
   await o.reload();
@@ -159,12 +164,15 @@ try {
   gw.car = fs.readFileSync(await dc.path());
   gw.record = fs.readFileSync(await dr.path());
   check('Kubo mirror instructions and downloads', /ipfs dag import channel\.car/.test(await r.textContent('#kubo-cmds')) && gw.car.length > 1000);
-  const g = await page('gateway-reader', { gateway: `${base.replace('/app', '')}/gw` });
-  await g.goto(link.replace(/&o=.*$/, ''));
-  await g.waitForSelector('#gateway-warn:not([hidden])', { timeout: 30_000 });
-  await g.click('#b-gateway-go');
-  await g.waitForFunction(() => /through the public gateway/.test(document.querySelector('#r-source').textContent), null, { timeout: 30_000 });
-  check('without Tor: read and verified through a public gateway (IP warning shown first)', (await posts(g)).includes('third post'));
+  // The gateway stand-in is the lab's (LIVE would need a real IPFS mirror of this channel).
+  if (!LIVE) {
+    const g = await page('gateway-reader', { gateway: `${base.replace('/app', '')}/gw` });
+    await g.goto(link.replace(/&o=.*$/, ''));
+    await g.waitForSelector('#gateway-warn:not([hidden])', { timeout: 30_000 });
+    await g.click('#b-gateway-go');
+    await g.waitForFunction(() => /through the public gateway/.test(document.querySelector('#r-source').textContent), null, { timeout: 30_000 });
+    check('without Tor: read and verified through a public gateway (IP warning shown first)', (await posts(g)).includes('third post'));
+  }
 
   // ---- owner offline: a new reader gets it from the mirror ----
   await o.close();
