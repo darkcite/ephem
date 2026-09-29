@@ -184,12 +184,14 @@ impl Tor {
         Ok(onion)
     }
 
-    /// The next incoming stream of the chat's onion service.
+    /// The next incoming stream of the chat's onion service. The current service is looked up
+    /// on every poll: after [`Self::host`] replaced it, streams of the new one are taken (and
+    /// no reference keeps the old one alive).
     pub async fn accept(&self) -> DataStream {
         loop {
-            let svc = self.chat.borrow().clone();
-            if let Some(s) = svc {
-                return s.accept().await;
+            let next = self.chat.borrow().as_ref().and_then(|s| s.try_accept());
+            if let Some(s) = next {
+                return s;
             }
             rt::sleep_ms(50).await;
         }
@@ -212,11 +214,16 @@ impl Service {
     /// The next incoming stream.
     pub async fn accept(&self) -> DataStream {
         loop {
-            if let Some(s) = self.incoming.borrow_mut().pop_front() {
+            if let Some(s) = self.try_accept() {
                 return s;
             }
             rt::sleep_ms(50).await;
         }
+    }
+
+    /// An incoming stream, if one is waiting.
+    pub fn try_accept(&self) -> Option<DataStream> {
+        self.incoming.borrow_mut().pop_front()
     }
 }
 

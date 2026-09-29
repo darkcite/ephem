@@ -11,7 +11,11 @@
 //!
 //! Setup/UI path throughout (posting and reading are human-paced); the copies are of public
 //! data: a response is built in full, then written to the stream.
+// Browser-only (it drives the embedded Tor client's page runtime); empty on native targets,
+// so `cargo test --workspace` builds.
+#![cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 
+mod https;
 mod json;
 
 use ephem_channel::car;
@@ -274,6 +278,28 @@ impl ChannelApp {
         Ok(onion)
     }
 
+    /// Publishes the open channel's record to the IPFS routing network (§D.5.2, optional):
+    /// `PUT https://delegated-ipfs.dev/routing/v1/ipns/<name>` **through a Tor exit**, so the
+    /// owner stays hidden. It only matters if some IPFS node holds the content (a follower's
+    /// Kubo mirror). `host`/`extra_root`: the lab's stand-in; the page passes the real host.
+    pub fn publish_ipfs(&self, host: &str, extra_root: &[u8]) -> Result<js_sys::Promise, JsValue> {
+        let (tor, name, record) = {
+            let st = self.st.borrow();
+            let own = st.own.as_ref().ok_or_else(|| err("no channel open"))?;
+            (st.tor.clone().ok_or_else(|| err("Tor is not started"))?, own.hosted.borrow().name.to_text(), own.record.clone())
+        };
+        let (host, root) = (host.to_owned(), extra_root.to_vec());
+        Ok(wasm_bindgen_futures::future_to_promise(async move {
+            let path = format!("/routing/v1/ipns/{name}");
+            let status = with_timeout(FETCH_TIMEOUT_MS, https::put(&tor, &host, &path, gateway::CT_RECORD, &record, &root)).await.map_err(err)?;
+            if (200..300).contains(&status) {
+                Ok(JsValue::from(status))
+            } else {
+                Err(err(format!("the routing service answered {status}")))
+            }
+        }))
+    }
+
     // ---- readers and mirrors ----
 
     /// Reads channel `name` over Tor from the first onion (comma-separated: owner, mirrors) that
@@ -308,6 +334,14 @@ impl ChannelApp {
             }
             Err(err(last))
         }))
+    }
+
+    /// The root CID (`bafy…`) a record names, after verifying it for `name` (a public
+    /// gateway read: the page fetches the record, then the CAR of this root).
+    pub fn record_root(&self, name: &str, record: &[u8]) -> Result<String, JsValue> {
+        let name = Cid::parse(name).ok_or_else(|| err("not a channel name"))?;
+        let rec = ipns::verify(&name, record, now_s()).map_err(|e| err(format!("record: {e:?}")))?;
+        rec.value.strip_prefix("/ipfs/").filter(|r| Cid::parse(r).is_some()).map(str::to_owned).ok_or_else(|| err("record value"))
     }
 
     /// Verifies a record and a CAR fetched by the page (a public gateway, an imported file).

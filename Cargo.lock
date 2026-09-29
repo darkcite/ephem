@@ -1194,10 +1194,13 @@ dependencies = [
  "ephem-crypto",
  "ephem-tor",
  "futures",
+ "futures-rustls",
  "js-sys",
+ "rustls-pki-types",
  "tracing",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "webpki-roots",
  "zeroize",
 ]
 
@@ -2867,7 +2870,7 @@ dependencies = [
  "derive-deftly",
  "libc",
  "paste",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3814,7 +3817,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -5518,6 +5521,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6ab47578e1cd38415489592da29326341e272bd281f4ddbc0c10b654a425ad7"
 dependencies = [
  "web-time",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]

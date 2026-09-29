@@ -6,8 +6,8 @@
 |---|---|
 | Product | **Ephem** |
 | Document | The **single** project document. It replaces the earlier SPEC, REVIEW, plans and spike notes (all merged here on 2026-09-28) |
-| Spec level | v1.0 (see the decision log, §25) |
-| Status | MVP-1, MVP-2 and MVP-3 built and tested end to end. **Tor mode (TOR-1…TOR-4) built and tested end to end in an offline Tor lab** (1:1, contacts, rooms; §24.2). Gate G2 passed on desktop and iOS; G3/G4 pass in the lab and still need the live Tor network on the owner's devices (§23.3) |
+| Spec level | v1.1 (see the decision log, §25) |
+| Status | MVP-1…MVP-3, **Tor mode (TOR-1…TOR-4, also on the real Tor network and laptop ↔ iPhone)**, **contact cards** and **public channels (CH-1…CH-5, offline Tor lab)** built and tested end to end (§24.2). Open: iOS memory under Tor (G4), live runs of channels and cards, C-P5 on each browser |
 | Deployment | GitHub Pages, project site `https://<owner>.github.io/ephem/` |
 | Runtime | Browser PWA. **Only our WASM app is built: no native programs (P10)** |
 | Implementation | Rust (edition 2024) → `wasm32-unknown-unknown` |
@@ -41,7 +41,8 @@ Keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are used as defined in R
 | Built (MVP-2) | **MVP-2 feature-complete, 18/18 end-to-end checks** (APP-E2E-MVP2, §24.2): up to 8 remembered identities (IndexedDB) with sign-in from the list; nicknames; contacts in the key file (verified by SAS, SAS skipped next time, impersonation warning, backup-out-of-date notice); reactions; identity transfer to another device over P2P; in-band ICE restart T1 (perfect negotiation, triggered by a stuck path, a network change or by hand); full diagnostics. 40 native unit tests |
 | Built (MVP-3) | **Rooms, 18/18 end-to-end checks with four browsers** (APP-E2E-ROOM, §24.2): owner-controlled rooms of up to 16 with member and **observer** roles; the owner-signed room state (Ed25519) verified by every member; introductions through the owner with **sealed** signalling (the owner forwards what it cannot read); full mesh; one sequence number per sender on every link; sender labels, replies across members, delivery "✓ k/N"; owner moderation and room timer; removal, leaving, disposal; **T2** (lost member links come back by themselves through the owner). 225 KB gzip wasm. 46 native unit tests |
 | Built (Tor) | **Tor mode, in the offline lab** (`checks/tor-lab/`: private Tor network + the real Go Snowflake broker, proxy and server): Snowflake client in Rust (Turbotunnel, KCP, smux; 10 MB interop with the Go server, fuzzed); arti in the page over Snowflake; **onion service hosted from a tab**; `app/tor.html` with the Tor build of the app. **1:1 chat over Tor 18/18** (APP-E2E-TOR: one-way TOR_INVITE, Noise IK, same SAS, chat, receipts, stream loss → redial, contacts connect with no code) and **rooms over Tor 9/9** (APP-E2E-TOR-ROOM: owner + 2 members, introductions onion to onion, redial). Bootstrap 5.8 s in the lab; Tor build 2.08 MB gzip |
-| Next | 1. **Live Tor network on the owner's laptop and iPhone** (T-10: G3 bootstrap times, G4 memory on iOS), then merge to `main`, public repo and Pages (§23.1a: only once Tor is fully implemented, owner decision 2026-09-28). 2. Tor leftovers: card-based dial (needs CARDS); AMP-cache rendezvous (optional: the CDN URL already covers a blocked broker name). 3. Device runs of the room flow (S9). Camera/QR work waits until Tor is in (owner decision) |
+| Built (cards, channels) | **Contact cards** (§7.5): QR/`#k=` card, add from a card, reset, first Tor chat through a card with the host's accept prompt (APP-E2E-CARDS 8/8, APP-E2E-TOR-CARDS 6/6 ×4). **Public channels** (§27, App. D): `crates/channel` (CIDv1, strict DAG-CBOR, CAR, IPNS V2; the js-ipns reference validator accepts our records), `channel.html` + its own build (owner, onion gateway from the tab, reader over Tor or a public gateway, mirrors, IPNS publish through a Tor exit): APP-E2E-TOR-CHANNEL 14/14 in the lab, C-P3 1 000 posts read in 0.4 s |
+| Next | 1. Owner's live runs: `ONLY=tor ./checks/run_all.sh` now includes cards and channels; iPhone memory under Tor (G4); C-P5 (OPFS quota) per browser. 2. Then merge to `main`, public repo and Pages (§23.1a: once everything planned is implemented, owner decision 2026-09-29). 3. Device runs of the room flow (S9). Camera/QR work after the merge (owner decision) |
 | Blocked on devices | S3, S6, S7, S9 (phones, real networks) |
 
 ---
@@ -181,6 +182,8 @@ ephem/
 │   │   ├── room.rs                 # rooms: owner-signed state, introductions, T2 (§14)
 │   │   ├── tor.rs                  # Tor build only (feature `tor`): chat links over Tor streams, onion service (§28)
 │   │   └── (key files, contacts, transfer in lib.rs; IndexedDB slots ≤ 8 in app/slots.js: it stores only the encrypted key file)
+│   ├── channel/                    # public channels, sans-IO: CIDv1, DAG-CBOR, CAR, IPNS V2, signed blocks, gateway (§27)
+│   ├── channel-web/                # channel.html's wasm: owner, onion gateway, reader, mirrors (Tor inside)
 │   ├── snowflake/                  # sans-IO Snowflake client: Turbotunnel, encapsulation, KCP, smux (§28.3)
 │   └── tor/                        # arti in the page: runtime shim, Snowflake carrier, bridge-as-TCP, TLS (§28.3)
 ├── vendor/                         # four arti 0.46 crates with small wasm-only patches (vendor/README.md)
@@ -1068,7 +1071,7 @@ Members     4 / 8  (links 5 / 6)
 | **TOR-2** | Tor mode for 1:1: transport guard, TOR_INVITE (one-way), Noise IK, stream framing, "VIA TOR" UI | TOR-1. **Built (lab)** |
 | **TOR-3** | Contacts reconnect through stable onion addresses (no QR); card-based Tor dial | TOR-2, CARDS. **Built** |
 | **TOR-4** | Rooms over Tor | TOR-3, MVP-3. **Built (lab)** |
-| **CH-1…CH-5** | Public channels with a Tor-only owner, hosted from the owner's tab (Appendix D) | TOR-1, E8 |
+| **CH-1…CH-5** | Public channels with a Tor-only owner, hosted from the owner's tab (Appendix D) | TOR-1, E8. **Built (lab)**: APP-E2E-TOR-CHANNEL 14/14 |
 | **Deferred** | Wallet authentication; peer forwarding of chat; file transfer; voice and video; rooms larger than 16 | — |
 
 ### 23.1a Release and site layout
@@ -1081,6 +1084,7 @@ Members     4 / 8  (links 5 / 6)
   | `/` | **Landing page** (static HTML, no scripts needed): **Ephem**: what the messenger is, how a chat starts (two codes, in person or by link), what is and is not protected (§21), supported browsers, and a prominent **Start** link to `/app/` |
   | `/app/` | The PWA: `index.html`, `app.js` (DOM glue only), `app.css`, `sw.js`, `manifest.webmanifest`, `icons/`, `pkg/ephem.js` + `pkg/ephem_bg.wasm` (built and stamped by `./build.sh`, committed) (§4.1) |
   | `/app/tor.html` | Tor-mode entry (§28.2, §28.6): generated from `index.html` by `tools/stamp.py`, loads `pkg/ephem_tor.js` + `pkg/ephem_tor_bg.wasm` |
+  | `/app/channel.html` | Public channels (§27): owner and reader page, `channel.js` + `pkg/ephem_channel_bg.wasm`; readers open `channel.html#c=<name>&o=<onion>[,<mirror>…]` |
   | `/checks/web/` | The checkpoint page (§24) |
   | `/docs/P2P-CHAT.md` | This document |
 
@@ -1090,17 +1094,17 @@ Members     4 / 8  (links 5 / 6)
 
 The owner's decision: implement CARDS and CH-1…CH-5, then merge (§23.1a). Each step ends with its proof, a commit and a status line in §24.2.
 
-| # | Work | Proof |
-|---|---|---|
-| K-1 | `proto::card`: CONTACT_CARD (kind 6) codec, strict; `#k=` links | unit tests (round trip, truncation, bad nickname) |
-| K-2 | Key file TLV 0x04 CARD (secret, expiry) kept with the contacts; contact entries gain flag bit3 + the 16-byte `card_secret` of the card they were added from (used for the first Tor dial only) | crypto tests (round trip, reset) |
-| K-3 | Core: contact dial carries a `card_secret` instead of the zero `invite_id`; the host accepts it only if it equals its current, unexpired secret, from any key (case 3 of §28.4) | core test (card accept, wrong/expired secret refused) |
-| K-4 | Adapter + UI: "My contact card" (QR/link, expiry 30 days or never, reset), "Add from card" (unverified contact, suggested nickname), Tor "Connect" to a card contact, the host's prompt "X (from your contact card) wants to connect" (accept = contact saved, decline = closed); direct mode: the card only pins key and nickname | e2e direct (add from card, impersonation warning, SAS then ✔) and Tor lab (first dial via card, prompt, later contact dials) |
-| C-1 | `crates/channel` (sans-IO): channel keys (§D.3), dag-cbor subset, CIDv1 (sha2-256), CAR v1 read/write, IPNS V2 record create/verify (protobuf + dag-cbor data + Ed25519 V2 signature), manifest/page/post blocks and their signatures | unit tests; IPNS record verified against a record produced by the Go reference (boxo) as a test vector; CAR read back |
-| C-2 | Channel store in OPFS (`channels/<name>/`, `persist()`), CAR export/import; an HTTP/1.1 read-only gateway subset (`/ipfs/<cid>?format=car|raw`, `/ipns/<name>?format=ipns-record`) served on the channel onion from the tab (a second onion service: C-P2) | e2e in the lab: a second browser fetches and verifies the channel over the onion |
-| C-3 | `channel.html` (own CSP, own Tor build `ephem_channel`): owner creates a channel (warnings of §D.3), posts, deletes; optional IPNS PUT to `delegated-ipfs.dev` through a Tor exit | e2e lab: create, post 3, delete 1, record sequence grows |
-| C-4 | Reader: `channel.html#c=…&o=…` over Tor; without Tor, through `trustless-gateway.link` for IPFS-mirrored channels; high-water mark of the record sequence | e2e lab reader; C-P3 (1 000 posts) timing |
-| C-5 | Mirrors: "Mirror this channel" into OPFS and serve it on the follower's mirror onion, refresh every 10 min (higher sequence only); signed mirror list in the manifest; Kubo instructions + CAR/record download | e2e lab: owner offline, reader reads from the mirror |
+| # | Work | Proof | |
+|---|---|---|---|
+| K-1 | `proto::card`: CONTACT_CARD (kind 6) codec, strict; `#k=` links | unit tests (round trip, truncation, bad nickname) | ✅
+| K-2 | Key file TLV 0x04 CARD (secret, expiry) kept with the contacts; contact entries gain flag bit3 + the 16-byte `card_secret` of the card they were added from (used for the first Tor dial only) | crypto tests (round trip, reset) | ✅
+| K-3 | Core: contact dial carries a `card_secret` instead of the zero `invite_id`; the host accepts it only if it equals its current, unexpired secret, from any key (case 3 of §28.4) | core test (card accept, wrong/expired secret refused) | ✅
+| K-4 | Adapter + UI: "My contact card" (QR/link, expiry 30 days or never, reset), "Add from card" (unverified contact, suggested nickname), Tor "Connect" to a card contact, the host's prompt "X (from your contact card) wants to connect" (accept = contact saved, decline = closed); direct mode: the card only pins key and nickname | e2e direct (add from card, impersonation warning, SAS then ✔) and Tor lab (first dial via card, prompt, later contact dials) | ✅
+| C-1 | `crates/channel` (sans-IO): channel keys (§D.3), dag-cbor subset, CIDv1 (sha2-256), CAR v1 read/write, IPNS V2 record create/verify (protobuf + dag-cbor data + Ed25519 V2 signature), manifest/page/post blocks and their signatures | unit tests; IPNS record verified against a record produced by the Go reference (boxo) as a test vector; CAR read back | ✅
+| C-2 | Channel store in OPFS (`channels/<name>/`, `persist()`), CAR export/import; an HTTP/1.1 read-only gateway subset (`/ipfs/<cid>?format=car|raw`, `/ipns/<name>?format=ipns-record`) served on the channel onion from the tab (a second onion service: C-P2) | e2e in the lab: a second browser fetches and verifies the channel over the onion | ✅
+| C-3 | `channel.html` (own CSP, own Tor build `ephem_channel`): owner creates a channel (warnings of §D.3), posts, deletes; optional IPNS PUT to `delegated-ipfs.dev` through a Tor exit | e2e lab: create, post 3, delete 1, record sequence grows | ✅
+| C-4 | Reader: `channel.html#c=…&o=…` over Tor; without Tor, through `trustless-gateway.link` for IPFS-mirrored channels; high-water mark of the record sequence | e2e lab reader; C-P3 (1 000 posts) timing | ✅
+| C-5 | Mirrors: "Mirror this channel" into OPFS and serve it on the follower's mirror onion, refresh every 10 min (higher sequence only); signed mirror list in the manifest; Kubo instructions + CAR/record download | e2e lab: owner offline, reader reads from the mirror | ✅
 
 ### 23.2 Order of work
 
@@ -1187,7 +1191,10 @@ Legend: ✅ passed · ⚠️ caveat · ❌ failed · 🔬 established from sourc
 | APP-E2E-TOR-ROOM | Do rooms work over Tor? | ✅ **Lab, Chromium, 9/9** (`checks/tor-lab/e2e_tor_room.mjs`, three browsers): owner invites B and C with TOR_INVITEs (no answer box); **B and C are introduced by the owner and connect onion to onion**; no IP-exposure prompt; a member's message reaches everyone; a member's links dropped → redialled, queued message delivered | 🤖 lab | §28.7 |
 | E8 | Does a hidden desktop tab with an open DataChannel keep its timers? | ✅ **Chrome 153: yes** (604 s hidden, max gap 2.0 s). ✅ **Firefox 142: yes** (611 s hidden, max gap 1.5 s). ❌ **Safari 26.5: no**, confirmed twice (198 s hidden → 103 s gap; 604 s hidden → **150 s gap**). **Consequences:** (1) Tor mode and channel hosting (§27, §28) stay reachable from a background tab in Chrome and Firefox, but **not in Safari**, where the UI says "keep this tab visible" and recommends Chrome or Firefox for channel owners; (2) app-level PING timing tolerates throttled peers (§12) | 🤖 (E8=1) / E8REAL=1 | §12, §27, §28.3 |
 | C-P1 | Gateways: trustless CAR with CORS | ✅ `trustless-gateway.link`: CAR served to Chrome, Safari and iPhone (119 874 B), CORS `*`. **Resolved:** `ipfs.io` and `dweb.link` answer trustless requests with a **301 redirect to `trustless-gateway.link` that has no CORS header**, so browsers refuse it. They are aliases, not independent gateways. **Default list: `trustless-gateway.link` only** (one operator: availability risk, §D.6.3) | 🤖 | App. D |
-| C-P2, C-P3, C-P5 | Two onions in one tab; loading 1 000 posts; OPFS quota | ⏳ after TOR-1 | — | App. D |
+| APP-E2E-TOR-CHANNEL | Do public channels work end to end? | ✅ **Lab, 14/14** (`checks/tor-lab/e2e_tor_channel.mjs`, four browsers): owner signs in on `channel.html` with a remembered identity; warnings must be acknowledged; creates a channel, 3 posts, 1 deleted; online on its own onion (~5 s); a reader verifies it over Tor (newest first, deleted shown); the reader mirrors it on a second onion; the owner signs the mirror list, the reader gets version 6; **C-P3**: 1 000 more posts, read in 0.4 s; **IPNS record published through a Tor exit** (HTTPS PUT to a stand-in routing server with its own CA, body = the record); the owner's store survives a reload; backup exports; Kubo instructions and downloads; **without Tor**, read through a (stand-in) public gateway after the IP warning; **owner offline: a new reader gets it from the mirror** (6–23 s); no CSP violations | 🤖 lab | §27, App. D |
+| CH-INTEROP | Are our channel formats what IPFS software expects? | ✅ **6/6** (`checks/channel_interop.mjs`): the name is a libp2p-key CIDv1 (`k51…`); **the js-ipns reference validator accepts our records** (V1 + V2 fields); the record points at the CAR's root; every block hashes to its CID and decodes as strict DAG-CBOR in `cborg` | 🤖 | App. D |
+| C-P2, C-P3 | Two onions in one tab; 1 000 posts | ✅ (App. D.10) | 🤖 lab | App. D |
+| C-P5 | OPFS quota and eviction with `persist()` | ⏳ per browser, on devices | ✋ | App. D |
 | C-P4 | Republishing signed IPNS records; browser PUT | ✅ **Live:** Chrome, Safari and **iPhone** `PUT` a signed record to `delegated-ipfs.dev` (200), and `trustless-gateway.link` serves back the **identical 397-byte record**. Kubo `name put` also accepts third-party records (source) | 🤖 | App. D |
 
 **The offline Tor lab** (`checks/tor-lab/lab.sh up`, Appendix C.5) stands in for the Tor network, which this container cannot reach; the live-network runs are T-10.
@@ -1242,6 +1249,7 @@ The v0.1 points that were **confirmed** are kept throughout: principles P1–P9,
 | v1.0 | After the first live run: **both Snowflake bridges** (snowflake-01 `2B28…`, snowflake-02 `8838…`, placeholder addresses 192.0.2.3/192.0.2.4, one warm-proxy pool of 2 each); a proxy is replaced after **4 s without data while ours is unacknowledged** (20 s when idle), before arti's 10 s directory read timeout; directory snapshots are gzip-compressed JSON (the real directory is ~40 MB of text) | §28.3, App. C.5 |
 | v1.0 | After the second live run: a new Snowflake proxy **resends everything in flight at once** and restarts KCP's backoff and dead-link count (`Kcp::new_path`); without it a backed-off timer left the new proxy silent, the 4 s stall rule replaced it too, and proxies churned every few seconds. Dial attempts time out after 30 s (live dials take 2–13 s) | App. C.5 |
 | v1.0 | Tor links: **45 s without anything from the peer = lost** (peers PING every 15 s when idle); the dialler redials on fresh circuits at once. The Snowflake stall rule is timed from our send, not from the last byte received (the old rule replaced healthy idle proxies at every keep-alive: 58 switches in one live run) | §28.5, App. C.5 |
+| v1.1 | **Contact cards:** the card's secret travels in the Noise IK payload where a contact dial sends a zero `invite_id`; a contact added from a card keeps the secret (entry flag bit3) only until its first connection; the host shows no chat content before its user accepts. **Channels:** own page and build; IPNS `sequence` = revision (grows on every change); HTTP/1.1 on onion port 80; a reader accepts a response once `Content-Length` bytes arrived (arti ends streams with reason MISC); stable per-browser mirror onions; one channel per identity for now | §7.5, §28.4, §27, App. D |
 | v1.0 | Streams naming nothing of ours are dropped unanswered (no `E_NOT_A_CONTACT` is sent: nothing is told to an unknown dialler) | §28.4 |
 | v0.7 | "Simulate network loss" in the diagnostics drops the path without GOODBYE, so users (and the e2e test) can exercise T3; in a room (v0.9) it drops the member's links to other members, exercising T2 | §13, §18 |
 
@@ -1274,6 +1282,7 @@ None.
   - The channel's keys and onion address are derived one-way and are **not linked** to the owner's chat identity. The owner is known only if they say so in the channel.
 - **Content format:** IPFS-native (CIDs, dag-cbor, CAR, IPNS V2 records), verified in Rust. Followers may mirror a channel over their own onion, or, accepting that their own IP becomes visible, to public IPFS. That is what lets readers without Tor read it through public gateways.
 - Details and phases: Appendix D.
+- **As built (v1.1):** `app/channel.html` + `channel.js` with its own wasm (`pkg/ephem_channel_bg.wasm`, crate `channel-web`: `crates/channel` + the embedded Tor client; 2.05 MB gzip), its own CSP (Snowflake broker and CDN, `trustless-gateway.link` for readers without Tor) and no chat code. One channel per identity (index 0). Details under each part of Appendix D ("As built").
 
 ## 28. Tor mode (a second, separate transport, built into the WASM app)
 
@@ -1641,6 +1650,8 @@ Normative summary: §27. **This depends on Tor mode passing gates G2–G4.**
    - `GET /ipns/<name>?format=ipns-record`.
 3. **Readers** use the same verifying client as for a public gateway. The "gateway" is the owner's `.onion` (or a mirror's), reached through the reader's embedded Tor.
 
+**As built:** the owner's store is OPFS `channels/<name>/{channel.car, record.bin}` (IndexedDB where OPFS files cannot be written), rewritten after every change; `persist()` is requested when a channel is created. "Export backup" downloads both files; "restore from a backup" reopens them (the record's root must be the CAR's). The gateway is plain HTTP/1.1 on port 80 of the onion, one request per stream (`Connection: close`), served by `crates/channel::gateway` (sans-IO, unit-tested): `ipns-record`, `car` (the DAG under any held CID) and `raw`; everything else 404/405/406/431. A tab runs several onion services side by side (`Tor::launch`: the channel's, each mirror's).
+
 ### D.3 Identity separation (D4)
 
 - Channel signing key = `HKDF(seed, "p2pchat/channel/" ‖ u32 index)` (Ed25519). The IPNS name is that key.
@@ -1669,10 +1680,12 @@ Normative summary: §27. **This depends on Tor mode passing gates G2–G4.**
 
 Deleting a post rewrites it with `deleted = true` and an empty body. Older copies may survive on mirrors, and the UI says so before the first post.
 
+**As built:** manifest `{v: 1, title, about, pk, created, mirrors, sig}`, post `{seq, ts, body, reply (0 = none), deleted, sig}`, page `{posts: [≤ 64 posts, oldest first], prev}`, root `{manifest, head, count, updated}`; signatures are Ed25519 over `"ephem-channel-manifest:" | "ephem-channel-post:" ‖ dag-cbor(the map without sig)`. DAG-CBOR is canonical (keys by length, then bytes) and decoding is strict (non-canonical input is refused), so hashes and signatures always refer to the same bytes. A post is signed once and cached (1 000 posts build in ~1 s in the browser).
+
 #### D.5.2 Posting (the owner's desktop tab, Tor session)
 
 1. Sign the post, then rebuild the head page and the root.
-2. Write the changed blocks and the new IPNS V2 record (`sequence = count`, `validity = now + 30 days`, `ttl = 60 s`) to OPFS.
+2. Write the changed blocks and the new IPNS V2 record (`sequence` = the next revision: it grows on **every** change, deletions and mirror lists included, `validity = now + 30 days`, `ttl = 60 s`) to OPFS.
 3. Serve them on the onion address at once.
 4. Optionally publish the record through a **Tor exit stream** to `https://delegated-ipfs.dev/routing/v1/ipns/<name>` (`PUT`, CORS `*`, spike C-P4). This makes the name resolvable on the public IPFS network **without revealing the owner**. It only matters if some IPFS mirror holds the content.
 
@@ -1712,6 +1725,7 @@ https://<owner>.github.io/ephem/channel.html#c=<ipns-name>&o=<channel-onion>[&m=
 
 - **Mirror this channel** copies and verifies the channel into the follower's OPFS (`mirrors/<name>/`).
 - While the follower's Tor-session tab is open, it serves the channel on the follower's own mirror onion. Every 10 minutes it checks the owner's onion for a newer record, and updates only when the new record verifies with a **higher** sequence.
+- **As built:** the mirror's onion key is a random seed kept in the follower's browser per channel, so the address is stable across visits (and can be in the owner's signed mirror list); the mirrored CAR and record are kept in OPFS `mirrors/<name>/` and served again on the next visit. Readers try every address of the link at once (owner and mirrors) and take the first valid answer, with retries on fresh circuits; they keep a high-water mark of the record sequence per channel (browser storage) and refuse older versions.
 
 #### D.7.2 IPFS mirror (optional; the follower's own third-party software)
 
@@ -1748,11 +1762,11 @@ https://<owner>.github.io/ephem/channel.html#c=<ipns-name>&o=<channel-onion>[&m=
 | ID | Question | Status |
 |---|---|---|
 | C-P1 | Gateways serve CAR and IPNS records with CORS | ✅ `trustless-gateway.link` (live: Chrome, Safari, iPhone). `ipfs.io`/`dweb.link` only redirect there without CORS |
-| C-P2 | A tab hosting 2 onion services at once (the chat onion and one channel onion) | ⏳ (after TOR-1) |
-| C-P3 | Time to load a channel with 1 000 posts over an onion | ⏳ |
+| C-P2 | A tab hosting 2 onion services at once (the chat onion and one channel onion) | ✅ by design and API: chat and channels are separate pages; a channel tab runs its channel's and its mirrors' onions side by side (`Tor::launch`), exercised with one of each per tab in APP-E2E-TOR-CHANNEL |
+| C-P3 | Time to load a channel with 1 000 posts over an onion | ✅ **Lab: 0.4 s** to fetch, verify and render 1 003 posts (CAR 120 KB); the owner builds 1 000 posts in 1.1–1.3 s |
 | C-P4 | Republishing a signed IPNS record without the key | ✅ Live: browser `PUT` to `delegated-ipfs.dev`, read back byte-identical from `trustless-gateway.link` |
 | C-P5 | OPFS quota and eviction with `persist()` on each browser | ⏳ |
-| E8 | A hidden desktop tab with an open DataChannel keeps its timers running | ⏳ |
+| E8 | A hidden desktop tab with an open DataChannel keeps its timers running | ✅ Chrome and Firefox; ❌ Safari (§24.2 E8) |
 
 ## Appendix E: Features considered from Tox/qTox and Telegram
 

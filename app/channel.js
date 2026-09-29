@@ -14,6 +14,10 @@ const SNOWFLAKE = {
   network: '',
 };
 const INDEX = 0; // one channel per identity in this version (§D.3 allows more)
+// Readers without Tor: channels mirrored to public IPFS (§D.6.3). In channel.html's CSP.
+const GATEWAY = 'https://trustless-gateway.link';
+// IPNS publishing (§D.5.2), reached through a Tor exit (not by the page: not in the CSP).
+const ROUTING_HOST = 'delegated-ipfs.dev';
 
 const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder();
@@ -260,17 +264,46 @@ async function read(n, onions) {
     reading = await app.read(n, onions.join(','), highWater(n));
     reading_name = n;
     if (mirroring) await serveMirror(n, reading); // a newer version reached us: mirror it
-    try { localStorage.setItem(hwKey(n), String(reading.sequence)); } catch { /* per-viewer convenience only */ }
-    const v = JSON.parse(reading.json);
-    $('r-title').textContent = v.title;
-    $('r-about').textContent = v.about;
-    $('r-source').textContent = `Verified: signed by the channel key, version ${v.sequence}, updated ${new Date(v.updated * 1000).toLocaleString()}.`;
-    renderPosts($('r-posts'), v, false);
-    status('read', 'ok');
-    error('');
+    showReading(reading, 'through Tor');
   } catch (e) {
     status('unreachable', 'bad');
     error(`The channel is not reachable right now (its owner and mirrors may be offline): ${e?.message || e}`);
+    $('gateway-warn').hidden = false;
+  }
+}
+
+function showReading(r, how) {
+  try { localStorage.setItem(hwKey(reading_name), String(r.sequence)); } catch { /* per-viewer convenience only */ }
+  const v = JSON.parse(r.json);
+  $('r-title').textContent = v.title;
+  $('r-about').textContent = v.about;
+  $('r-source').textContent = `Verified ${how}: signed by the channel key, version ${v.sequence}, updated ${new Date(v.updated * 1000).toLocaleString()}.`;
+  renderPosts($('r-posts'), v, false);
+  status('read', 'ok');
+  error('');
+}
+
+// A public IPFS gateway (§D.6.2): the reader's IP is visible to it (never the owner's); the
+// record and every block are still verified here.
+async function readViaGateway(n) {
+  status('reading through the gateway');
+  try {
+    const gw = globalThis.ephemTorLab?.gateway || GATEWAY;
+    const get = async (path, accept) => {
+      const r = await fetch(gw + path, { headers: { Accept: accept }, signal: AbortSignal.timeout(20_000) });
+      if (!r.ok) throw new Error(`gateway: ${r.status}`);
+      return new Uint8Array(await r.arrayBuffer());
+    };
+    const rec = await get(`/ipns/${n}?format=ipns-record`, 'application/vnd.ipfs.ipns-record');
+    const root = app.record_root(n, rec);
+    const car = await get(`/ipfs/${root}?format=car&dag-scope=all`, 'application/vnd.ipld.car');
+    reading = app.verify(n, rec, car, highWater(n));
+    reading_name = n;
+    showReading(reading, 'through the public gateway');
+    $('gateway-warn').hidden = true;
+  } catch (e) {
+    status('unreachable', 'bad');
+    error(`Not available through the gateway (is it mirrored to IPFS?): ${e?.message || e}`);
   }
 }
 
@@ -362,6 +395,8 @@ async function main() {
       $('kubo').hidden = !$('kubo').hidden;
       $('kubo-cmds').textContent = `ipfs dag import channel.car\nipfs name put --allow-offline ${n} record.bin`;
     };
+    $('b-gateway').onclick = () => { $('gateway-warn').hidden = !$('gateway-warn').hidden; };
+    $('b-gateway-go').onclick = () => readViaGateway(n);
     $('b-dl-car').onclick = () => reading && download(reading.car(), 'channel.car');
     $('b-dl-record').onclick = () => reading && download(reading.record(), 'record.bin');
     await resumeMirror(n, onions);
@@ -376,6 +411,18 @@ async function main() {
   $('b-copy').onclick = () => navigator.clipboard?.writeText($('o-link').value).catch(() => {});
   $('b-export').onclick = () => { download(app.car(), 'channel.car'); download(app.record(), 'record.bin'); };
   $('b-mirrors').onclick = () => change(() => app.set_mirrors($('i-mirrors').value));
+  $('b-publish').onclick = async () => {
+    $('publish-state').textContent = 'publishing through Tor…';
+    try {
+      await torUp;
+      const lab = globalThis.ephemTorLab?.routing; // lab: a stand-in host and its test CA
+      const root = lab ? Uint8Array.from(atob(lab.root), (c) => c.charCodeAt(0)) : new Uint8Array();
+      await app.publish_ipfs(lab?.host || ROUTING_HOST, root);
+      $('publish-state').textContent = `published (version ${JSON.parse(app.view()).sequence})`;
+    } catch (e) {
+      $('publish-state').textContent = `failed: ${e?.message || e}`;
+    }
+  };
   $('f-post').onsubmit = (e) => {
     e.preventDefault();
     const text = $('t-post').value.trim();

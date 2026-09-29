@@ -7,12 +7,11 @@
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 runs it on the real Tor network
 // instead (tor_env.mjs).
 import { PASS, check, finish, launch, msgWith, problems, watch } from '../e2e_lib.mjs';
-import { T, noise, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
+import { T, dumpLogs, record, serveTor, torContext, torReady, unexpected } from './tor_env.mjs';
 
 const srv = await serveTor();
 const base = `http://127.0.0.1:${srv.address().port}/app`;
 const browsers = [];
-const logs = []; // console of every page, printed if the flow fails
 
 /** Saves the tab's identity (contacts need one, §7.5); returns the key text. */
 async function saveIdentity(p, label) {
@@ -32,10 +31,7 @@ async function open(who) {
   const p = await ctx.newPage();
   watch(p, who);
   p.on('dialog', (d) => d.accept(who === 'alice' ? 'Bob' : 'Alice'));
-  p.on('console', (m) => {
-    logs.push(`  ${who} | ${m.text()}`);
-    if (process.env.VERBOSE && !noise(m.text())) console.log(`  ${who} |`, m.text());
-  });
+  record(p, who);
   await p.goto(`${base}/tor.html`);
   return p;
 }
@@ -175,7 +171,7 @@ try {
   for (const b of browsers) for (const c of b.contexts()) for (const p of c.pages()) {
     console.log('  tor state:', await p.textContent('#tor-state').catch(() => '?'), '| status:', await p.textContent('#status').catch(() => '?'));
   }
-  if (!process.env.VERBOSE) console.log(logs.slice(-60).join('\n'));
+  dumpLogs(60);
 } finally {
   for (const b of browsers) await b.close();
   srv.close();

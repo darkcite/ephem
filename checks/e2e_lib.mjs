@@ -11,9 +11,12 @@ export const PASS = 'correct horse battery staple';
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml',
   '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
 
-/** Serves the repository root on 127.0.0.1. `rewrite(pathname, body)` may alter a text file. */
-export function serve(rewrite = null) {
+/** Serves the repository root on 127.0.0.1. `rewrite(pathname, body)` may alter a text file;
+ *  `route(url)` may answer a request itself (`{ type, body }`, or null to fall through). */
+export function serve(rewrite = null, route = null) {
   const srv = http.createServer((q, r) => {
+    const own = route?.(new URL(q.url, 'http://x'));
+    if (own) { r.writeHead(own.status || 200, { 'content-type': own.type, 'cache-control': 'no-store' }); r.end(own.body); return; }
     let p = decodeURIComponent(new URL(q.url, 'http://x').pathname);
     if (p.endsWith('/')) p += 'index.html';
     const f = path.join(ROOT, path.normalize(p));

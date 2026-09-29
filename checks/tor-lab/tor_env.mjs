@@ -31,15 +31,15 @@ function labConfig() {
 const lab = LIVE ? null : labConfig();
 
 /** Static server of the repository, with tor.html's CSP pointed at the lab broker (lab only). */
-export function serveTor() {
-  if (LIVE) return serve();
+export function serveTor(route = null) {
+  if (LIVE) return serve(null, route);
   const origins = `${DEAD_BROKER} ${new URL(lab.labBroker).origin}`;
-  return serve((p, read) => (/\/(tor|channel)\.html$/.test(p) ? read().replace('https://snowflake-broker.torproject.net', origins) : null));
+  return serve((p, read) => (/\/(tor|channel)\.html$/.test(p) ? read().replace('https://snowflake-broker.torproject.net', origins) : null), route);
 }
 
 /** Prepares a browser context for tor.html (the lab settings, unless LIVE). */
-export async function torContext(ctx) {
-  if (lab) await ctx.addInitScript((c) => { globalThis.ephemTorLab = c; }, lab);
+export async function torContext(ctx, extra = {}) {
+  if (lab) await ctx.addInitScript((c) => { globalThis.ephemTorLab = c; }, { ...lab, ...extra });
   else if (process.env.TOR_LOG) await ctx.addInitScript((l) => { globalThis.ephemTorLog = l; }, process.env.TOR_LOG);
   return ctx;
 }

@@ -168,20 +168,22 @@ fi
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_app.mjs" 2>&1 | tee "$OUT/app-e2e.log"
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_mvp2.mjs" 2>&1 | tee "$OUT/app-e2e-mvp2.log"
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_room.mjs" 2>&1 | tee "$OUT/app-e2e-room.log"
-{ echo "## App"; echo; echo "Native tests: $NT"; echo; echo "### MVP-1"; echo '```'; cat "$OUT/app-e2e.log"; echo '```'; echo; echo "### MVP-2"; echo '```'; cat "$OUT/app-e2e-mvp2.log"; echo '```'; echo; echo "### MVP-3 rooms"; echo '```'; cat "$OUT/app-e2e-room.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
+E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_cards.mjs" 2>&1 | tee "$OUT/app-e2e-cards.log"
+node "$ROOT/channel_interop.mjs" 2>&1 | tee "$OUT/channel-interop.log"
+{ echo "## App"; echo; echo "Native tests: $NT"; echo; echo "### MVP-1"; echo '```'; cat "$OUT/app-e2e.log"; echo '```'; echo; echo "### MVP-2"; echo '```'; cat "$OUT/app-e2e-mvp2.log"; echo '```'; echo; echo "### MVP-3 rooms"; echo '```'; cat "$OUT/app-e2e-room.log"; echo '```'; echo; echo "### Contact cards"; echo '```'; cat "$OUT/app-e2e-cards.log"; echo '```'; echo; echo "### Channel formats vs the JS IPFS libraries"; echo '```'; cat "$OUT/channel-interop.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
 fi
 
 if want tor; then
 say "Tor mode (§28): 1:1 and rooms over Tor in Chrome"
 { echo "## Tor mode"; echo; } >> "$OUT/REPORT.md"
 if [ -f /tmp/ephlab/lab.env ]; then
-  for t in e2e_tor_app e2e_tor_room; do
+  for t in e2e_tor_app e2e_tor_room e2e_tor_cards e2e_tor_channel; do
     E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/$t.mjs" 2>&1 | tee "$OUT/lab-$t.log"
     { echo "### Lab: $t"; echo '```'; cat "$OUT/lab-$t.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
   done
 fi
 if [ "${NET:-1}" != 0 ]; then
-  for t in e2e_tor_app e2e_tor_room; do
+  for t in e2e_tor_app e2e_tor_room e2e_tor_cards e2e_tor_channel; do
     LIVE=1 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/tor-lab/$t.mjs" 2>&1 | tee "$OUT/live-$t.log"
     { echo "### Live Tor network: $t"; echo '```'; cat "$OUT/live-$t.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
   done

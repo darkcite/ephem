@@ -8,17 +8,52 @@
 //   The owner's store survives a reload (OPFS) and the backup (CAR + record) exports.
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network.
+import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as https from 'node:https';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { PASS, check, finish, launch, problems, watch } from '../e2e_lib.mjs';
 import { T, dumpLogs, record, serveTor, torContext, unexpected } from './tor_env.mjs';
 
-const srv = await serveTor();
+// A stand-in public IPFS gateway (§D.6.2) for the no-Tor reader: it serves what a follower's
+// Kubo mirror would (the CAR and record the reader downloads with "For IPFS (Kubo)").
+const gw = { record: null, car: null };
+const srv = await serveTor((u) => {
+  if (u.pathname.startsWith('/gw/ipns/') && gw.record) return { type: 'application/vnd.ipfs.ipns-record', body: gw.record };
+  if (u.pathname.startsWith('/gw/ipfs/') && gw.car) return { type: 'application/vnd.ipld.car', body: gw.car };
+  if (u.pathname.startsWith('/gw/')) return { status: 404, type: 'text/plain', body: 'not found' };
+  return null;
+});
 const base = `http://127.0.0.1:${srv.address().port}/app`;
 const browsers = [];
 
-async function page(who) {
+// A stand-in for delegated-ipfs.dev (§D.5.2): HTTPS on 127.0.0.1 with a throwaway CA, reached
+// by the owner's page through a lab exit relay. It keeps what was PUT.
+const certs = fs.mkdtempSync(path.join(os.tmpdir(), 'ephem-ca-'));
+const ssl = (...a) => execFileSync('openssl', a, { cwd: certs, stdio: 'ignore' });
+ssl('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-days', '2', '-subj', '/CN=Ephem lab CA', '-keyout', 'ca.key', '-out', 'ca.pem', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign');
+ssl('req', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-subj', '/CN=127.0.0.1', '-keyout', 'leaf.key', '-out', 'leaf.csr');
+fs.writeFileSync(path.join(certs, 'ext'), 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n');
+ssl('x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '2', '-extfile', 'ext', '-out', 'leaf.pem');
+ssl('x509', '-in', 'ca.pem', '-outform', 'DER', '-out', 'ca.der');
+const routed = [];
+const routing = https.createServer({ key: fs.readFileSync(path.join(certs, 'leaf.key')), cert: fs.readFileSync(path.join(certs, 'leaf.pem')) }, (q, res) => {
+  const body = [];
+  q.on('data', (c) => body.push(c));
+  q.on('end', () => {
+    routed.push({ method: q.method, url: q.url, type: q.headers['content-type'], body: Buffer.concat(body) });
+    res.writeHead(200);
+    res.end();
+  });
+});
+await new Promise((ok) => routing.listen(0, '127.0.0.1', ok));
+const routingCfg = { host: `127.0.0.1:${routing.address().port}`, root: fs.readFileSync(path.join(certs, 'ca.der')).toString('base64') };
+
+async function page(who, extra = {}) {
   const b = await launch();
   browsers.push(b);
-  const ctx = await torContext(await b.newContext({ acceptDownloads: true }));
+  const ctx = await torContext(await b.newContext({ acceptDownloads: true }), extra);
   const p = await ctx.newPage();
   watch(p, who);
   record(p, who);
@@ -30,7 +65,7 @@ const posts = (p) => p.$$eval('#r-posts li .body, #o-posts li .body', (ls) => ls
 
 try {
   // ---- owner: a saved identity remembered in this browser (the chat app's key file) ----
-  const o = await page('owner');
+  const o = await page('owner', { routing: routingCfg });
   await o.goto(`${base}/`);
   await o.waitForSelector('#v-start:not([hidden])');
   await o.click('#b-id-save');
@@ -97,6 +132,15 @@ try {
   check('C-P3: 1 000 more posts; a reader fetches and verifies them over the onion', true,
     `owner ${ownerMs} ms for 1 000 posts, CAR ${Math.round(size / 1024)} KB; reader ${Date.now() - t4} ms (fetch + verify + render)`);
 
+  // ---- optional IPNS publishing through a Tor exit (§D.5.2) ----
+  await o.click('#b-publish');
+  await o.waitForFunction(() => /published|failed/.test(document.querySelector('#publish-state').textContent), null, { timeout: T });
+  const put = routed[0];
+  const ownRecord = Buffer.from(await o.evaluate(() => Array.from(globalThis.ephemChannel.record())));
+  check('owner publishes the IPNS record through a Tor exit (HTTPS PUT, routing API)',
+    /published/.test(await o.textContent('#publish-state')) && put?.method === 'PUT' && put.url === `/routing/v1/ipns/${link.match(/#c=([^&]+)/)[1]}` && put.type === 'application/vnd.ipfs.ipns-record' && put.body.equals(ownRecord),
+    await o.textContent('#publish-state'));
+
   // ---- the owner's store survives a reload; the backup exports ----
   await o.reload();
   await o.waitForSelector('#v-own:not([hidden])');
@@ -107,6 +151,20 @@ try {
   check('after a reload the owner\'s channel is back from its store', (await posts(o)).length === 3);
   const [d1] = await Promise.all([o.waitForEvent('download'), o.click('#b-export')]);
   check('backup exports as channel.car (+ record)', d1.suggestedFilename() === 'channel.car');
+
+  // ---- no Tor: a public gateway serving a follower's IPFS mirror (the Kubo downloads) ----
+  await r.click('#b-kubo');
+  const [dc] = await Promise.all([r.waitForEvent('download'), r.click('#b-dl-car')]);
+  const [dr] = await Promise.all([r.waitForEvent('download'), r.click('#b-dl-record')]);
+  gw.car = fs.readFileSync(await dc.path());
+  gw.record = fs.readFileSync(await dr.path());
+  check('Kubo mirror instructions and downloads', /ipfs dag import channel\.car/.test(await r.textContent('#kubo-cmds')) && gw.car.length > 1000);
+  const g = await page('gateway-reader', { gateway: `${base.replace('/app', '')}/gw` });
+  await g.goto(link.replace(/&o=.*$/, ''));
+  await g.waitForSelector('#gateway-warn:not([hidden])', { timeout: 30_000 });
+  await g.click('#b-gateway-go');
+  await g.waitForFunction(() => /through the public gateway/.test(document.querySelector('#r-source').textContent), null, { timeout: 30_000 });
+  check('without Tor: read and verified through a public gateway (IP warning shown first)', (await posts(g)).includes('third post'));
 
   // ---- owner offline: a new reader gets it from the mirror ----
   await o.close();
@@ -122,5 +180,7 @@ try {
 } finally {
   for (const b of browsers) await b.close();
   srv.close();
+  routing.close();
+  fs.rmSync(certs, { recursive: true });
 }
 finish();

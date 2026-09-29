@@ -18,3 +18,8 @@ js-sys = "0.3"
 futures = "0.3"
 tracing = "0.1"
 zeroize = "1"
+# IPNS publishing through a Tor exit (§D.5.2): HTTPS to delegated-ipfs.dev, verified against the
+# Mozilla root store (pure Rust: rustls with ring, as the Tor link already uses).
+futures-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-pki-types = "1"
+webpki-roots = "1"

@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-MnM14wg2G4O8t8v+FaqAlg6fjFdkd/34Ld67xOxR0Ss='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://snowflake-broker.torproject.net https://1098762253.rsc.cdn77.org; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="9d4b5caac5b3">
-<meta name="ephem-wasm" content="sha384-+lSuHtsYBRE3ifn1Y7zMW47YAvqF6ulo8LjrTQmXnLwHIJtbTYhVykqmeFK+HrwT">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-l07wkpqHH8kZPObgc40Yp0WBgBC/YoV0iKfc6T/gwR0='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://snowflake-broker.torproject.net https://1098762253.rsc.cdn77.org https://trustless-gateway.link; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="75aa692d44d0">
+<meta name="ephem-wasm" content="sha384-jzS0ZEu99QLeCB9sJhnVfbhHp8m2ED8woFxI3zpB0H75oxbbK3Mn67tu4hfSYGdb">
 <link rel="stylesheet" href="app.css" integrity="sha384-q0zNj9Ym9VNmbe0X0QjM4R34aODVuBcNq8iN7I7/30higKLLQPhRLKfzzsgtgVQG">
-<script type="importmap">{"imports":{},"integrity":{"./channel.js":"sha384-RQmbw3diP4gyecXQkXgB3WbmVITHuTheJg8KNY/DDOD/moZVh87kLsOgc3pQL9tl","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem_channel.js":"sha384-lI+ibKhD+cV31vNv2hW1Q4W8tu/Jw8egIFDGvRdUspAOFeNv1+v5SDmccfMt61pf"}}</script>
-<script type="module" src="channel.js" integrity="sha384-RQmbw3diP4gyecXQkXgB3WbmVITHuTheJg8KNY/DDOD/moZVh87kLsOgc3pQL9tl"></script>
+<script type="importmap">{"imports":{},"integrity":{"./channel.js":"sha384-RbgWnYWVtoeuTTuw0NrejFpTnuaMMusOMWDt9pda0Xo7ZKN7DyM3ryIyzQKVPkHT","./slots.js":"sha384-oZ+z2nGJVJRzosyz6OGMJ5U2oCi9f1+oOT0lZYt1fX3MNwiX5ahGqvQ0iUsJLPbm","./pkg/ephem_channel.js":"sha384-n1nSNx1//XdQAUMvpOTRSws7SjTIK36VodR3kMxo2MQP8B2NCBmp9nGjgD7hY/bu"}}</script>
+<script type="module" src="channel.js" integrity="sha384-RbgWnYWVtoeuTTuw0NrejFpTnuaMMusOMWDt9pda0Xo7ZKN7DyM3ryIyzQKVPkHT"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -36,7 +36,9 @@
       <button id="b-refresh">Refresh</button>
       <button id="b-mirror">Mirror this channel</button>
       <button id="b-kubo" class="ghost">For IPFS (Kubo)…</button>
+      <button id="b-gateway" class="ghost">Read without Tor…</button>
     </div>
+    <p id="gateway-warn" class="warn" hidden>Without Tor the channel is fetched from a public IPFS gateway (trustless-gateway.link), which <strong>sees your IP address</strong>. It works only if a follower mirrors this channel to public IPFS; what you get is still verified here. <button id="b-gateway-go">Read through the gateway</button></p>
     <div id="mirror-note" class="card" hidden>
       <p id="mirror-text"></p>
     </div>
@@ -87,6 +89,10 @@
         <div class="actions">
           <button id="b-copy" class="primary">Copy link</button>
           <button id="b-export">Export backup</button>
+        </div>
+        <div class="sub">
+          <p class="note">Optional: make the channel's name resolvable on the public IPFS network (useful only if a follower mirrors it there with Kubo). The record goes to delegated-ipfs.dev <strong>through a Tor exit</strong>, so your IP stays hidden.</p>
+          <button id="b-publish">Publish to IPFS routing</button> <span id="publish-state" class="note"></span>
         </div>
         <label>Mirrors you vouch for (onion addresses, comma-separated) <input id="i-mirrors" autocomplete="off" spellcheck="false"></label>
         <button id="b-mirrors">Sign mirror list</button>
