@@ -134,6 +134,22 @@ impl Kcp {
         space
     }
 
+    /// A new path (another Snowflake proxy): everything in flight is sent again on the next
+    /// flush, with the retransmission backoff and the dead-link count restarted. Otherwise a
+    /// path change after losses waits out a backed-off timer (seconds) before the new proxy
+    /// carries anything, and resends accumulated over several proxies declare the link dead.
+    pub fn new_path(&mut self) {
+        let mut sn = self.snd_una;
+        while sn != self.snd_nxt {
+            let s = &mut self.snd[slot(sn)];
+            if !s.acked {
+                s.xmit = 0;
+                s.fastack = 0;
+            }
+            sn = sn.wrapping_add(1);
+        }
+    }
+
     /// Our data not yet acknowledged, in segments.
     #[inline(always)]
     pub fn unacked(&self) -> u32 {
@@ -519,6 +535,43 @@ mod tests {
     fn lossy_and_reordered() {
         run(7, 2_000_000);
         run(3, 300_000);
+    }
+
+    /// A path that loses everything for a long time backs off the retransmission timer; a new
+    /// path resends at once and starts the dead-link count again.
+    #[test]
+    fn new_path_resends_at_once() {
+        let mut a = Kcp::new(3);
+        a.send(&[7u8; 3000]);
+        let mut now = 0u32;
+        let mut sends = 0;
+        // 19 transmissions into the void (one short of DEAD_LINK), timer backed off to seconds.
+        while sends < DEAD_LINK - 1 {
+            now = now.wrapping_add(10);
+            a.flush(now, &mut |_| sends += 1);
+            if sends > 0 {
+                break;
+            }
+        }
+        for _ in 0..DEAD_LINK - 2 {
+            let at = a.snd[slot(a.snd_una)].resendts;
+            a.flush(at, &mut |_| {});
+            now = at;
+        }
+        assert!(!a.dead());
+        assert!(a.snd[slot(a.snd_una)].rto > 2_000, "backed off");
+        // Without a new path, the next flush sends nothing until the backed-off timer.
+        let mut out = 0;
+        a.flush(now.wrapping_add(10), &mut |_| out += 1);
+        assert_eq!(out, 0);
+        a.new_path();
+        a.flush(now.wrapping_add(20), &mut |_| out += 1);
+        assert!(out > 0, "in-flight data resent on the new path at once");
+        for _ in 0..5 {
+            let at = a.snd[slot(a.snd_una)].resendts;
+            a.flush(at, &mut |_| {});
+        }
+        assert!(!a.dead(), "the dead-link count restarted with the path");
     }
 
     #[test]

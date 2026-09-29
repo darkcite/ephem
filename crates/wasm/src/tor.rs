@@ -34,7 +34,7 @@ const NICK: &str = "ephem";
 const REDIAL_FIRST_MS: u32 = 1_000;
 const REDIAL_MAX_MS: u32 = 16_000;
 /// One dial attempt (descriptor, introduction, rendezvous) before it counts as failed.
-const DIAL_TIMEOUT_MS: u32 = 45_000;
+const DIAL_TIMEOUT_MS: u32 = 30_000;
 /// Reassembly buffer of a stream: one frame plus a read's worth.
 const RX_CAP: usize = 2 + MAX_FRAME + 4096;
 

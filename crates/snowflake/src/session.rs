@@ -77,6 +77,7 @@ impl Session {
         self.channel = true;
         self.need_prefix = true;
         self.dec.reset();
+        self.kcp.new_path();
     }
 
     /// The current DataChannel closed; nothing is sent until the next one.
