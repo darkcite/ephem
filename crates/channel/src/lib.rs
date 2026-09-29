@@ -17,6 +17,7 @@ pub mod channel;
 pub mod cid;
 pub mod gateway;
 pub mod ipns;
+pub mod page;
 pub mod time;
 pub mod varint;
 

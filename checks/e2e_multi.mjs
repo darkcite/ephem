@@ -101,13 +101,18 @@ try {
   await ph.click('#b-new');
   check('phone: “New chat” opens the pane full screen, with Back; the tab bar stays', await ph.isVisible('#b-invite') && await ph.isHidden('#side') && await ph.isVisible('#b-back') && await ph.isVisible('#tab-settings'));
   await ph.click('#tab-settings');
-  check('phone: Settings is a tab of its own (identity, contacts, connection); the tab bar stays', await ph.isVisible('#b-id-save') && await ph.isVisible('#s-ttl') && await ph.isVisible('#tab-chats'));
+  check('phone: Settings is a tab of its own (identity, contacts, connection), no Back; the tab bar stays', await ph.isVisible('#b-id-save') && await ph.isVisible('#s-ttl') && await ph.isVisible('#tab-chats') && await ph.isHidden('#b-back'));
   const frame = await ph.evaluate(() => ({ page: document.scrollingElement.scrollHeight - innerHeight, pane: document.querySelector('#pane').scrollHeight > document.querySelector('#pane').clientHeight }));
   check('phone: the page itself never scrolls (full screen), only the pane', frame.page <= 0 && frame.pane, JSON.stringify(frame));
   check('phone: the Code button is in the header', await ph.isVisible('#b-code'));
   await ph.click('#tab-chats');
+  check('phone: a tab opens on its list (Chats: the chats)', await ph.isVisible('#b-new') && await ph.isHidden('#pane'));
+  await ph.click('#b-new');
   await ph.click('#b-back');
   check('phone: Back returns to the list', await ph.isVisible('#b-new') && await ph.isHidden('#pane'));
+  await ph.click('#tab-follow');
+  check('phone: Following opens on its list', await ph.isVisible('#b-follow-new') && await ph.isHidden('#pane'));
+  await ph.click('#tab-chats');
   const overflow = await ph.evaluate(() => document.documentElement.scrollWidth > innerWidth);
   check('phone: no horizontal scrolling', !overflow);
 

@@ -91,6 +91,11 @@ export async function openTab(tab) {
   return owned.length ? showOwner(owned[0].i) : newChannel();
 }
 
+/** Phones: a channel tab shows its list; loads what it needs without opening a page. */
+export async function prepare() {
+  await ready();
+}
+
 /** A channel link (`#c=<name>&o=<onion>[,<mirror>…]`): the reader, in the Following tab. */
 export async function openLink(text) {
   const frag = text.slice(text.indexOf('#') + 1);
@@ -117,7 +122,8 @@ async function ready() {
 
 // Direct mode: the Tor build, fetched with the SHA-384 pinned in the page (§17.2).
 async function loadEngine() {
-  ctx.showPane('v-channels-off');
+  // The progress page, unless a phone is showing the tab's list (its page opens on a tap).
+  if (!ctx.phone()) ctx.showPane('v-channels-off');
   $('ch-state').textContent = 'Loading the Tor part of Ephem…';
   const mod = await import('./pkg/ephem_tor.js');
   const sri = document.querySelector('meta[name="ephem-tor-wasm"]')?.content;
@@ -436,7 +442,7 @@ async function serveMirror(f, r) {
   await store('mirrors', f.n, r.car(), r.record());
   f.at = at;
   if (current?.read === f.n) {
-    $('mirror-text').textContent = `Mirroring while this tab is open, at ${at}. Send this address to the owner if you want to be in the signed mirror list.`;
+    $('mirror-text').textContent = `Mirroring while this tab is open, at ${at} (also readable in Tor Browser at http://${at}/). Send this address to the owner if you want to be in the signed mirror list.`;
     $('mirror-note').hidden = false;
     $('b-mirror').hidden = true;
   }
@@ -554,6 +560,8 @@ function renderOwn(o) {
   renderServing(o);
   $('i-mirrors').value = v.mirrors.join(', ');
   $('o-link').value = o.onion ? linkFor(o, v) : '';
+  $('o-plain').hidden = !o.onion;
+  $('o-plain-url').textContent = o.onion ? `http://${o.onion}/` : '';
   $('publish-state').textContent = '';
   renderPosts($('o-posts'), v, o);
 }

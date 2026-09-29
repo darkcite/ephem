@@ -4,7 +4,8 @@
 //!
 //! - `GET /ipns/<name>?format=ipns-record` → the signed record;
 //! - `GET /ipfs/<cid>?format=car` → a CAR of the DAG under `<cid>`;
-//! - `GET /ipfs/<cid>?format=raw` → one block.
+//! - `GET /ipfs/<cid>?format=raw` → one block;
+//! - `GET /` → the channel as a plain web page, for Tor Browser ([`crate::page`]).
 //!
 //! Sans-IO: [`respond`] turns one request head into the whole response; [`get`] and
 //! [`parse_response`] are the reader's side. HTTP/1.1 with `Connection: close` (one request per
@@ -12,7 +13,9 @@
 
 use crate::car::{self, Block};
 use crate::cbor::Value;
+use crate::channel;
 use crate::cid::Cid;
+use crate::page::{self, Served};
 use std::collections::{HashMap, HashSet};
 
 /// Largest request head read before answering 431.
@@ -22,6 +25,7 @@ pub const MAX_RESPONSE: usize = 64 * 1024 * 1024;
 pub const CT_CAR: &str = "application/vnd.ipld.car";
 pub const CT_RAW: &str = "application/vnd.ipld.raw";
 pub const CT_RECORD: &str = "application/vnd.ipfs.ipns-record";
+pub const CT_HTML: &str = "text/html; charset=utf-8";
 
 /// What one onion serves: one channel (the owner's, or a mirrored one), already verified.
 pub struct Hosted {
@@ -29,11 +33,20 @@ pub struct Hosted {
     pub root: Cid,
     pub record: Vec<u8>,
     blocks: HashMap<Cid, Vec<u8>>,
+    /// The web page at `/` (built once per version).
+    page: Vec<u8>,
 }
 
 impl Hosted {
-    pub fn new(name: Cid, root: Cid, record: Vec<u8>, blocks: Vec<Block>) -> Self {
-        Self { name, root, record, blocks: blocks.into_iter().collect() }
+    /// What an onion serves for channel `name`: the owner's (`Served::Owner`) or a mirror's.
+    pub fn new(name: Cid, root: Cid, record: Vec<u8>, blocks: Vec<Block>, served: Served) -> Self {
+        // Hosted data is verified before it gets here (built by the owner, or checked by the
+        // mirror); the record's validity is the readers' concern (time 0 skips it).
+        let page = match channel::verify(&name, &record, &blocks, 0, 0) {
+            Ok(view) => page::html(&view, served),
+            Err(_) => b"<!doctype html><title>Channel</title><p>This channel cannot be shown right now.</p>".to_vec(),
+        };
+        Self { name, root, record, blocks: blocks.into_iter().collect(), page }
     }
 
     /// The blocks reachable from `cid` (itself first), or `None` if it is not held.
@@ -70,8 +83,13 @@ fn links(v: &Value, out: &mut Vec<Cid>) {
 }
 
 fn response(status: &str, ctype: &str, body: &[u8]) -> Vec<u8> {
+    head_and(status, ctype, "", body)
+}
+
+/// A response with extra header lines (`extra`: each ending in CRLF).
+fn head_and(status: &str, ctype: &str, extra: &str, body: &[u8]) -> Vec<u8> {
     let mut out = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n{extra}Connection: close\r\n\r\n",
         body.len()
     )
     .into_bytes();
@@ -107,6 +125,10 @@ pub fn respond(head: &[u8], h: &Hosted) -> Vec<u8> {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let format = query.split('&').find_map(|kv| kv.strip_prefix("format=")).unwrap_or("");
     let wants = |f: &str, ct: &str| format == f || accept.contains(ct);
+    if path == "/" || path == "/index.html" {
+        let extra = format!("Content-Security-Policy: {}\r\nReferrer-Policy: no-referrer\r\n", page::CSP);
+        return head_and("200 OK", CT_HTML, &extra, &h.page);
+    }
     if let Some(name) = path.strip_prefix("/ipns/") {
         return match Cid::parse(name) {
             Some(n) if n == h.name && wants("ipns-record", CT_RECORD) => response("200 OK", CT_RECORD, &h.record),
@@ -193,7 +215,7 @@ mod tests {
         c.post("one", 0, 1_790_000_001).unwrap();
         let (root, blocks) = c.build(1_790_000_002);
         let record = c.record(&root, 1_790_000_002);
-        let h = Hosted::new(c.name(), root.clone(), record.clone(), blocks);
+        let h = Hosted::new(c.name(), root.clone(), record.clone(), blocks.clone(), Served::Owner);
         let name = c.name().to_text();
         let rec = respond(&get("x.onion", &format!("/ipns/{name}?format=ipns-record")), &h);
         assert_eq!(parse_response(&rec), Ok(&record[..]));
@@ -213,5 +235,30 @@ mod tests {
         assert!(!complete(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nab"));
         assert!(complete(&rec), "a served response is complete by its Content-Length");
         assert!(!complete(&rec[..rec.len() - 1]));
+    }
+
+    #[test]
+    fn web_page_for_tor_browser() {
+        let mut c = Channel::new(&[4; 32], "News <b>", "about & more", 1_790_000_000).unwrap();
+        c.post("hello <script>alert(1)</script>", 0, 1_790_000_001).unwrap();
+        let seq = c.post("second", 0, 1_790_000_002).unwrap();
+        c.post("a reply", seq, 1_790_000_003).unwrap();
+        c.delete(seq).unwrap();
+        let (root, blocks) = c.build(1_790_000_004);
+        let record = c.record(&root, 1_790_000_004);
+        let owner = Hosted::new(c.name(), root.clone(), record.clone(), blocks.clone(), Served::Owner);
+        let resp = respond(b"GET / HTTP/1.1\r\nHost: x.onion\r\n\r\n", &owner);
+        let text = String::from_utf8(resp.clone()).unwrap();
+        let head = text.split("\r\n\r\n").next().unwrap();
+        assert!(head.contains("Content-Type: text/html; charset=utf-8") && head.contains("Content-Security-Policy: default-src 'none'") && head.contains("Referrer-Policy: no-referrer"));
+        let body = String::from_utf8(parse_response(&resp).unwrap().to_vec()).unwrap();
+        assert!(body.contains("<title>News &lt;b&gt;</title>") && body.contains("about &amp; more"), "title and about escaped");
+        assert!(body.contains("hello &lt;script&gt;alert(1)&lt;/script&gt;") && !body.contains("<script"), "no markup from posts, no scripts");
+        assert!(body.contains("(deleted by the owner)") && body.contains("↪ #2: (deleted)"), "deleted post and the quote of it");
+        assert!(body.find("a reply").unwrap() < body.find("hello").unwrap(), "newest first");
+        assert!(body.contains("the channel's own onion address") && body.contains(&c.name().to_text()));
+        let mirror = Hosted::new(c.name(), root, record, blocks, Served::Mirror);
+        let m = String::from_utf8(respond(b"GET /index.html HTTP/1.1\r\n\r\n", &mirror)).unwrap();
+        assert!(m.contains("Served by a mirror") && m.contains("vouches for the mirror, not for the owner"));
     }
 }

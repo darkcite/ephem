@@ -217,6 +217,8 @@ function setTab(t) {
 function openSettings(id) {
   setTab('settings');
   showPane('v-settings');
+  // Phones: Settings has no list to go back to (its section list is the desktop sidebar).
+  if (phone()) $('b-back').hidden = true;
   renderIdentity();
   if (id) $(id).scrollIntoView({ block: 'start' });
 }
@@ -227,6 +229,9 @@ function showPane(id) {
   document.body.classList.add('pane-open');
   $('b-back').hidden = false;
 }
+
+/** The phone layout (one column: a tab's list, or a pane with Back). */
+const phone = () => matchMedia('(max-width: 899px)').matches;
 
 /** Phone layout: back from the pane to the list. */
 function backToList() {
@@ -1809,7 +1814,7 @@ async function main() {
   wasm = await mod.default({ module_or_path: fetch(wasmUrl, wasmSri ? { integrity: wasmSri } : {}) });
   app = new App();
   metaPtr = app.meta_ptr();
-  channels.init({ TOR, app, mod: TOR ? mod : null, showPane, setTab, setStatus, error, persist, scan, download, notify, ramSections: () => !app.identity_label() });
+  channels.init({ TOR, phone, app, mod: TOR ? mod : null, showPane, setTab, setStatus, error, persist, scan, download, notify, ramSections: () => !app.identity_label() });
   renderIdentity();
   if (TOR) beginTor();
 
@@ -1820,8 +1825,14 @@ async function main() {
   for (const b of document.querySelectorAll('.tabs [role=tab]')) {
     b.onclick = () => {
       setTab(b.dataset.tab);
-      if (b.dataset.tab === 'chats') return shown ? display(shown) : home();
       if (b.dataset.tab === 'settings') return openSettings();
+      // Phones: a tab opens on its list; a row (or its + button) opens a page with Back.
+      if (phone()) {
+        backToList();
+        if (b.dataset.tab !== 'chats') channels.prepare();
+        return;
+      }
+      if (b.dataset.tab === 'chats') return shown ? display(shown) : home();
       channels.openTab(b.dataset.tab);
     };
   }
@@ -1920,7 +1931,7 @@ async function main() {
       list[(i + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length].click();
     } else if (e.key === 'Escape' && !$('code-sheet').hidden) {
       closeCodeSheet();
-    } else if (e.key === 'Escape' && !$('b-back').hidden && matchMedia('(max-width: 899px)').matches && !e.target.closest('textarea, input')) {
+    } else if (e.key === 'Escape' && !$('b-back').hidden && phone() && !e.target.closest('textarea, input')) {
       backToList();
     }
   });
@@ -1947,14 +1958,15 @@ async function main() {
 
   home();
   // Phones start on the list (Appendix F.3.1); a link opens its pane below.
-  if (matchMedia('(max-width: 899px)').matches) backToList();
+  if (phone()) backToList();
   if (TOR) setStatus('starting Tor');
   if (!frag) return;
   if (frag.startsWith('#tab=')) {
     const t = frag.slice(5);
     if (t === 'follow' || t === 'own') {
       setTab(t);
-      channels.openTab(t);
+      if (phone()) channels.prepare();
+      else channels.openTab(t);
     }
     return;
   }

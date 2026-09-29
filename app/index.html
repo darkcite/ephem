@@ -6,13 +6,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-sl/P16/b9YSQjiAylogW1pRZTDBCDTI5LHIwk1IpWpc='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="6010df3d2458">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-JSt8U4NgFmsrQZpVE2TouOhVZ5ViO/PynMN1/mPQe/w='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
+<meta name="ephem-build" content="de449faf86d0">
 <meta name="ephem-wasm" content="sha384-d45bo3fvWkkNfP9Q8DTo6CmoC5moWhNxW3RcFukweqivIdCoAJ4x8DJtkd/jR6Tu">
-<meta name="ephem-tor-wasm" content="sha384-huiTBDRwYI65mCbbJnkfbLixVB91P3qIb7ZwWcVgki8reqLq7ksGIlRaf6a6WRtp">
+<meta name="ephem-tor-wasm" content="sha384-bqz/IChGVFA8mBHT39rLTH0nG21ws3qKVBX4EYfBbLLmEaPMG6KwSDpIQfeUQ4xW">
 <link rel="stylesheet" href="app.css" integrity="sha384-xGEqTNiobxi9HAoBzMhf9lc3YRtdhPo8eJsHzlgZIZ1JyZAS7ROzzgPN582mJNt8">
-<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-L41DpXfyzW71j44jepIWqnaglJoouCOvLerKZNMltpvKqmUIX7Wycd/CwOjjApTD","./slots.js":"sha384-IlHgZ/G7YQmb6j7JCXNAbe997AcQ0jgf9kFcPNaROP0AcYmGBAzZ9Okdm4ch/5yC","./bridges.js":"sha384-XinMCx7qqD+BIl3mImyuYX0YNpqx/XA/fy1rBXFb3VrD/Hp62Vg7zBWO5+v1qTAV","./channels.js":"sha384-Hqqw/ywA5WXJnNdpuHdPhzeCxM8kq/y8biPdooOY5VixCk3WdnylHWlknEon2db4","./ui.js":"sha384-Dg5+MKtdFNG4n1QschjGOvWfALXvB+/c+rOXQZOFRC3N7R0ouVLg7exIRd33Txvx","./pkg/ephem.js":"sha384-ldCyPwipVz+B49iV5oX++4gYxOjoOP1DlvAQoKsXt/B/s6jHcdQ4I+5YhmDfEBrd","./pkg/ephem_tor.js":"sha384-vGENgBZ23ZMgijevNvmDtPf0WyLfnFz6Xu3y0nPL8JAulbrmVabR6a6zojsgMvCs"}}</script>
-<script type="module" src="app.js" integrity="sha384-L41DpXfyzW71j44jepIWqnaglJoouCOvLerKZNMltpvKqmUIX7Wycd/CwOjjApTD"></script>
+<script type="importmap">{"imports":{},"integrity":{"./app.js":"sha384-fXyUAlt/j1+gm7P25WdGToZs6ZErnfgWCTOFNpOo8wd1ujdJJ1+BJs2bl0U22tyH","./slots.js":"sha384-IlHgZ/G7YQmb6j7JCXNAbe997AcQ0jgf9kFcPNaROP0AcYmGBAzZ9Okdm4ch/5yC","./bridges.js":"sha384-XinMCx7qqD+BIl3mImyuYX0YNpqx/XA/fy1rBXFb3VrD/Hp62Vg7zBWO5+v1qTAV","./channels.js":"sha384-I6/qP5TiuCPD6oMIOFUK8J7+BoHsIDe5FE8xh6XQWehuFYDoPbCKUm3ioLL78JsK","./ui.js":"sha384-Dg5+MKtdFNG4n1QschjGOvWfALXvB+/c+rOXQZOFRC3N7R0ouVLg7exIRd33Txvx","./pkg/ephem.js":"sha384-ldCyPwipVz+B49iV5oX++4gYxOjoOP1DlvAQoKsXt/B/s6jHcdQ4I+5YhmDfEBrd","./pkg/ephem_tor.js":"sha384-rU/KIfb6NX0bIuTRlb6MRxW6c5qjTsF5p7hkzGWUDCVVnzBq9u9IhFoL7s5TE+gi"}}</script>
+<script type="module" src="app.js" integrity="sha384-fXyUAlt/j1+gm7P25WdGToZs6ZErnfgWCTOFNpOo8wd1ujdJJ1+BJs2bl0U22tyH"></script>
 <!-- stamp:end -->
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
@@ -325,6 +325,7 @@
         <p id="o-about" class="note"></p>
         <p id="o-serving" class="note">Not online yet.</p>
         <textarea id="o-link" class="link" rows="2" readonly spellcheck="false"></textarea>
+        <p id="o-plain" class="note" hidden>Without Ephem, anyone can read it in Tor Browser at <code id="o-plain-url"></code>, a plain page with no scripts; the onion address itself vouches that it is your channel.</p>
         <div class="actions">
           <button id="b-copy" class="primary">Copy link</button>
           <button id="b-export">Export backup</button>

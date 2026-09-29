@@ -20,7 +20,7 @@ import * as https from 'node:https';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { check, finish, launch, PASS, problems, toSettings, watch } from '../e2e_lib.mjs';
-import { LIVE, T, dumpLogs, record, serveTor, torContext, unexpected } from './tor_env.mjs';
+import { LIVE, T, dumpLogs, record, serveTor, torBrowserGet, torContext, unexpected } from './tor_env.mjs';
 
 // A stand-in public IPFS gateway (§D.6.2) for the no-Tor reader: it serves what a follower's
 // Kubo mirror would (the CAR and record the reader downloads with "For IPFS (Kubo)").
@@ -113,6 +113,18 @@ try {
   const link = await o.inputValue('#o-link');
   check('channel created, 3 posts, 1 deleted, online on its own onion', /\/tor\.html#c=k51.*&o=[a-z2-7]{56}\.onion$/.test(link), `${Date.now() - t0} ms to online`);
 
+  // Without Ephem: the onion's root is a plain page for Tor Browser (no scripts), fetched here
+  // through the lab's C Tor client.
+  if (!LIVE) {
+    const onion = link.match(/&o=([a-z2-7]{56}\.onion)/)[1];
+    const page = await torBrowserGet(onion, '/');
+    check('Tor Browser: the owner\'s onion serves the channel as a plain page (no scripts)',
+      page.status === 200 && /Content-Type: text\/html/.test(page.headers) && /Content-Security-Policy: default-src 'none'/.test(page.headers)
+        && page.body.includes('Lab news') && page.body.includes('third post') && page.body.includes('deleted by the owner')
+        && page.body.includes("the channel's own onion address") && !/<script/i.test(page.body) && (await o.textContent('#o-plain-url')) === `http://${onion}/`,
+      `${page.body.length} B`);
+  }
+
   // UI-5: a second channel, both online at once.
   await newChannel(o, 'Lab two', 'A second channel');
   await o.waitForFunction(() => /Online through Tor/.test(document.querySelector('#o-serving')?.textContent), null, { timeout: T });
@@ -155,6 +167,10 @@ try {
   await r.waitForSelector('#mirror-note:not([hidden])', { timeout: 60_000 });
   const mirror = (await r.textContent('#mirror-text')).match(/[a-z2-7]{56}\.onion/)[0];
   check('the reader mirrors it on a second onion of its tab', !!mirror, mirror);
+  if (!LIVE) {
+    const mp = await torBrowserGet(mirror, '/');
+    check('Tor Browser: the mirror serves the page too, saying it is a mirror', mp.status === 200 && mp.body.includes('Served by a mirror') && mp.body.includes('fourth post'));
+  }
   await o.fill('#i-mirrors', mirror);
   await o.click('#b-mirrors');
   await o.waitForFunction((m) => document.querySelector('#o-link')?.value.includes(m), mirror);

@@ -26,6 +26,7 @@ mod json;
 use ephem_channel::car;
 use ephem_channel::channel::{self, Channel, View, RECORD_VALIDITY_S};
 use ephem_channel::gateway::{self, Hosted};
+use ephem_channel::page::Served;
 use ephem_channel::{Cid, ipns};
 use ephem_crypto::{Identity, keyfile};
 use ephem_tor::web::{DataStream, Service, Snowflake, Tor, TorSlot, list, sleep_ms, tor_log};
@@ -70,14 +71,14 @@ struct State {
     /// The owner's open channels.
     own: Vec<Own>,
     /// Owned channels online, by name (a reopened channel keeps its service and cell).
-    served: Vec<Served>,
+    served: Vec<Online>,
     mirrors: Vec<Mirror>,
     /// Onion services launched so far (each needs its own arti nickname).
     launched: u32,
 }
 
 /// An owned channel's onion service and what it serves.
-struct Served {
+struct Online {
     name: Cid,
     onion: String,
     hosted: Rc<RefCell<Hosted>>,
@@ -240,7 +241,7 @@ impl ChannelApp {
                 // Fresh enough: keep serving the stored record and blocks as they are.
                 drop(st);
                 let mut st = self.st.borrow_mut();
-                let hosted = st.cell(&ch.name(), Hosted::new(ch.name(), root, record.to_vec(), blocks));
+                let hosted = st.cell(&ch.name(), Hosted::new(ch.name(), root, record.to_vec(), blocks, Served::Owner));
                 st.own.retain(|o| o.index != index);
                 st.own.push(Own { index, ch, record: record.to_vec(), hosted });
                 return Ok(());
@@ -256,7 +257,7 @@ impl ChannelApp {
         let (root, blocks) = ch.build(now);
         let record = ch.record(&root, now);
         let mut st = self.st.borrow_mut();
-        let hosted = Hosted::new(ch.name(), root, record.clone(), blocks);
+        let hosted = Hosted::new(ch.name(), root, record.clone(), blocks, Served::Owner);
         // The onion serving the channel keeps the same `Hosted` cell: update it in place.
         match st.own.iter_mut().find(|o| o.index == index) {
             Some(o) => {
@@ -360,7 +361,7 @@ impl ChannelApp {
         let svc = Rc::new(svc.map_err(err)?);
         let onion = svc.onion().to_owned();
         wasm_bindgen_futures::spawn_local(serve_loop(svc.clone(), hosted.clone()));
-        self.st.borrow_mut().served.push(Served { name, onion: onion.clone(), hosted, _svc: svc });
+        self.st.borrow_mut().served.push(Online { name, onion: onion.clone(), hosted, _svc: svc });
         Ok(onion)
     }
 
@@ -454,7 +455,7 @@ impl ChannelApp {
         let (roots, blocks) = car::read(&reading.car).ok_or_else(|| err("CAR"))?;
         let name = Cid::parse(&reading.name).ok_or_else(|| err("name"))?;
         let root = roots.into_iter().next().ok_or_else(|| err("CAR has no root"))?;
-        let hosted = Hosted::new(name.clone(), root, reading.record.clone(), blocks);
+        let hosted = Hosted::new(name.clone(), root, reading.record.clone(), blocks, Served::Mirror);
         {
             let st = self.st.borrow();
             if let Some(m) = st.mirrors.iter().find(|m| m.name == name) {

@@ -8,6 +8,7 @@
 // LIVE=1: the real Snowflake broker and the real Tor network, the page unchanged (T-10, run on
 // a machine that can reach them, e.g. `LIVE=1 E2E_BROWSER=chrome node checks/tor-lab/e2e_tor_app.mjs`).
 import * as fs from 'node:fs';
+import * as net from 'node:net';
 import { serve } from '../e2e_lib.mjs';
 
 export const LIVE = process.env.LIVE === '1';
@@ -94,3 +95,32 @@ export const dumpLogs = (n = 40) => {
   console.log('  ---');
   console.log(logs.filter((l) => !quiet(l)).slice(-n).join('\n'));
 };
+
+/** GET `http://<onion><path>` through the lab's C Tor client (chutney node 010c, SOCKS 9010), as
+ *  Tor Browser would; resolves to `{ status, headers, body }`. Lab only. */
+export function torBrowserGet(onion, path = '/', port = 9010) {
+  return new Promise((resolve, reject) => {
+    const s = net.connect(port, '127.0.0.1');
+    const chunks = [];
+    let stage = 0;
+    s.setTimeout(120_000, () => { s.destroy(); reject(new Error('socks: timed out')); });
+    s.on('error', reject);
+    s.on('connect', () => s.write(Buffer.from([5, 1, 0])));
+    s.on('data', (d) => {
+      if (stage === 0) {
+        stage = 1;
+        const host = Buffer.from(onion);
+        s.write(Buffer.concat([Buffer.from([5, 1, 0, 3, host.length]), host, Buffer.from([0, 80])]));
+      } else if (stage === 1) {
+        if (d[1] !== 0) return reject(new Error(`socks: error ${d[1]}`));
+        stage = 2;
+        s.write(`GET ${path} HTTP/1.1\r\nHost: ${onion}\r\nConnection: close\r\n\r\n`);
+      } else chunks.push(d);
+    });
+    s.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      const [head, ...rest] = raw.split('\r\n\r\n');
+      resolve({ status: Number(head.split(' ')[1]), headers: head, body: rest.join('\r\n\r\n') });
+    });
+  });
+}
