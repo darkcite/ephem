@@ -117,6 +117,12 @@ try {
     const again = await p.locator('#log li', { hasText: 'Reconnected through Tor' }).count();
     check(`${who} loses the stream: redial, queued message delivered`, again > before, `${Date.now() - t} ms`);
   }
+  // Who waits and who dials is said as such (the host has nothing to do but wait).
+  {
+    const says = async (p, t) => (await p.locator('#log li.sys', { hasText: t }).count()) > 0;
+    check('after a loss the host says it waits for its peer to dial back; the dialler says it reconnects',
+      await says(a, 'Waiting for your peer to reconnect') && await says(b, 'Reconnecting through Tor'));
+  }
 
   // A silent peer (§28.5; the iPhone case: network switch or background). Bob's JavaScript is
   // paused, as iOS stops a background app: no stream end reaches Alice, only silence. Alice

@@ -397,6 +397,30 @@ fn lost(inner: &Shared, lid: u32) {
     }
 }
 
+/// Every chat's lost Tor link that we dialled: dial again now, on fresh circuits (a new path id
+/// ends the running dial loop of the old one).
+pub(crate) fn redial_all(inner: &Shared) {
+    let (ids, n) = inner.borrow().chat_ids();
+    for &c in &ids[..n] {
+        let fresh: Vec<u32> = {
+            let mut g = inner.borrow_mut();
+            if !g.focus(c) {
+                continue;
+            }
+            let lost: Vec<usize> = (0..g.links.len())
+                .filter(|&i| {
+                    let l = &g.links[i];
+                    l.sess.tor() && l.sess.role() == Role::Answerer && l.sess.state() == State::Suspended
+                })
+                .collect();
+            lost.into_iter().map(|i| g.new_path(i)).collect()
+        };
+        for lid in fresh {
+            dial(inner, lid, true);
+        }
+    }
+}
+
 /// Every second: connected Tor links that went silent are lost (see [`SILENT_MS`]).
 pub(crate) fn tick(inner: &Shared) {
     let now = now_ms();
@@ -505,6 +529,8 @@ pub(crate) fn dial(inner: &Shared, lid: u32, fresh: bool) {
     wasm_bindgen_futures::spawn_local(async move {
         let mut backoff = REDIAL_FIRST_MS;
         let mut failed = fresh;
+        let mut attempt = 0u32;
+        let mut last = String::new();
         loop {
             let (tor, onion) = {
                 let mut g = inner.borrow_mut();
@@ -524,6 +550,16 @@ pub(crate) fn dial(inner: &Shared, lid: u32, fresh: bool) {
             if !tor.ready() {
                 sleep_ms(500).await;
                 continue;
+            }
+            attempt += 1;
+            {
+                // Loads the chat (its id goes with the event); the page shows the attempt.
+                let mut g = inner.borrow_mut();
+                if g.find(lid).is_none() {
+                    return;
+                }
+                drop(g);
+                emit(ev::REDIAL, attempt as f64, last.as_bytes());
             }
             // After a failure, a fresh descriptor and fresh circuits (see `Tor::connect`). An
             // attempt that hangs counts as failed.
@@ -553,6 +589,7 @@ pub(crate) fn dial(inner: &Shared, lid: u32, fresh: bool) {
                 Err(e) => {
                     failed = true;
                     tracing::warn!("tor: dial {onion}: {e}");
+                    last = e;
                     sleep_ms(backoff).await;
                     backoff = (backoff * 2).min(REDIAL_MAX_MS);
                 }

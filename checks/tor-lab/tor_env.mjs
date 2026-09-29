@@ -97,8 +97,20 @@ export const dumpLogs = (n = 40) => {
 };
 
 /** GET `http://<onion><path>` through the lab's C Tor client (chutney node 010c, SOCKS 9010), as
- *  Tor Browser would; resolves to `{ status, headers, body }`. Lab only. */
-export function torBrowserGet(onion, path = '/', port = 9010) {
+ *  Tor Browser would; resolves to `{ status, headers, body }`. A fresh onion's descriptor may
+ *  not have reached that client yet (SOCKS error 4): up to 6 tries, 10 s apart. Lab only. */
+export async function torBrowserGet(onion, path = '/', port = 9010) {
+  for (let i = 1; ; i++) {
+    try {
+      return await socksGet(onion, path, port);
+    } catch (e) {
+      if (i === 6) throw e;
+      await new Promise((r) => setTimeout(r, 10_000));
+    }
+  }
+}
+
+function socksGet(onion, path, port) {
   return new Promise((resolve, reject) => {
     const s = net.connect(port, '127.0.0.1');
     const chunks = [];

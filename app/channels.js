@@ -136,7 +136,10 @@ async function loadEngine() {
   // The user's bridges when signed in (Appendix F.2), else the Tor Project's Snowflake.
   const saved = ctx.app.identity_label() ? ctx.app.section(0x05) : '';
   const lines = lab?.bridges || (saved ? bridges.effective(saved) : bridges.DEFAULT_BRIDGES);
-  ch.tor_start(lines, lab?.nat || '', lab?.network || '', new Uint8Array()).then(torReady, (e) => {
+  ch.tor_start(lines, lab?.nat || '', lab?.network || '', new Uint8Array()).then(() => {
+    $('ch-state').textContent = 'Tor ready.';
+    torReady();
+  }, (e) => {
     $('ch-state').textContent = `Tor failed: ${e?.message || e}`;
     ctx.setStatus('Tor failed', 'bad');
   });

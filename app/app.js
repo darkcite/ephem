@@ -20,7 +20,7 @@ let App, qr_svg_path, mod;
 
 const EV = { CODE: 1, CONNECTED: 2, HELLO: 3, CHAT: 4, DELIVERED: 5, DEGRADED: 6, ALIVE: 7, PEER_HIDDEN: 8, CLOSED: 9, ERROR: 10,
   PROGRESS: 11, PATH: 12, SETTING: 13, EDITED: 14, DELETED: 15, EXPIRED: 16, READ: 17, TYPING: 18, SUSPENDED: 19,
-  REACTION: 20, PEER_READY: 21, IDENTITY_SENT: 22, IDENTITY_RECEIVED: 23, ROOM: 24, ROOM_CLOSED: 25, TOR: 26, CARD: 27 };
+  REACTION: 20, PEER_READY: 21, IDENTITY_SENT: 22, IDENTITY_RECEIVED: 23, ROOM: 24, ROOM_CLOSED: 25, TOR: 26, CARD: 27, REDIAL: 28 };
 // Meta block offsets (crates/wasm/src/lib.rs `meta`).
 const META = { TTL: 0, HAS_REPLY: 4, SENDER: 5, REPLY_SEQ: 8, RESUMED: 0, MEMBER: 16, CHAT: 17, LEN: 24 };
 const PENDING = 0xff;           // member index of a joiner the owner has not admitted yet
@@ -247,6 +247,7 @@ function setStatus(label, cls = '') {
 function error(name) {
   $('error').textContent = MESSAGES[name] || name;
   $('error').hidden = false;
+  $('error').title = 'Tap to dismiss';
 }
 
 function renderList() {
@@ -569,6 +570,8 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       c.codeExpires = 0;
       if (resumed) {
         c.$('resume').hidden = true;
+        c.$('b-redial').hidden = true;
+        c.$('peer-state').textContent = '';
         sysLine(c, `Reconnected ${TOR ? 'through Tor' : 'directly'}. Pending messages are being delivered.`);
         break;
       }
@@ -697,6 +700,7 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       if (!primary(c, from)) break;
       c.status('connected', 'ok');
       c.$('peer-state').textContent = '';
+      c.$('b-redial').hidden = true;
       break;
     case EV.PEER_HIDDEN:
       if (!c.room) c.$('peer-state').textContent = num ? 'in background' : '';
@@ -714,8 +718,12 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
       c.status('disconnected', 'bad');
       c.$('peer-state').textContent = c.room ? 'owner unreachable' : '';
       if (TOR) {
-        // No reconnect codes over Tor: whoever dialled dials the onion again (§28.5).
-        if (c.open) sysLine(c, 'The Tor connection dropped. Reconnecting through Tor…');
+        // No reconnect codes over Tor: whoever dialled dials the onion again (§28.5); the host
+        // waits for it. In a room the member dials its owner.
+        const dialler = c.room ? !c.room.owner : c.myIdx === 1;
+        if (c.open) sysLine(c, dialler ? 'The Tor connection dropped. Reconnecting through Tor…' : 'The Tor connection dropped. Waiting for your peer to reconnect: their Ephem dials yours again (their tab must be open).');
+        c.$('peer-state').textContent = dialler ? 'reconnecting…' : 'waiting for your peer…';
+        c.$('b-redial').hidden = !dialler;
       } else if (c.open) {
         c.$('resume').hidden = false;
         c.$('resume').querySelector('.codebox').hidden = true;
@@ -738,6 +746,12 @@ globalThis.ephemEvent = (kind, num, ptr, len) => {
     case EV.ROOM_CLOSED: {
       const name = text(ptr, len);
       if (c.room) later(() => ended(c, ROOM_MESSAGES[name] || name));
+      break;
+    }
+    case EV.REDIAL: {
+      // Attempt `num` to reach the peer's onion again; `text`: why the last one failed.
+      const why = text(ptr, len);
+      if (c.open) c.$('peer-state').textContent = `reconnecting… attempt ${num}${why ? ` (last: ${why.slice(0, 80)})` : ''}`;
       break;
     }
     case EV.CARD:
@@ -767,10 +781,11 @@ function torEvent(num, t) {
     later(() => channels.torReady());
     torOnion = t;
     renderReach();
-    if (!shown && !$('v-start').hidden) setStatus('Tor ready', 'ok');
+    // The chip shows the chat on screen; anywhere else, Tor's state.
+    if (!shown) setStatus('Tor ready', 'ok');
   } else if (num === 3) {
     $('tor-state').textContent = `Tor failed: ${t}`;
-    setStatus('Tor failed', 'bad');
+    if (!shown) setStatus('Tor failed', 'bad');
     error('E_TOR_UNAVAILABLE');
   }
 }
@@ -1044,6 +1059,7 @@ function wire(c) {
   on('b-restart', () => app.restart_ice());
   on('b-info', () => { c.$('diag').hidden = !c.$('diag').hidden; if (!c.$('diag').hidden) renderExposure(c); });
   on('b-drop', () => A(c).drop_path());
+  on('b-redial', () => { app.tor_redial_now(); c.$('peer-state').textContent = 'reconnecting now…'; });
   c.$('c-addr').onchange = () => renderPath(c);
   on('b-resume', () => A(c).create_resume(Number($('s-ttl').value)));
   on('b-scan-resume', () => scan((t) => applyCode(t, true)));
@@ -1213,7 +1229,13 @@ async function remember(blob) {
 
 // Signs in with an encrypted key file; one identity per tab (Web Lock, §7.2).
 async function signIn(blob, pw, rememberIt) {
-  if (app.load_identity(blob, pw) !== 0) return false;
+  const r = app.load_identity(blob, pw);
+  if (r === 0x43) {
+    const open = [...chats.values()].filter((c) => !c.over).length;
+    error(`Close your open chats and rooms first (${open} open): the identity can change only while none is open.`);
+    return false;
+  }
+  if (r !== 0) return false; // wrong passphrase or damaged file: the ERROR event said which
   if (!(await lockIdentity())) {
     app.new_temporary_identity();
     renderIdentity();
@@ -1222,6 +1244,7 @@ async function signIn(blob, pw, rememberIt) {
   }
   if (rememberIt) await remember(blob);
   renderIdentity();
+  if (!shown) setStatus(`signed in: ${app.identity_label()}`, 'ok');
   return true;
 }
 
@@ -1837,6 +1860,7 @@ async function main() {
     };
   }
   $('b-back').onclick = backToList;
+  $('error').onclick = () => { $('error').hidden = true; };
   for (const li of document.querySelectorAll('#list-settings [data-go]')) li.onclick = () => openSettings(li.dataset.go);
   $('b-new').onclick = home;
   $('b-invite').onclick = () => {
@@ -1895,7 +1919,12 @@ async function main() {
     if (app.set_nick($('i-nick').value) === 0 && app.identity_label()) persist();
   };
   // Network change (§13): try an in-band ICE restart while the channel may still be up.
-  const netChanged = () => { if (!TOR && [...chats.values()].some((c) => c.open)) app.restart_ice(); };
+  // Tor: lost links we dialled are dialled again at once (a phone coming back from the
+  // background, a new network), instead of waiting out the backoff.
+  const netChanged = () => {
+    if (TOR) app.tor_redial_now();
+    else if ([...chats.values()].some((c) => c.open)) app.restart_ice();
+  };
   addEventListener('online', netChanged);
   navigator.connection?.addEventListener?.('change', netChanged);
   $('b-update').onclick = applyUpdate;
@@ -1917,7 +1946,10 @@ async function main() {
     $('c-notify').checked = on;
     try { on ? localStorage.setItem('ephem-notify', '1') : localStorage.removeItem('ephem-notify'); } catch { /* private mode */ }
   };
-  document.addEventListener('visibilitychange', () => flushRead(shown));
+  document.addEventListener('visibilitychange', () => {
+    flushRead(shown);
+    if (TOR && !document.hidden) app.tor_redial_now();
+  });
   // Keyboard: Alt+1/2/3 the tabs, Alt+↑/↓ the previous/next chat, Escape back to the list (phone).
   document.addEventListener('keydown', (e) => {
     if (e.altKey && ['1', '2', '3'].includes(e.key)) {

@@ -61,7 +61,9 @@ h2 { margin: 0 0 6px; font-size: 13px; color: var(--acc); font-weight: 600; lett
 .lead { color: var(--dim); margin: 0 0 10px; }
 .note { color: var(--dim); font-size: 12px; }
 .warn { color: var(--warn); background: var(--warn-bg); border: 1px solid rgba(226, 177, 60, .35); padding: 8px 10px; border-radius: 6px; }
-#error.warn { color: var(--bad); background: var(--bad-bg); border-color: rgba(226, 91, 76, .4); }
+#error.warn { color: var(--bad); background: #2a1716; border-color: rgba(226, 91, 76, .4); cursor: pointer; }
+/* Errors stay in view while the pane scrolls (the action may be far down, e.g. in Settings). */
+#error { position: sticky; top: 0; z-index: 5; margin: 0 0 8px; }
 
 /* ---- top bar: brand + chips (as the dashboard header) ---- */
 .bar { flex: none; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center;

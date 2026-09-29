@@ -121,6 +121,9 @@ pub mod ev {
     /// the user: accept = save the contact, decline = leave); 2 contacts changed (save the key
     /// file).
     pub const CARD: u32 = 27;
+    /// Tor build: the dialer tries to reach the peer's onion again (§28.5). num = attempt
+    /// (1, 2, …); text = why the previous attempt failed (empty on the first).
+    pub const REDIAL: u32 = 28;
 }
 
 /// Byte offsets inside the meta block.
@@ -652,6 +655,13 @@ impl App {
         // Only a saved identity owns channels; a temporary one only reads.
         let id = g.saved.as_ref().map(|_| Identity::from_seed(g.id.seed()));
         ch.bind(id, &label, g.tor.slot.clone());
+    }
+
+    /// Redials at once every chat whose Tor stream was lost and that we dialled (the page came
+    /// back to the foreground, the network returned, or "Reconnect now"): fresh circuits, no
+    /// waiting out the backoff. The host side has nothing to do: its peer dials it.
+    pub fn tor_redial_now(&self) {
+        tor::redial_all(&self.inner);
     }
 
     /// arti logs to the console at `level` (`"info"`, `"debug"`, …; diagnostics only).
