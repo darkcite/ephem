@@ -257,3 +257,10 @@ h2 small { color: var(--dim); font-weight: 400; text-transform: none; letter-spa
   padding: max(56px, calc(env(safe-area-inset-top) + 48px)) 12px 12px; }
 .sheet .card { width: min(560px, 100%); margin: 0; box-shadow: 0 8px 30px rgba(0, 0, 0, .5); }
 @media (max-width: 480px) { #me { display: none; } }
+
+/* Display details (Settings → About): a probe for the safe-area insets. */
+#safe-probe { position: fixed; left: 0; top: 0; width: 0; visibility: hidden; pointer-events: none;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+#dvh-probe { position: fixed; left: 0; top: 0; width: 0; height: 100dvh; visibility: hidden; pointer-events: none; }
+#vh-probe { position: fixed; left: 0; top: 0; width: 0; height: 100vh; visibility: hidden; pointer-events: none; }
+#lvh-probe { position: fixed; left: 0; top: 0; width: 0; height: 100lvh; visibility: hidden; pointer-events: none; }

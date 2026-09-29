@@ -322,6 +322,32 @@ function dropNotice(key) {
   notices.delete(key);
 }
 
+/** Settings → About → Display details: what this device reports about the screen (layout bugs
+ *  on phones differ per device and mode; these numbers say which). */
+function renderDisplay() {
+  const probe = (id) => {
+    let el = document.getElementById(id);
+    if (!el) { el = document.createElement('div'); el.id = id; document.body.append(el); }
+    return el;
+  };
+  const cs = getComputedStyle(probe('safe-probe'));
+  const h = (id) => Math.round(probe(id).getBoundingClientRect().height);
+  const r = (sel) => { const e = document.querySelector(sel); if (!e) return '-'; const b = e.getBoundingClientRect(); return `${Math.round(b.top)}–${Math.round(b.bottom)}`; };
+  const vv = window.visualViewport;
+  $('disp-text').textContent = [
+    `build            ${document.querySelector('meta[name="ephem-build"]')?.content}`,
+    `mode             ${navigator.standalone ? 'home screen app' : matchMedia('(display-mode: standalone)').matches ? 'standalone' : 'browser'}`,
+    `screen           ${screen.width} × ${screen.height} @${devicePixelRatio}`,
+    `inner            ${innerWidth} × ${innerHeight}; outer ${outerWidth} × ${outerHeight}`,
+    `visualViewport   ${vv ? `${Math.round(vv.width)} × ${Math.round(vv.height)} at ${Math.round(vv.offsetTop)}, scale ${vv.scale}` : '-'}`,
+    `100dvh/vh/lvh    ${h('dvh-probe')} / ${h('vh-probe')} / ${h('lvh-probe')}`,
+    `safe area t/b    ${cs.paddingTop} / ${cs.paddingBottom}`,
+    `html / body      ${Math.round(document.documentElement.getBoundingClientRect().height)} / ${r('body')}`,
+    `header / tabs    ${r('.bar')} / ${r('.tabs')}`,
+    `scrollY          ${scrollY}; body.kbd ${document.body.classList.contains('kbd')}`,
+  ].join('\n');
+}
+
 function renderCodeBox(box, kind, code) {
   const link = `${baseUrl()}#${FRAG[kind]}=${code}`;
   box.querySelector('.qr').innerHTML = qr_svg_path(link);
@@ -2099,6 +2125,8 @@ async function main() {
     if (c) c.transferring = 'receiver';
   };
   $('b-backup').onclick = downloadBackup;
+  $('disp').ontoggle = () => { if ($('disp').open) renderDisplay(); };
+  $('b-disp-copy').onclick = () => navigator.clipboard?.writeText($('disp-text').textContent).catch(() => {});
   $('b-go-add').onclick = () => showAdd();
   $('b-share-card').onclick = () => showAdd();
   $('b-card-save').onclick = () => openSettings('identity-card');
