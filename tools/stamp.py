@@ -111,9 +111,12 @@ def main():
     # Every file feeds the build id (icons and the Tor build too), so any change makes a new SW
     # version. tor.html is derived from the others (and would contain the id itself).
     cached = [f for f in PRECACHE if f not in ("./", "index.html")] + tor_pkg + ["redirect.js"]
-    build = hashlib.sha256("".join(sri(read(r)) for r in cached).encode()).hexdigest()[:12]
+    # index.html counts too (a change to it alone, e.g. a <meta>, must reach installed apps): its
+    # stamped text with the build id still a placeholder, so stamping twice gives the same id.
+    direct = restamp(index, stamp_block(hashes, MODULES, "pkg/ephem_bg.wasm", CONNECT))
+    build = hashlib.sha256(("".join(sri(read(r)) for r in cached) + sri(direct.encode())).encode()).hexdigest()[:12]
     meta = f'<meta name="ephem-build" content="{build}">'
-    write("index.html", restamp(index, stamp_block(hashes, MODULES, "pkg/ephem_bg.wasm", CONNECT)).replace("{build}", meta, 1))
+    write("index.html", direct.replace("{build}", meta, 1))
     write("tor.html", tor.replace("{build}", meta, 1))
     write("channel.html", REDIRECT.replace("{sri}", hashes["redirect.js"]))
 
