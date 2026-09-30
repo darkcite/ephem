@@ -95,7 +95,7 @@ try {
   await a.check('#c-hud');
   await a.waitForFunction(() => /CPU ~\d+%/.test(document.querySelector('#hud')?.textContent), null, { timeout: 3_000 });
   check('performance readout: delivery latency per chat, main-thread load, wasm memory; the overlay shows them',
-    /main thread\s+~[\d.]+ % busy/.test(perfText) && /wasm \(app\)\s+[\d.]+ MB/.test(perfText), (await a.textContent('#hud')).trim());
+    /CPU \(main\)\s+~[\d.]+ % busy/.test(perfText) && /wasm \(app\)\s+[\d.]+ MB/.test(perfText), (await a.textContent('#hud')).trim());
   await a.uncheck('#c-hud');
   await a.click('#tab-chats');
   await pick(a, 'Carol');
@@ -137,6 +137,15 @@ try {
   await ph.click('#tab-chats');
   const overflow = await ph.evaluate(() => document.documentElement.scrollWidth > innerWidth);
   check('phone: no horizontal scrolling', !overflow);
+  // Settings with both debug readouts open: nothing wider than the screen (a long readout line
+  // once widened the pane and the page scrolled sideways).
+  await ph.click('#tab-settings');
+  await ph.click('#perf summary');
+  await ph.click('#disp summary');
+  await ph.waitForTimeout(1200);
+  const wide = await ph.evaluate(() => ({ page: document.documentElement.scrollWidth - innerWidth, pane: document.querySelector('#pane').scrollWidth - document.querySelector('#pane').clientWidth }));
+  check('phone: debug readouts open in Settings, still no sideways scrolling', wide.page <= 0 && wide.pane <= 0, JSON.stringify(wide));
+  await ph.click('#tab-chats');
 
   check('no page errors or CSP violations', problems.length === 0, problems.join(' | '));
 } catch (e) {

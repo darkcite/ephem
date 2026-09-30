@@ -70,7 +70,8 @@ export function report() {
   const l = load();
   const lines = [
     `uptime           ${Math.round((performance.now() - started) / 1000)} s`,
-    `main thread      ~${(l.busy * 100).toFixed(1)} % busy (last minute); timer late p50 ${ms(l.p50)}, max ${ms(l.max)}`,
+    `CPU (main)       ~${(l.busy * 100).toFixed(1)} % busy, last minute`,
+    `timer late       median ${ms(l.p50)}, worst ${ms(l.max)}`,
     `long tasks       ${'PerformanceObserver' in globalThis && PerformanceObserver.supportedEntryTypes?.includes('longtask') ? `${longTasks} (${Math.round(longMs)} ms in all)` : 'not reported by this browser'}`,
   ];
   for (const [label, bytes] of sources.memories()) lines.push(`${label.padEnd(17)}${mb(bytes)}`);
