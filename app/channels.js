@@ -49,6 +49,12 @@ export function init(c) {
   if (globalThis.ephemTorLab) globalThis.ephemChannelsRefresh = refreshAll; // lab: refresh now
 }
 
+/** Direct mode: the Tor part's own WebAssembly memory, once loaded (for the performance readout). */
+let torWasm = null;
+export function memories() {
+  return torWasm ? [['wasm (Tor part)', torWasm.memory.buffer.byteLength]] : [];
+}
+
 /** Tor mode: the chats' Tor client is up (ev::TOR 2). */
 export function torReady() {
   torResolve?.();
@@ -132,7 +138,7 @@ async function loadEngine() {
   $('ch-state').textContent = 'Loading the Tor part of Ephem…';
   const mod = await import('./pkg/ephem_tor.js');
   const sri = document.querySelector('meta[name="ephem-tor-wasm"]')?.content;
-  await mod.default({ module_or_path: fetch(new URL('./pkg/ephem_tor_bg.wasm', import.meta.url), sri ? { integrity: sri } : {}) });
+  torWasm = await mod.default({ module_or_path: fetch(new URL('./pkg/ephem_tor_bg.wasm', import.meta.url), sri ? { integrity: sri } : {}) });
   ch = new mod.ChannelApp();
   if (globalThis.ephemTorLab) globalThis.ephemChannel = ch;
   const lab = globalThis.ephemTorLab;

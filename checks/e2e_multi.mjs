@@ -84,6 +84,22 @@ try {
   await msgWith(a, 'them', 'still here').waitFor({ timeout: 10_000 });
   check('Bob leaving ends only his chat; Carol\'s continues', (await rows(a)).length === 1);
 
+  // Performance readout: delivery latency of Carol's chat, main-thread load, WebAssembly memory.
+  await say(a, 'timing this');
+  await msgWith(c, 'them', 'timing this').waitFor({ timeout: 10_000 });
+  await a.waitForFunction(() => [...document.querySelectorAll('#log li.me .tick')].at(-1)?.textContent.includes('✓'), null, { timeout: 10_000 });
+  await toSettings(a);
+  await a.click('#perf summary');
+  await a.waitForFunction(() => /delivered in \d+ ms/.test(document.querySelector('#perf-text')?.textContent), null, { timeout: 5_000 });
+  const perfText = await a.textContent('#perf-text');
+  await a.check('#c-hud');
+  await a.waitForFunction(() => /CPU ~\d+%/.test(document.querySelector('#hud')?.textContent), null, { timeout: 3_000 });
+  check('performance readout: delivery latency per chat, main-thread load, wasm memory; the overlay shows them',
+    /main thread\s+~[\d.]+ % busy/.test(perfText) && /wasm \(app\)\s+[\d.]+ MB/.test(perfText), (await a.textContent('#hud')).trim());
+  await a.uncheck('#c-hud');
+  await a.click('#tab-chats');
+  await pick(a, 'Carol');
+
   // ARIA: tabs and lists (a screen reader finds its way).
   const roles = await a.evaluate(() => ({
     tablist: document.querySelectorAll('[role=tablist] [role=tab]').length,

@@ -24,9 +24,9 @@ import os
 import re
 
 APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app")
-MODULES = ["app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "pkg/ephem.js", "pkg/ephem_tor.js"]
-TOR_MODULES = ["app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "pkg/ephem_tor.js"]
-HASHED = ["app.css", "app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest"]
+MODULES = ["app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "perf.js", "pkg/ephem.js", "pkg/ephem_tor.js"]
+TOR_MODULES = ["app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "perf.js", "pkg/ephem_tor.js"]
+HASHED = ["app.css", "app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "perf.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest"]
 TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm", "channel.html", "redirect.js"]
 PRECACHE = ["./", "index.html"] + HASHED + [
     "icons/icon.svg",

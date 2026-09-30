@@ -13,6 +13,7 @@
 import * as slots from './slots.js';
 import * as bridges from './bridges.js';
 import * as channels from './channels.js';
+import * as perf from './perf.js';
 import { avatar } from './ui.js';
 
 const TOR = document.documentElement.dataset.mode === 'tor';
@@ -462,7 +463,7 @@ function addMessage(c, sender, seq, body, ttl, reply) {
   const reacts = document.createElement('span');
   reacts.className = 'reacts';
   li.append(reacts);
-  const m = { li, body: b, tick, meta, reacts, text: body, sender, mine, seq, deleted: false, level: 0, reactions: new Map() };
+  const m = { li, body: b, tick, meta, reacts, text: body, sender, mine, seq, deleted: false, level: 0, reactions: new Map(), sentAt: mine ? performance.now() : 0 };
   c.msgs.set(li.dataset.key, m);
   const follow = c === shown && (mine || atBottom());
   c.$('log').append(li);
@@ -494,6 +495,7 @@ function roomTick(c, m) {
 function setTick(c, upto, level) {
   for (const m of c.msgs.values()) {
     if (!m.mine || m.seq > upto || m.level >= level || m.deleted) continue;
+    if (level === 1 && m.level === 0 && m.sentAt) perf.delivered(c, performance.now() - m.sentAt);
     m.level = level;
     m.tick.textContent = level === 1 ? '✓' : '✓✓';
     m.tick.title = level === 1 ? 'Delivered' : 'Read';
@@ -2058,6 +2060,13 @@ async function main() {
   wasm = await mod.default({ module_or_path: fetch(wasmUrl, wasmSri ? { integrity: wasmSri } : {}) });
   app = new App();
   metaPtr = app.meta_ptr();
+  perf.init({
+    memories: () => [['wasm (app)', wasm.memory.buffer.byteLength], ...channels.memories()],
+    chats: () => [...chats.values()].filter((c) => c.open && !c.room).map((c) => ({
+      name: c.title || 'chat', via: TOR ? 'Tor' : 'direct', lat: c.lat || [],
+      rtt: (/RTT (\d+) ms/.exec(c.pathText || '') || [])[1] ? `${/RTT (\d+) ms/.exec(c.pathText)[1]} ms` : '',
+    })),
+  });
   channels.init({ TOR, phone, app, mod: TOR ? mod : null, showPane, setTab, setStatus, error, persist, scan, download, notify, notice, ramSections: () => !app.identity_label() });
   renderIdentity();
   if (TOR) beginTor();
@@ -2137,6 +2146,20 @@ async function main() {
   };
   $('b-backup').onclick = downloadBackup;
   $('disp').ontoggle = () => { if ($('disp').open) renderDisplay(); };
+  // Performance: refreshed every second while open; the overlay while switched on.
+  let hudOn = false;
+  try { hudOn = localStorage.getItem('ephem-hud') === '1'; } catch { /* private mode */ }
+  $('c-hud').checked = hudOn;
+  $('hud').hidden = !hudOn;
+  $('c-hud').onchange = () => {
+    hudOn = $('c-hud').checked;
+    $('hud').hidden = !hudOn;
+    try { hudOn ? localStorage.setItem('ephem-hud', '1') : localStorage.removeItem('ephem-hud'); } catch { /* private mode */ }
+  };
+  setInterval(() => {
+    if ($('perf').open) $('perf-text').textContent = perf.report();
+    if (hudOn) $('hud').textContent = perf.brief();
+  }, 1000);
   $('b-disp-copy').onclick = () => navigator.clipboard?.writeText($('disp-text').textContent).catch(() => {});
   $('b-go-add').onclick = () => showAdd();
   $('b-share-card').onclick = () => showAdd();
