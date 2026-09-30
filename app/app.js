@@ -392,6 +392,8 @@ function fitViewport() {
   if (kbd && (window.scrollY || vv.offsetTop)) window.scrollTo(0, 0);
   if (follow || (kbd && document.activeElement.closest('.composer'))) toBottom();
 }
+// Installed as a Home Screen app: its own tab bar size (app.css html.standalone).
+if (navigator.standalone === true || matchMedia('(display-mode: standalone)').matches) document.documentElement.classList.add('standalone');
 if (window.visualViewport) {
   visualViewport.addEventListener('resize', fitViewport);
   visualViewport.addEventListener('scroll', fitViewport);

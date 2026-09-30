@@ -15,10 +15,6 @@
 html[data-mode="tor"] .direct-only, html:not([data-mode="tor"]) .tor-only { display: none !important; }
 html[data-mode="tor"] .brand::after { content: " · Tor"; color: var(--ok); }
 html, body { margin: 0; background: var(--bg); color: var(--fg); }
-/* The page's own background (seen only outside the body) is the tab bar's colour: in an iPhone
-   Home Screen app with a translucent status bar, iOS leaves a strip under the web view that it
-   fills with this colour, so the tab bar reads as one bar down to the bottom edge. */
-html { background: var(--panel); }
 body { min-height: 100dvh; display: flex; flex-direction: column; font: 14px/1.45 var(--mono); }
 /* ---- shell (Appendix F.3.1): a fixed full-screen frame (the page itself never scrolls, also as
    an iPhone Home Screen app); the tab list and the pane scroll inside it. Desktop: tabs and list
@@ -87,6 +83,11 @@ button.wide { width: 100%; }
   body:not(.pane-open) .pane { display: none; }
   .side { border-right: 0; }
   .tabs { border-right: 0; border-top: 1px solid var(--line); background: var(--panel); padding: 4px 6px max(6px, env(safe-area-inset-bottom)); }
+  /* Installed as an iPhone Home Screen app (html.standalone, app.js): the tab bar twice as
+     tall, down at the bottom of what iOS gives the page (it keeps a strip below that the page
+     cannot paint). */
+  html.standalone .tabs { padding-top: 10px; }
+  html.standalone .tabs button { min-height: 88px; font-size: 14px; }
   body.kbd .tabs { display: none; }
   body.kbd .shell, body.kbd.pane-open .shell { grid-template-rows: minmax(0, 1fr); }
   body .composer { padding-bottom: 8px; }
