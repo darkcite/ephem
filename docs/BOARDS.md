@@ -328,6 +328,50 @@ Only when some follower runs a Kubo mirror (D.7.2): the root's pin links reach e
 | B7 | Moderation in v1 | **Owner only**: delete, ban a poster or trip key, lock, sticky, pause posting. Janitors, word filters, reports and pre-moderation move to a later phase (BD-5b) |
 | B8 | Tripcodes | **Yes, signed trip keys** (G.4) |
 
+## G.17 Optional public discovery (proposed; the owner's request of 2026-09-30)
+
+**Goal.** An owner may make a board, or one thread, findable by people who do not have its link, with **no directory, index or link built into the app** (no server of ours, no hard-coded list; P10). Off by default, per board and per thread.
+
+**Principle: discovery spreads through what people already follow.** A reader who knows no board finds nothing; one who knows one board can reach every board that chose to be discoverable and is connected to it. This is how webrings and early Usenet grew, and it keeps each hop an explicit, signed choice of an owner.
+
+### G.17.1 What an owner publishes
+
+- A **discovery card** in the board's signed manifest (G.5): `disc: {tags: [≤ 4 short words], blurb: ≤ 140 chars, nsfw: bool, since}` and, per discoverable thread, `{no, title}` in the catalog. No card → the board is invisible to discovery, and the app never lists it.
+- A **"see also" list** in the same manifest: up to 16 other boards' names (+ onions) the owner vouches for, each with its own tags as the owner saw them. This is the only way one board points to another; it is signed, so a mirror cannot add entries.
+- Served at `/disc` by the board's gateway (the card and the list, a few hundred bytes), so a reader fetches it without the whole board.
+
+### G.17.2 How a reader discovers (the **Discover** view, Following tab)
+
+1. **Seeds**: the boards and channels the reader already follows, plus links received from contacts. Nothing else; an empty follow list means an empty Discover view with the sentence "Follow a board to see the boards it recommends".
+2. **Crawl**: over Tor, fetch `/disc` of each seed, then of the boards in their "see also" lists, breadth first, **depth ≤ 3**, ≤ 100 boards, at most 4 fetches in flight, only while the tab is visible and at most once an hour. Each card is verified (the manifest signature; the onion is the board's own or a signed mirror).
+3. **Show**: cards grouped by tag, with "recommended by <board>" (the path it was found through), the blurb, `nsfw` hidden unless the reader turns it on. Opening a card = reading the board as usual.
+4. **Cache**: the verified cards in the reader's storage for a day; nothing leaves the device (the crawl reveals to each board's host only that *someone over Tor* read `/disc`).
+
+### G.17.3 Optional: public rendezvous on the IPFS network (spike B-P8)
+
+For boards that want to be found by strangers with no shared seed:
+- A **topic key** is derived from a tag (`HKDF("ephem-disc-v1" ‖ tag)`), known to everyone. An IPNS record under a publicly known key can be overwritten by anyone, so a single record per topic cannot work.
+- Instead the board announces itself as a **provider** of a topic CID (`CID(raw, sha256("ephem-disc-v1:" ‖ tag ‖ week))`) on the public DHT, through the IPFS routing API from a Tor exit, as channels publish today. A reader asks the routing API for the providers of that CID and gets peer records; each one must then prove it is a board (its `/disc` card, signed) or is dropped.
+- Unknowns: whether `delegated-ipfs.dev` accepts provider announcements over HTTP (the v1 API's `PUT /providers` is not generally served), and how easily the topic is flooded. **Only if B-P8 shows it works, and behind its own switch.** The IPFS routing host itself is already configurable (P10 forbids a hard-coded *directory*; the routing service is infrastructure, as for channels).
+
+### G.17.4 Abuse and safety
+
+| Risk | Answer |
+|---|---|
+| Illegal or abusive boards spread through "see also" | Each hop is a signed choice of an owner the reader already trusts; the path is shown ("found via A → B"); a reader can **block** a board, which also stops the crawl through it; `nsfw` off by default |
+| Spam boards pointing at each other | Depth ≤ 3 and ≤ 100 boards; a reader-side score: boards reached by several independent paths first |
+| Shared blocklists | A board may publish a signed **block list** (names); a reader can subscribe to the lists of boards they follow; no global list exists |
+| Linking an owner's boards | "See also" is public by design; an owner who wants two boards unlinked does not list one in the other (the UI says so) |
+| Readers' privacy | Everything over Tor; no query leaves the device except `/disc` fetches of boards already in the graph |
+
+### G.17.5 Phases
+
+| ID | Scope | Done when |
+|---|---|---|
+| BD-9 | Discovery card, "see also" list, `/disc`, per-thread flag, owner UI | Lab E2E: an owner turns discovery on; `/disc` serves a signed card |
+| BD-10 | Reader crawl (depth 3, caps, cache), Discover view, block, nsfw | Lab E2E: three boards A → B → C; a reader following A sees B and C with their paths; blocking B hides C |
+| B-P8 (spike) → BD-11 | DHT rendezvous by topic (provider records through the routing API) | Live: a provider announcement for a topic CID is accepted and found again, or the idea is dropped |
+
 ## G.16 Phases and spikes
 
 | ID | Scope / question | Done when |
