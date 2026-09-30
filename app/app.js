@@ -392,8 +392,17 @@ function fitViewport() {
   if (kbd && (window.scrollY || vv.offsetTop)) window.scrollTo(0, 0);
   if (follow || (kbd && document.activeElement.closest('.composer'))) toBottom();
 }
-// Installed as a Home Screen app: its own tab bar size (app.css html.standalone).
-if (navigator.standalone === true || matchMedia('(display-mode: standalone)').matches) document.documentElement.classList.add('standalone');
+// Installed as a Home Screen app, iOS may give the page less than the screen (a strip at the
+// bottom that the page cannot paint, as tall as the status bar): the tab bar then drops its room
+// for the home indicator (app.css html.short-view).
+function markShortView() {
+  const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  const full = innerHeight >= innerWidth ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
+  const gap = full - innerHeight;
+  document.documentElement.classList.toggle('short-view', standalone && gap >= 20 && gap <= 80);
+}
+markShortView();
+addEventListener('resize', markShortView);
 if (window.visualViewport) {
   visualViewport.addEventListener('resize', fitViewport);
   visualViewport.addEventListener('scroll', fitViewport);

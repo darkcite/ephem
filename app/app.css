@@ -35,6 +35,8 @@ body.kbd { height: var(--vvh, 100dvh); min-height: 0; }
 .pane > #chat-slot { padding-bottom: 0; }
 .tabs button { flex: 1; margin: 0; padding: 6px 2px; font-size: 12px; background: transparent; border-color: transparent; color: var(--dim);
   border-bottom: 2px solid transparent; border-radius: 0; white-space: nowrap; }
+/* A tap leaves no focus box on a tab (keyboard focus still shows one). */
+.tabs button:focus:not(:focus-visible) { outline: none; border-color: transparent; }
 .tabs button[aria-selected="true"] { color: var(--acc); border-bottom-color: var(--acc); font-weight: 600; }
 .badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--acc); color: var(--bg);
   font-size: 11px; font-weight: 700; text-align: center; line-height: 18px; }
@@ -83,11 +85,11 @@ button.wide { width: 100%; }
   body:not(.pane-open) .pane { display: none; }
   .side { border-right: 0; }
   .tabs { border-right: 0; border-top: 1px solid var(--line); background: var(--panel); padding: 4px 6px max(6px, env(safe-area-inset-bottom)); }
-  /* Installed as an iPhone Home Screen app (html.standalone, app.js): the tab bar twice as
-     tall, down at the bottom of what iOS gives the page (it keeps a strip below that the page
-     cannot paint). */
-  html.standalone .tabs { padding-top: 10px; }
-  html.standalone .tabs button { min-height: 88px; font-size: 14px; }
+  /* Installed as an iPhone Home Screen app with the strip iOS keeps under the page
+     (html.short-view, app.js): the home indicator sits in that strip, outside the page, so the
+     bar needs no room for it; taller buttons, flush with the bottom of the page. */
+  html.short-view .tabs { padding-bottom: 0; }
+  html.short-view .tabs button { min-height: 44px; font-size: 14px; }
   body.kbd .tabs { display: none; }
   body.kbd .shell, body.kbd.pane-open .shell { grid-template-rows: minmax(0, 1fr); }
   body .composer { padding-bottom: 8px; }
