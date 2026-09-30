@@ -1847,7 +1847,7 @@ Everything else follows from this table: the vault makes the *state* follow the 
 | ID | Scope / question | Done when | Status |
 |---|---|---|---|
 | V-P1 (spike) | `delegated-ipfs.dev` accepts and returns a V2-only record of ~9.5 KiB with an identity-CID value; `trustless-gateway.link` returns it | Live PUT/GET byte-identical, as C-P4 | ✅ Live 2026-09-29 (`NODE_USE_ENV_PROXY=1 node checks/vault_spike.mjs`): a 9 248-byte V2-only record with a 5 672-byte inline identity CID accepted (`PUT` 200) and returned byte-identical by the routing API and by `trustless-gateway.link` |
-| V-P2 (spike) | How long the DHT keeps the record without republishing | Measured over 72 h (resolve every hour) | ⏳ running: record `k51qzi5uqu5dgvhn5btbh9q1hrrcgbdwz00a4qwwdd0w5pz9syqsu5jpjfisq5` published 2026-09-29 16:22 UTC, never republished; `CHECK=<name> node checks/vault_spike.mjs` |
+| V-P2 (spike) | How long the DHT keeps the record without republishing | Measured over 72 h (resolve every hour) | ⏳ running: record `k51qzi5uqu5dgvhn5btbh9q1hrrcgbdwz00a4qwwdd0w5pz9syqsu5jpjfisq5` published 2026-09-29 16:22 UTC, never republished; `CHECK=<name> node checks/vault_spike.mjs`. **+13 h (2026-09-30 05:16 UTC): still returned (9 248 bytes) by the routing API and the gateway** |
 | V-1 | `channel::vault`: keys, dag-cbor, padding, seal/open, V2-only record | Unit tests | ✅ tamper (every 97th byte), wrong key and name, the largest vault ≤ 10 KiB |
 | V-2 | Publish on change and on every lease renewal; restore on sign-in; fetch from the channel's onion and mirrors | Lab E2E | ✅ `e2e_tor_vault.mjs` |
 | V-3 | Continue without history; back-fill; the writer lease and "Take over here" | Lab E2E | ✅ `e2e_tor_vault.mjs` (back-fill: unit tests; in the app from mirrors) |
