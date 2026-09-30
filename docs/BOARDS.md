@@ -372,6 +372,61 @@ For boards that want to be found by strangers with no shared seed:
 | BD-10 | Reader crawl (depth 3, caps, cache), Discover view, block, nsfw | Lab E2E: three boards A → B → C; a reader following A sees B and C with their paths; blocking B hides C |
 | B-P8 (spike) → BD-11 | DHT rendezvous by topic (provider records through the routing API) | Live: a provider announcement for a topic CID is accepted and found again, or the idea is dropped |
 
+## G.18 Scale and denial of service (proposed; the owner's question of 2026-09-30)
+
+**The honest starting point.** A board's writer is one browser tab behind Snowflake: measured on the real Tor network, one tab moves ≈ 320 KiB/s and opens a stream in ≈ 0.5 s (B-P5). It can never serve 100 000 readers itself, and it is the one thing an attacker wants to knock over. So the design **separates reading from writing**: the writer serves almost nobody; readers serve each other; the writer's address is not even needed for reading.
+
+### G.18.1 Reads scale with the readers (a swarm of mirrors)
+
+A board state is content-addressed blocks plus one signed IPNS record (G.5), so **any copy is as good as the owner's**: readers verify every block and signature, and a high-water mark stops rollback (D.8). That allows:
+
+| Layer | Who | What they serve |
+|---|---|---|
+| Tier 0 | The writer tab | New records and new blocks **only to tier-1 mirrors** (a few), not to readers |
+| Tier 1 | Mirrors the owner signs into the manifest (≤ 8, D.7) and janitors' tabs | The whole board; they pull from the writer within seconds of a change |
+| Tier 2 | **Readers who opt in to "help host this board"** (on by default for boards, off for channels, a per-board switch): their tab serves what it already downloaded, on a per-board onion unlinkable to them | Blocks they hold; the newest record they verified |
+| Tier 3 (optional) | Followers' Kubo nodes and pinning services (D.7.2, V-4) | Public IPFS: `trustless-gateway.link` and every IPFS node serve it to readers without Tor |
+
+- **Finding copies**: the signed manifest lists tier 1; tier-2 helpers announce themselves in a **helpers list** each tier-1 mirror keeps (onions, freshest sequence, last seen) and serves at `/helpers`; readers pick at random, weighted to fresh ones, and try 3 in parallel (as channels already do with mirrors).
+- **Deltas, not boards**: thread chunks keep their CID until they change (G.5), so a refresh fetches the new record and the few changed blocks: typically **5–30 KiB**, not the board.
+- **Capacity sketch** (to be measured, B-P9): 100 000 readers refreshing every 10 min ≈ 170 refreshes/s × ~20 KiB ≈ 3.4 MB/s in total. At ≈ 300 KiB/s per tab that is **≈ 12 busy helper tabs**; with 1 % of readers helping (1 000 tabs) each one is nearly idle. Readers without Tor add nothing to the swarm's load if tier 3 exists.
+
+### G.18.2 Writes: the real bottleneck
+
+- One writer tab verifies, orders and signs everything. Target (B-P6): **≥ 10 posts/s** sustained. 4chan's busiest boards peak around 5–10 posts/s; a 100 000-reader board is in that range.
+- **Batching**: the writer publishes at most **one new record per second**, however many posts arrived; readers and mirrors never see more than 1 update/s.
+- **Submissions through mirrors (BD-8, promoted from "later")**: posters send to a tier-1 mirror, not the writer; mirrors check PoW and caps, then forward batches to the writer over one long-lived stream. The writer's own onion is then known only to its mirrors.
+- **Beyond one writer**: split the board (topics, or one board per language) with separate owners or the owner's other devices; one board stays one writer (G.10: numbering and moderation need one).
+
+### G.18.3 Denial of service, attack by attack
+
+| Attack | Defence | Status |
+|---|---|---|
+| **Introduction flood** on the writer's onion (each introduction makes the tab build a rendezvous circuit over Snowflake) | 1. The writer's onion is **not public**: readers read from mirrors, posters submit to mirrors (G.18.2), so only tier 1 knows it. 2. **`rate_limit_at_intro`**: the introduction points (Tor relays) refuse excess introductions before they reach the tab; available in our vendored arti without the PoW feature. 3. If it leaks: the owner **rotates the writer onion** (a new derived key, `write/<n>`), told to mirrors in the signed manifest. 4. Tor's own onion-service PoW once B-P2's patches land | 1–3 proposed; 4 needs the arti patches (B-P2) |
+| Introduction flood on a mirror | Readers try 3 of many helpers; a flooded one is dropped from their list; `rate_limit_at_intro` on helpers too | Proposed |
+| Stream / request flood through one circuit | `max_concurrent_streams_per_circuit` (arti config) and the bounded gateway loop (fixed slots, per-stream deadlines, G.6) | Config exists; loop to build (BD-3) |
+| **Post flood** | Equi-X PoW per post (≈ 10 s on a phone, adaptive under load, B6), per-thread and board-wide caps, "pause posting" and "threads by owner only" switches; checked by mirrors before anything reaches the writer | Designed (G.8) |
+| **Read flood** (bandwidth) | Spread over the swarm; each helper caps its upload (default 200 KiB/s, a setting) and stops helping on a metered connection or low battery | Proposed |
+| Poisoning (bad blocks, old records) | Every block is checked against its CID, every post and record against its key; a helper that serves junk is dropped for the session | Already how channels read |
+| Flood of fake helpers (Sybil) | Helpers are only listed by tier-1 mirrors after they served a verified, current copy; readers still verify everything | Proposed |
+| Snowflake exhaustion (the broker or volunteers overloaded) | Outside our control; own bridge lines (F.2); readers without Tor can still read from tier 3 | Partly exists |
+
+### G.18.4 What this cannot promise
+
+- A board whose writer is offline takes no posts (B2); a board with no helpers online and no tier 3 cannot be read.
+- A state-level attacker who floods every introduction point of every mirror can still make the board slow; Tor's PoW (B-P2) is the main answer and needs arti patches.
+- Helpers spend their bandwidth and battery: the switch and the caps are theirs.
+
+### G.18.5 Phases and spikes
+
+| ID | Scope | Done when |
+|---|---|---|
+| B-P9 (spike) | Swarm in the lab: 1 writer, 2 tier-1 mirrors, 20 helper tabs, 50 readers refreshing | Measured refresh time and writer load stay flat as readers grow (writer serves only tier 1) |
+| B-P10 (spike) | `rate_limit_at_intro` and `max_concurrent_streams_per_circuit` in our arti, under an introduction flood in the lab | The tab stays responsive during a flood of 100 introductions/s; legitimate reads still succeed via mirrors |
+| BD-8 (promoted) | Submissions through mirrors, batched to the writer | Lab E2E: posts via a mirror; the writer's onion unknown to posters |
+| BD-12 | Tier-2 helpers (switch, caps, `/helpers`), reader selection of 3, delta refresh | Lab E2E with B-P9's swarm |
+| BD-13 | Writer onion rotation (signed in the manifest) | Lab E2E: rotate under a flood; mirrors follow, readers unaffected |
+
 ## G.16 Phases and spikes
 
 | ID | Scope / question | Done when |
