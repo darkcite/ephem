@@ -1301,6 +1301,49 @@ export class BoardApp {
         }
     }
     /**
+     * Mirrors board `name` on this tab's onion for it (`seed`, 32 bytes, kept by the page, so
+     * the address is stable and the owner can sign it in). Pulls from `onions` (the owner's,
+     * then other mirrors) now and every [`PULL_MS`], fetching only threads that changed and
+     * verifying them; serves read-only (`/pow` and `/submit` answer `E_BOARD_OFFLINE`).
+     * Resolves to `<56 chars>.onion`.
+     * @param {string} name
+     * @param {string} onions
+     * @param {Uint8Array} seed
+     * @returns {Promise<any>}
+     */
+    mirror(name, onions, seed) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(onions, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passArray8ToWasm0(seed, wasm.__wbindgen_export);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.boardapp_mirror(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * The sequence a mirrored board is at (0: not mirrored here).
+     * @param {string} name
+     * @returns {number}
+     */
+    mirror_seq(name) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.boardapp_mirror_seq(this.__wbg_ptr, ptr0, len0);
+        return ret;
+    }
+    /**
      * Board `index`'s IPNS name (`k51…`), the same on every device of the identity.
      * @param {number} index
      * @returns {string}
@@ -1376,6 +1419,39 @@ export class BoardApp {
             return v1;
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * The owner's own board as readers see it (JSON as `read`), from what this tab serves: the
+     * index and the `threads` asked for, verified locally (no Tor round trip).
+     * @param {number} index
+     * @param {Float64Array} threads
+     * @returns {string}
+     */
+    owner_view(index, threads) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArrayF64ToWasm0(threads, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.boardapp_owner_view(retptr, this.__wbg_ptr, index, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr2 = r0;
+            var len2 = r1;
+            if (r3) {
+                ptr2 = 0; len2 = 0;
+                throw takeObject(r2);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export5(deferred3_0, deferred3_1, 1);
         }
     }
     /**
@@ -1624,6 +1700,27 @@ export class BoardApp {
         }
     }
     /**
+     * Signs the mirror list (comma-separated onion addresses, ≤ 8) into board `index`'s
+     * manifest (G.10): readers try them when the owner's onion does not answer.
+     * @param {number} index
+     * @param {string} csv
+     */
+    set_mirrors(index, csv) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(csv, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.boardapp_set_mirrors(retptr, this.__wbg_ptr, index, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * @param {number} index
      * @param {number} no
      * @param {boolean} on
@@ -1754,6 +1851,15 @@ export class BoardApp {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
+    }
+    /**
+     * Stops mirroring board `name` (its mirror onion goes down).
+     * @param {string} name
+     */
+    unmirror(name) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.boardapp_unmirror(this.__wbg_ptr, ptr0, len0);
     }
 }
 if (Symbol.dispose) BoardApp.prototype[Symbol.dispose] = BoardApp.prototype.free;
@@ -2853,7 +2959,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_6616(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_6675(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -2954,7 +3060,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_6616_157(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_6675_162(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -2984,7 +3090,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_6616_158(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_6675_163(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -3188,17 +3294,17 @@ function __wbg_get_imports() {
         },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 848, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_6581);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_6640);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000002: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 649, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_4701);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_4761);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000003: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 385, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_2955);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_3015);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000004: function(arg0) {
@@ -3230,30 +3336,30 @@ function __wbg_get_imports() {
     };
 }
 
-function __wasm_bindgen_func_elem_2955(arg0, arg1) {
-    wasm.__wasm_bindgen_func_elem_2955(arg0, arg1);
+function __wasm_bindgen_func_elem_3015(arg0, arg1) {
+    wasm.__wasm_bindgen_func_elem_3015(arg0, arg1);
 }
 
-function __wasm_bindgen_func_elem_4701(arg0, arg1, arg2) {
-    wasm.__wasm_bindgen_func_elem_4701(arg0, arg1, addHeapObject(arg2));
+function __wasm_bindgen_func_elem_4761(arg0, arg1, arg2) {
+    wasm.__wasm_bindgen_func_elem_4761(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_6616(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_6616(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_6675(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_6675(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_6616_157(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_6616_157(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_6675_162(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_6675_162(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_6616_158(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_6616_158(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_6675_163(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_6675_163(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_6581(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_6640(arg0, arg1, arg2) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        wasm.__wasm_bindgen_func_elem_6581(retptr, arg0, arg1, addHeapObject(arg2));
+        wasm.__wasm_bindgen_func_elem_6640(retptr, arg0, arg1, addHeapObject(arg2));
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         if (r1) {
