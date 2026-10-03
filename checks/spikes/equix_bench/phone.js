@@ -54,7 +54,7 @@ async function run() {
       `one core:   ${r1.toFixed(1)} solutions/s (${one.attempts} attempts, ${(one.attempts / one.wall * 1000).toFixed(1)} attempts/s)`,
       `${many} workers: ${rn.toFixed(1)} solutions/s (${(rn / r1).toFixed(2)}x)`,
       '',
-      `reply at today's default effort 350: median ${median(350, rn)}, p95 ${p95(350, rn)}`,
+      `reply at effort 350: median ${median(350, rn)}, p95 ${p95(350, rn)}`,
       `new thread at effort 2800:          median ${median(2800, rn)}, p95 ${p95(2800, rn)}`,
       `effort for a 10 s median reply here: ${e10} (thread x8: ${e10 * 8})`,
     ].join('\n'));

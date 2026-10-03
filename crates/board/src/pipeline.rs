@@ -66,8 +66,11 @@ pub struct Efforts {
 }
 
 impl Efforts {
-    /// ~10 s for a reply on a 2.1 GHz desktop core in wasm (B-P1); recalibrated from phones (B-P1b).
-    pub const DEFAULT: Self = Self { reply: 350, thread: 350 * 8 };
+    /// B-P1b, 4 Workers: an iPhone (iOS 18.7, Safari) solves 96.8/s, so a 10 s median there is
+    /// effort ≈ 1 400. A mid-range Android is assumed about half as fast (to be measured), which puts
+    /// the G.8 target (10 s median on a mid-range phone) near 700. At 700 the iPhone's median reply
+    /// is 5 s (p95 22 s), a new thread (×8) 40 s (p95 2.9 min). The owner raises the base from here.
+    pub const DEFAULT: Self = Self { reply: 700, thread: 700 * 8 };
 }
 
 /// Caps and budgets (G.5.2, G.8).
