@@ -152,17 +152,29 @@ impl Identity {
         (sign, derive(&self.seed, &info[..m + 4]))
     }
 
-    /// Board number `index` (docs/BOARDS.md G.4): `[signing seed, onion seed, PoW secret]`, each
-    /// `HKDF(seed, "p2pchat/board…/" ‖ u32 index)`. One-way from the identity seed, from each
-    /// other and from every channel key. The caller wipes all three.
-    pub fn board_seeds(&self, index: u32) -> [[u8; 32]; 3] {
+    /// Board number `index` (docs/BOARDS.md G.4): `[signing seed, onion seed, PoW secret,
+    /// owner-state key]`, each `HKDF(seed, "p2pchat/board…/" ‖ u32 index)`. One-way from the
+    /// identity seed, from each other and from every channel key. The caller wipes all four.
+    pub fn board_seeds(&self, index: u32) -> [[u8; 32]; 4] {
         let mut info = [0u8; 28];
         let mut one = |label: &[u8]| {
             info[..label.len()].copy_from_slice(label);
             info[label.len()..label.len() + 4].copy_from_slice(&index.to_be_bytes());
             derive(&self.seed, &info[..label.len() + 4])
         };
-        [one(b"p2pchat/board/"), one(b"p2pchat/board-onion/"), one(b"p2pchat/board-pow/")]
+        [one(b"p2pchat/board/"), one(b"p2pchat/board-onion/"), one(b"p2pchat/board-pow/"), one(b"p2pchat/board-own/")]
+    }
+
+    /// A trip key (G.4): `HKDF(seed, "p2pchat/board-trip/" ‖ board name ‖ "/" ‖ label)`, an
+    /// Ed25519 seed. Stable for this identity, board and label; unlinkable across boards. A trip
+    /// signature removes deniability (the UI says so). The caller wipes it.
+    pub fn trip_seed(&self, board: &str, label: &str) -> [u8; 32] {
+        let mut info = Vec::with_capacity(20 + board.len() + 1 + label.len());
+        info.extend_from_slice(b"p2pchat/board-trip/");
+        info.extend_from_slice(board.as_bytes());
+        info.push(b'/');
+        info.extend_from_slice(label.as_bytes());
+        derive(&self.seed, &info)
     }
 
     /// The onion service public key (the `.onion` address is its base32 form).
@@ -216,10 +228,11 @@ mod tests {
     #[test]
     fn board_keys_are_separate() {
         let a = Identity::from_seed(&[1; 32]);
-        let [sign, onion, pow] = a.board_seeds(0);
+        let [sign, onion, pow, own] = a.board_seeds(0);
         let [sign1, ..] = a.board_seeds(1);
         let (ch_sign, ch_onion) = a.channel_seeds(0);
-        let all = [sign, onion, pow, sign1, ch_sign, ch_onion, a.onion_secret()];
+        let (t1, t2, t3) = (a.trip_seed("k51a", "me"), a.trip_seed("k51b", "me"), a.trip_seed("k51a", "other"));
+        let all = [sign, onion, pow, own, sign1, ch_sign, ch_onion, a.onion_secret(), t1, t2, t3];
         for i in 0..all.len() {
             for j in i + 1..all.len() {
                 assert_ne!(all[i], all[j], "{i} and {j}");

@@ -26,7 +26,7 @@ fn post(b: &Board, t: u64, body: &str, i: u64) -> (Signed, [u8; 64]) {
     seed[8] = (t & 0xff) as u8;
     seed[31] = 1;
     let key = SigningKey::from_bytes(&seed);
-    let s = Signed { b: b.name().to_text(), t, k: key.verifying_key().to_bytes(), n: [i as u8; 16], sub: if t == 0 { format!("Thread {i}") } else { String::new() }, body: body.into(), sage: false, e: 1 };
+    let s = Signed { b: b.name().to_text(), t, k: key.verifying_key().to_bytes(), n: [i as u8; 16], sub: if t == 0 { format!("Thread {i}") } else { String::new() }, body: body.into(), sage: false, e: 1, trip: false };
     let sig = s.sign(&key);
     (s, sig)
 }
@@ -196,7 +196,7 @@ fn forgeries_and_misplaced_posts_fail() {
     let (s, sig) = post(&b, t, "I am the owner", 4);
     assert_eq!(b.accept(s, sig, cap::OWNER, NOW), Err(BoardError::Refused));
     // The owner's own capcode post works.
-    let s = Signed { b: b.name().to_text(), t, k: b.manifest.pk, n: [5; 16], sub: String::new(), body: "Rules updated".into(), sage: false, e: 1 };
+    let s = Signed { b: b.name().to_text(), t, k: b.manifest.pk, n: [5; 16], sub: String::new(), body: "Rules updated".into(), sage: false, e: 1, trip: false };
     let sig = s.sign(b.signing_key());
     b.accept(s, sig, cap::OWNER, NOW).unwrap();
     let (root, blocks, rec) = publish(&mut b, NOW);

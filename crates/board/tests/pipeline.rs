@@ -59,7 +59,7 @@ impl Poster {
             n[14] = n[14].wrapping_add(u8::from(n[15] == 0));
             c.set_nonce(&n);
         };
-        let s = Signed { b: name.to_text(), t, k, n, sub: if t == 0 { "Subject".into() } else { String::new() }, body: body.into(), sage: false, e: info.epoch };
+        let s = Signed { b: name.to_text(), t, k, n, sub: if t == 0 { "Subject".into() } else { String::new() }, body: body.into(), sage: false, e: info.epoch, trip: false };
         submission(&s, &self.key, effort, solution).unwrap()
     }
 }

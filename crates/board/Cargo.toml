@@ -14,3 +14,5 @@ sha2 = { version = "0.10", default-features = false }
 blake2 = { version = "0.10", default-features = false }
 # Equi-X, the puzzle of Tor's onion-service PoW v1 (G.8); no JIT (wasm32 interprets hashx).
 equix = { version = "=0.7.0", default-features = false }
+# The owner-state block (G.5.1 `own`), as the channel vault.
+chacha20poly1305 = { version = "0.10", default-features = false }

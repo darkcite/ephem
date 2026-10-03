@@ -122,14 +122,15 @@ export async function solve(params, onProgress) {
   }
 }
 
-/** Opens a reply box, solves, signs and submits: resolves to `{no, seq, draft}`. */
-export async function post(name, onion, thread, sub, body, sage, onProgress) {
-  const draft = await boards.draft(name, onion, thread);
+/** Opens a reply box, solves, signs and submits: resolves to `{no, seq, held, draft}` (`held`:
+ *  pre-moderation, no number yet). `trip`: a label to post under the identity's trip key. */
+export async function post(name, onion, thread, sub, body, sage, { trip = '', onProgress } = {}) {
+  const draft = await boards.draft(name, onion, thread, trip);
   const t0 = performance.now();
   const s = await solve(draft.params(), onProgress);
   const solveMs = performance.now() - t0;
   const r = JSON.parse(await boards.post_draft(draft, sub, body, sage, s.n, s.solution));
-  return { ...r, draft, solveMs, effort: draft.effort_now };
+  return { ...r, held: r.no === 0, trip: draft.trip, draft, solveMs, effort: draft.effort_now };
 }
 
 /** The same submit again (a dropped answer): the host returns the original number. */

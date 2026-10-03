@@ -22,8 +22,9 @@ use crate::{ChannelApp, State, err, json, now_s, with_timeout, PORT};
 use ephem_board::board::{Board, Entry};
 use ephem_board::gateway::{self, Answer, Route, SHORT};
 use ephem_board::host::Host;
+use ephem_board::own::Switches;
 use ephem_board::pipeline::{Efforts, Intake, Next, PowInfo, Refusal, submission};
-use ephem_board::post::Signed;
+use ephem_board::post::{Signed, trip_text};
 use ephem_board::submit::{HEADER_LEN, MAX_SUBMIT, kind};
 use ephem_board::verify::{self, View};
 use ephem_channel::car::Block;
@@ -66,10 +67,16 @@ pub(crate) struct Hosted {
     svc: Option<Rc<Service>>,
 }
 
+/// Per board name, the deletion-list hashes a reader has seen.
+type KnownDels = Vec<(Cid, Vec<[u8; 32]>)>;
+
 #[derive(Default)]
 pub(crate) struct Boards {
     pub(crate) hosted: Vec<Hosted>,
     listener: Option<js_sys::Function>,
+    /// Per board read here: the deletion-list hashes seen (G.5.1), applied to any older root a
+    /// stale mirror serves later.
+    known_dels: Rc<RefCell<KnownDels>>,
 }
 
 #[wasm_bindgen]
@@ -89,7 +96,7 @@ impl BoardApp {
         self.st.borrow().tor.borrow().clone().ok_or_else(|| err("Tor is not started"))
     }
 
-    fn seeds(&self, index: u32) -> Result<[[u8; 32]; 3], JsValue> {
+    fn seeds(&self, index: u32) -> Result<[[u8; 32]; 4], JsValue> {
         if index >= MAX_BOARDS {
             return Err(err("at most 4 boards per identity"));
         }
@@ -114,7 +121,7 @@ impl BoardApp {
     pub fn create(&self, index: u32, title: &str, about: &str, rules: &str) -> Result<(), JsValue> {
         let mut s = self.seeds(index)?;
         let board = Board::new(&s[0], title, about, rules, now_s());
-        let r = board.map(|b| self.start(index, b, &s[2]));
+        let r = board.map(|b| self.start(index, b, &s[2], s[3]));
         s.iter_mut().for_each(|x| x.fill(0));
         r.map_err(|e| err(format!("{e:?}")))
     }
@@ -140,16 +147,17 @@ impl BoardApp {
             let mut view = verify::read(&key.verifying_key(), &name, &root, &held, &[]).map_err(|e| format!("{e:?}"))?;
             view.sequence = rec.sequence;
             let board = Board::load(&s[0], view, held).map_err(|e| format!("{e:?}"))?;
-            self.start(index, board, &s[2]);
+            self.start(index, board, &s[2], s[3]);
             Ok::<(), String>(())
         })();
         s.iter_mut().for_each(|x| x.fill(0));
         r.map_err(err)
     }
 
-    fn start(&self, index: u32, board: Board, pow_secret: &[u8; 32]) {
+    fn start(&self, index: u32, board: Board, pow_secret: &[u8; 32], mut own_key: [u8; 32]) {
         let intake = Intake::new(board.name(), *pow_secret, Efforts::DEFAULT, now_s());
-        let host = Rc::new(RefCell::new(Host::new(board, intake, now_ms())));
+        let host = Rc::new(RefCell::new(Host::new(board, intake, own_key, now_ms())));
+        own_key.fill(0);
         let mut st = self.st.borrow_mut();
         st.boards.hosted.retain(|b| b.index != index);
         st.boards.hosted.push(Hosted { index, host: host.clone(), onion: String::new(), svc: None });
@@ -200,14 +208,117 @@ impl BoardApp {
         no.map(|n| n as f64).map_err(|e| err(format!("{e:?}")))
     }
 
-    /// The owner deletes post `no` (an OP takes its thread).
+    // ---- moderation (G.9.1, BD-5) ----
+
+    /// The owner deletes post `no` (an OP takes its thread), published after the 5 s undo
+    /// window (`undo`).
     pub fn delete(&self, index: u32, no: f64) -> Result<(), JsValue> {
-        self.host(index)?.borrow_mut().delete(no as u64, now_s()).map_err(|e| err(format!("{e:?}")))
+        self.host(index)?.borrow_mut().delete(no as u64, now_ms()).map_err(|e| err(format!("{e:?}")))
+    }
+
+    /// Mass delete: every post since `since_s` (Unix seconds). Returns how many.
+    pub fn delete_since(&self, index: u32, since_s: f64) -> Result<u32, JsValue> {
+        Ok(self.host(index)?.borrow_mut().delete_since(since_s as u64, now_ms()) as u32)
+    }
+
+    /// Mass delete: every post from No. `no` on.
+    pub fn delete_from(&self, index: u32, no: f64) -> Result<u32, JsValue> {
+        Ok(self.host(index)?.borrow_mut().delete_from(no as u64, now_ms()) as u32)
+    }
+
+    /// Mass delete: every post signed with the key of post `no` (a trip, or an IDs-on key).
+    pub fn delete_by_key_of(&self, index: u32, no: f64) -> Result<u32, JsValue> {
+        let h = self.host(index)?;
+        let k = post_key(&h.borrow(), no as u64)?;
+        Ok(h.borrow_mut().delete_by_key(&k, now_ms()) as u32)
+    }
+
+    /// Undoes a pending delete (`no` 0: all of them). Returns how many.
+    pub fn undo(&self, index: u32, no: f64) -> Result<u32, JsValue> {
+        Ok(self.host(index)?.borrow_mut().undo(no as u64) as u32)
+    }
+
+    pub fn set_locked(&self, index: u32, no: f64, on: bool) -> Result<(), JsValue> {
+        self.host(index)?.borrow_mut().set_locked(no as u64, on, now_s()).map_err(|e| err(format!("{e:?}")))
+    }
+
+    pub fn set_sticky(&self, index: u32, no: f64, on: bool) -> Result<(), JsValue> {
+        self.host(index)?.borrow_mut().set_sticky(no as u64, on, now_s()).map_err(|e| err(format!("{e:?}")))
+    }
+
+    pub fn prune(&self, index: u32, no: f64) -> Result<(), JsValue> {
+        self.host(index)?.borrow_mut().prune(no as u64, now_s()).map_err(|e| err(format!("{e:?}")))
+    }
+
+    /// Bans the key of post `no`; returns the key (64 hex digits) for `unban`.
+    pub fn ban(&self, index: u32, no: f64, why: &str) -> Result<String, JsValue> {
+        let k = self.host(index)?.borrow_mut().ban(no as u64, why, now_s()).map_err(|e| err(format!("{e:?}")))?;
+        Ok(hex(&k))
+    }
+
+    pub fn unban(&self, index: u32, key_hex: &str) -> Result<(), JsValue> {
+        let k = unhex32(key_hex).ok_or_else(|| err("key: 64 hex digits"))?;
+        self.host(index)?.borrow_mut().unban(&k);
+        Ok(())
+    }
+
+    /// Approves (or withdraws) the trip of post `no` for the approved-trips switch.
+    pub fn approve_trip_of(&self, index: u32, no: f64, on: bool) -> Result<(), JsValue> {
+        let h = self.host(index)?;
+        let k = post_key(&h.borrow(), no as u64)?;
+        h.borrow_mut().approve_trip(&k, on);
+        Ok(())
+    }
+
+    /// The switches as JSON `{paused, threads_closed, trips_only, approved_only, premod,
+    /// panic_trips}`.
+    pub fn switches(&self, index: u32) -> Result<String, JsValue> {
+        let sw = self.host(index)?.borrow().switches();
+        Ok(format!(
+            "{{\"paused\":{},\"threads_closed\":{},\"trips_only\":{},\"approved_only\":{},\"premod\":{},\"panic_trips\":{}}}",
+            sw.paused, sw.threads_closed, sw.trips_only, sw.approved_only, sw.premod, sw.panic_trips
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments, reason = "one flag per switch, as the owner view shows them")]
+    pub fn set_switches(&self, index: u32, paused: bool, threads_closed: bool, trips_only: bool, approved_only: bool, premod: bool, panic_trips: bool) -> Result<(), JsValue> {
+        self.host(index)?.borrow_mut().set_switches(Switches { paused, threads_closed, trips_only, approved_only, premod, panic_trips });
+        Ok(())
+    }
+
+    /// The posts held for approval: `[{i, at, t, sub, body, trip}]`.
+    pub fn held(&self, index: u32) -> Result<String, JsValue> {
+        let h = self.host(index)?;
+        let h = h.borrow();
+        let mut o = String::from("[");
+        for (i, x) in h.own.held.iter().enumerate() {
+            if i > 0 {
+                o.push(',');
+            }
+            let _ = write!(o, "{{\"i\":{i},\"at\":{},\"t\":{},\"sub\":", x.at, x.s.t);
+            json::string(&mut o, &x.s.sub);
+            o.push_str(",\"body\":");
+            json::string(&mut o, &x.s.body);
+            o.push_str(",\"trip\":");
+            json::string(&mut o, &if x.s.trip { trip_text(&x.s.k) } else { String::new() });
+            o.push('}');
+        }
+        o.push(']');
+        Ok(o)
+    }
+
+    /// Approves held post `i`: it is numbered and published. Returns its number.
+    pub fn approve(&self, index: u32, i: u32) -> Result<f64, JsValue> {
+        self.host(index)?.borrow_mut().approve(i as usize, now_s()).map(|n| n as f64).map_err(|e| err(format!("{e:?}")))
+    }
+
+    pub fn reject(&self, index: u32, i: u32) -> Result<(), JsValue> {
+        self.host(index)?.borrow_mut().reject(i as usize).map_err(|e| err(format!("{e:?}")))
     }
 
     /// The owner's base efforts (G.8; the adaptive multiplier applies on top). At least 1.
     pub fn set_efforts(&self, index: u32, reply: u32, thread: u32) -> Result<(), JsValue> {
-        self.host(index)?.borrow_mut().intake.base = Efforts { reply: reply.max(1), thread: thread.max(1) };
+        self.host(index)?.borrow_mut().set_efforts(Efforts { reply: reply.max(1), thread: thread.max(1) });
         Ok(())
     }
 
@@ -233,7 +344,7 @@ impl BoardApp {
     }
 
     /// The owner's view of board `index`: `{name, onion, seq, threads, next_no, paused,
-    /// threads_closed, closed_notice, effort_reply, effort_thread, blocks}`.
+    /// threads_closed, closed_notice, effort_reply, effort_thread, blocks, held, pending_deletes, bans, base_reply, base_thread}`.
     pub fn status(&self, index: u32) -> String {
         let st = self.st.borrow();
         let Some(b) = st.boards.hosted.iter().find(|b| b.index == index) else { return String::new() };
@@ -246,7 +357,7 @@ impl BoardApp {
         json::string(&mut o, &b.onion);
         let _ = write!(
             o,
-            ",\"seq\":{},\"threads\":{},\"next_no\":{},\"paused\":{},\"threads_closed\":{},\"closed_notice\":{},\"effort_reply\":{},\"effort_thread\":{},\"blocks\":{}}}",
+            ",\"seq\":{},\"threads\":{},\"next_no\":{},\"paused\":{},\"threads_closed\":{},\"closed_notice\":{},\"effort_reply\":{},\"effort_thread\":{},\"blocks\":{},\"held\":{},\"pending_deletes\":{},\"bans\":{},\"base_reply\":{},\"base_thread\":{}}}",
             h.board.seq,
             h.board.threads.len(),
             h.board.next_no,
@@ -255,7 +366,12 @@ impl BoardApp {
             h.intake.closed_notice,
             info.effort_reply,
             info.effort_thread,
-            h.served.blocks().count()
+            h.served.blocks().count(),
+            h.own.held.len(),
+            h.pending_deletes().len(),
+            h.own.bans.len(),
+            h.intake.base.reply,
+            h.intake.base.thread
         );
         o
     }
@@ -267,14 +383,24 @@ impl BoardApp {
 
     // ---- poster ----
 
-    /// Opens a reply box (G.6.1 step 1): `GET /pow` from the board's onion, a fresh poster key.
-    /// `thread` 0 = a new thread.
-    pub fn draft(&self, name: &str, onion: &str, thread: f64) -> Result<js_sys::Promise, JsValue> {
+    /// Opens a reply box (G.6.1 step 1): `GET /pow` from the board's onion, and the poster key:
+    /// a fresh one per post, or with `trip` (a label, signed in) the identity's trip key for
+    /// this board and label (G.4). `thread` 0 = a new thread.
+    pub fn draft(&self, name: &str, onion: &str, thread: f64, trip: &str) -> Result<js_sys::Promise, JsValue> {
         let tor = self.tor()?;
         let name = Cid::parse(name).filter(|c| c.ed25519_key().is_some()).ok_or_else(|| err("not a board name"))?;
         if !is_onion(onion) {
             return Err(err("not an onion address"));
         }
+        let mut seed = [0u8; 32];
+        if trip.is_empty() {
+            ephem_crypto::random(&mut seed);
+        } else {
+            seed = self.st.borrow().id.as_ref().ok_or_else(|| err("a trip needs a signed-in identity"))?.trip_seed(&name.to_text(), trip);
+        }
+        let key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        seed.fill(0);
+        let is_trip = !trip.is_empty();
         let onion = onion.to_owned();
         Ok(wasm_bindgen_futures::future_to_promise(async move {
             // The reads' circuit first; if it fails (it may lead to a host instance that is gone,
@@ -286,11 +412,7 @@ impl BoardApp {
             };
             let body = ephem_channel::gateway::parse_response(&resp).map_err(|e| err(format!("/pow: {e:?}")))?;
             let info = PowInfo::read(body.try_into().map_err(|_| err("/pow: wrong length"))?);
-            let mut seed = [0u8; 32];
-            ephem_crypto::random(&mut seed);
-            let key = ed25519_dalek::SigningKey::from_bytes(&seed);
-            seed.fill(0);
-            Ok(Draft { name, onion, thread: thread as u64, info, key, sent: RefCell::new(Vec::new()) }.into())
+            Ok(Draft { name, onion, thread: thread as u64, info, key, trip: is_trip, sent: RefCell::new(Vec::new()) }.into())
         }))
     }
 
@@ -300,7 +422,7 @@ impl BoardApp {
         let tor = self.tor()?;
         let n: [u8; 16] = n.try_into().map_err(|_| err("nonce: 16 bytes"))?;
         let solution = solution.try_into().map_err(|_| err("solution: 16 bytes"))?;
-        let s = Signed { b: draft.name.to_text(), t: draft.thread, k: draft.key.verifying_key().to_bytes(), n, sub: sub.into(), body: body.into(), sage, e: draft.info.epoch };
+        let s = Signed { b: draft.name.to_text(), t: draft.thread, k: draft.key.verifying_key().to_bytes(), n, sub: sub.into(), body: body.into(), sage, e: draft.info.epoch, trip: draft.trip };
         let bytes = submission(&s, &draft.key, draft.effort(), solution).map_err(|e| err(format!("{e:?}")))?;
         let req = gateway::submit_request(&draft.onion, &bytes);
         *draft.sent.borrow_mut() = req.clone();
@@ -335,12 +457,17 @@ impl BoardApp {
             return Err(err("no onion address to read from"));
         }
         let threads: Vec<u64> = threads.into_iter().map(|t| t as u64).collect();
+        let dels = self.st.borrow().boards.known_dels.clone();
         Ok(wasm_bindgen_futures::future_to_promise(async move {
             let mut last = String::new();
+            let known: Vec<[u8; 32]> = dels.borrow().iter().find(|(n, _)| *n == name).map(|(_, d)| d.clone()).unwrap_or_default();
             for round in 0..READ_ROUNDS {
                 for onion in &ok {
-                    match with_timeout(FETCH_MS, read_from(&tor, &name, onion, min_seq as u64, &threads, round > 0)).await {
-                        Ok(v) => return Ok(JsValue::from_str(&view_json(&v))),
+                    match with_timeout(FETCH_MS, read_from(&tor, &name, onion, min_seq as u64, &threads, round > 0, &known)).await {
+                        Ok(v) => {
+                            remember_dels(&mut dels.borrow_mut(), &name, &v.dels);
+                            return Ok(JsValue::from_str(&view_json(&v)));
+                        }
                         Err(e) => last = format!("{onion}: {e}"),
                     }
                 }
@@ -359,6 +486,8 @@ pub struct Draft {
     thread: u64,
     info: PowInfo,
     key: ed25519_dalek::SigningKey,
+    /// `key` is a trip key.
+    trip: bool,
     /// The submit as sent (for `resend`).
     sent: RefCell<Vec<u8>>,
 }
@@ -397,6 +526,41 @@ impl Draft {
     pub fn threads_open(&self) -> bool {
         self.info.threads_open
     }
+
+    /// The board's switches as `/pow` said: `{trips_only, approved_only, premod}` (JSON).
+    #[wasm_bindgen(getter)]
+    pub fn switches(&self) -> String {
+        format!("{{\"trips_only\":{},\"approved_only\":{},\"premod\":{}}}", self.info.trips_only, self.info.approved_only, self.info.premod)
+    }
+
+    /// The trip this draft posts under (`!` + 16 characters), or "".
+    #[wasm_bindgen(getter)]
+    pub fn trip(&self) -> String {
+        if self.trip { trip_text(&self.key.verifying_key().to_bytes()) } else { String::new() }
+    }
+}
+
+fn post_key(h: &Host, no: u64) -> Result<[u8; 32], JsValue> {
+    h.board.threads.iter().flat_map(|t| t.entries.iter()).find_map(|e| if let Entry::Post(p) = e && p.no == no { Some(p.s.k) } else { None }).ok_or_else(|| err("no such post"))
+}
+
+fn hex(b: &[u8]) -> String {
+    let mut o = String::with_capacity(b.len() * 2);
+    for x in b {
+        let _ = write!(o, "{x:02x}");
+    }
+    o
+}
+
+fn unhex32(s: &str) -> Option<[u8; 32]> {
+    let mut out = [0u8; 32];
+    if s.len() != 64 {
+        return None;
+    }
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(out)
 }
 
 fn submit(tor: Rc<Tor>, onion: String, req: Vec<u8>) -> js_sys::Promise {
@@ -444,12 +608,12 @@ async fn fetch(tor: &Tor, onion: &str, req: &[u8], fresh: bool, cap: usize) -> R
     Ok(resp)
 }
 
-async fn read_from(tor: &Tor, name: &Cid, onion: &str, min_seq: u64, threads: &[u64], fresh: bool) -> Result<View, String> {
+async fn read_from(tor: &Tor, name: &Cid, onion: &str, min_seq: u64, threads: &[u64], fresh: bool, known: &[[u8; 32]]) -> Result<View, String> {
     let path = format!("/ipns/{}?format=ephem-board", name.to_text());
     let resp = fetch(tor, onion, &ephem_channel::gateway::get(onion, &path), fresh, 2 + gateway::MAX_RECORD + gateway::MAX_CAR).await?;
     let body = ephem_channel::gateway::parse_response(&resp).map_err(|e| format!("index: {e:?}"))?;
     let (record, _, mut blocks) = gateway::parse_index(body).ok_or("index: malformed")?;
-    let index = verify::verify(name, &record, &blocks, now_ms(), min_seq, &[]).map_err(|e| format!("{e:?}"))?;
+    let index = verify::verify(name, &record, &blocks, now_ms(), min_seq, known).map_err(|e| format!("{e:?}"))?;
     if threads.is_empty() {
         return Ok(index);
     }
@@ -462,12 +626,36 @@ async fn read_from(tor: &Tor, name: &Cid, onion: &str, min_seq: u64, threads: &[
         let (_, b) = ephem_channel::car::read(body).ok_or("thread: not a valid CAR")?;
         blocks.extend(b);
     }
-    verify::verify(name, &record, &blocks, now_ms(), min_seq, &[]).map_err(|e| format!("{e:?}"))
+    verify::verify(name, &record, &blocks, now_ms(), min_seq, known).map_err(|e| format!("{e:?}"))
+}
+
+/// Adds a verified view's deletion list to what this tab knows of board `name` (at most
+/// `limits::DELS` per board, newest kept; boards beyond `limits::MIRRORS * 8` drop the oldest).
+fn remember_dels(all: &mut KnownDels, name: &Cid, dels: &[([u8; 32], u64)]) {
+    let i = match all.iter().position(|(n, _)| n == name) {
+        Some(i) => i,
+        None => {
+            if all.len() >= ephem_board::limits::MIRRORS * 8 {
+                all.remove(0);
+            }
+            all.push((name.clone(), Vec::new()));
+            all.len() - 1
+        }
+    };
+    let known = &mut all[i].1;
+    for (h, _) in dels {
+        if !known.contains(h) {
+            known.push(*h);
+        }
+    }
+    let over = known.len().saturating_sub(ephem_board::limits::DELS);
+    known.drain(..over);
 }
 
 /// `{"name","root","sequence","title","about","rules","next_no","updated","catalog":[{"no",
 /// "sub","ex","r","bump","st","lk"}…],"threads":[{"no","sub","posts":[{"no","ts","sub","body",
-/// "sage","cap","del"}…]}…],"archive":[{"no","sub","ex","pruned"}…]}` (`del`: 0, or who deleted).
+/// "sage","cap","del","trip"}…]}…],"archive":[{"no","sub","ex","pruned"}…],"modlog":[{"ts","act","no",
+/// "why"}…]}` (`del`: 0, or who deleted; `trip`: `!` + 16 characters, or "").
 pub fn view_json(v: &View) -> String {
     let mut o = String::with_capacity(512 + v.threads.iter().map(|t| t.entries.len() * 160).sum::<usize>() + v.catalog.len() * 200);
     o.push_str("{\"name\":");
@@ -508,10 +696,12 @@ pub fn view_json(v: &View) -> String {
                     json::string(&mut o, &p.s.sub);
                     o.push_str(",\"body\":");
                     json::string(&mut o, &p.s.body);
+                    o.push_str(",\"trip\":");
+                    json::string(&mut o, &if p.s.trip { trip_text(&p.s.k) } else { String::new() });
                     o.push('}');
                 }
                 Entry::Tomb { no, ts, del, .. } => {
-                    let _ = write!(o, "{{\"no\":{no},\"ts\":{ts},\"sage\":false,\"cap\":0,\"del\":{del},\"sub\":\"\",\"body\":\"\"}}");
+                    let _ = write!(o, "{{\"no\":{no},\"ts\":{ts},\"sage\":false,\"cap\":0,\"del\":{del},\"sub\":\"\",\"body\":\"\",\"trip\":\"\"}}");
                 }
             }
         }
@@ -526,6 +716,17 @@ pub fn view_json(v: &View) -> String {
         json::string(&mut o, &a.sub);
         o.push_str(",\"ex\":");
         json::string(&mut o, &a.ex);
+        o.push('}');
+    }
+    o.push_str("],\"modlog\":[");
+    for (i, m) in v.modlog.iter().enumerate() {
+        if i > 0 {
+            o.push(',');
+        }
+        let _ = write!(o, "{{\"ts\":{},\"no\":{},\"act\":", m.ts, m.no);
+        json::string(&mut o, &m.act);
+        o.push_str(",\"why\":");
+        json::string(&mut o, &m.why);
         o.push('}');
     }
     o.push_str("]}");

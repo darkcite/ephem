@@ -105,6 +105,9 @@ struct Slot {
 
 const EMPTY: Slot = Slot { key: [0; 16], epoch: 0, h: [0; 32], no: 0, seq: 0 };
 
+/// The number a held post is answered with (pre-moderation): no number yet. The gateway sends 0.
+pub const HELD: u64 = u64::MAX;
+
 /// A submission admitted to the publish ring.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Ticket {
@@ -133,10 +136,17 @@ pub struct PowInfo {
     pub min_reply: u32,
     pub paused: bool,
     pub threads_open: bool,
+    /// The poster needs a trip the board knows (or an approved one).
+    pub trips_only: bool,
+    /// Only owner-approved trips may post.
+    pub approved_only: bool,
+    /// Posts are held until the owner approves them.
+    pub premod: bool,
 }
 
 impl PowInfo {
-    /// epoch 4, seed 32, four efforts 16, paused 1, threads open 1, reserved 4.
+    /// epoch 4, seed 32, four efforts 16, paused 1, threads open 1, switches 1 (bit 0 trips
+    /// only, bit 1 approved trips only, bit 2 pre-moderation), reserved 3.
     pub const LEN: usize = 58;
 
     pub fn write(&self, out: &mut [u8; Self::LEN]) {
@@ -148,14 +158,15 @@ impl PowInfo {
         out[48..52].copy_from_slice(&self.min_reply.to_le_bytes());
         out[52] = u8::from(self.paused);
         out[53] = u8::from(self.threads_open);
-        out[54..58].fill(0);
+        out[54] = u8::from(self.trips_only) | u8::from(self.approved_only) << 1 | u8::from(self.premod) << 2;
+        out[55..58].fill(0);
     }
 
     pub fn read(b: &[u8; Self::LEN]) -> Self {
         let u = |at: usize| u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
         let mut seed = [0u8; 32];
         seed.copy_from_slice(&b[4..36]);
-        PowInfo { epoch: u(0), seed, effort_thread: u(36), effort_reply: u(40), min_thread: u(44), min_reply: u(48), paused: b[52] != 0, threads_open: b[53] != 0 }
+        PowInfo { epoch: u(0), seed, effort_thread: u(36), effort_reply: u(40), min_thread: u(44), min_reply: u(48), paused: b[52] != 0, threads_open: b[53] != 0, trips_only: b[54] & 1 != 0, approved_only: b[54] & 2 != 0, premod: b[54] & 4 != 0 }
     }
 }
 
@@ -175,6 +186,12 @@ pub struct Intake {
     pub threads_closed: bool,
     /// Set when the board closed itself; the app tells the owner and clears it.
     pub closed_notice: bool,
+    /// The owner's other switches (G.9.1); the host checks them against the post (`Host`).
+    pub trips_only: bool,
+    pub approved_only: bool,
+    pub premod: bool,
+    /// R8's panic mode turns on trips-only instead of closing new threads.
+    pub panic_trips: bool,
     replay: Box<[Slot]>,
     ring: [Option<Ticket>; caps::RING],
     next_id: u64,
@@ -209,6 +226,10 @@ impl Intake {
             paused: false,
             threads_closed: false,
             closed_notice: false,
+            trips_only: false,
+            approved_only: false,
+            premod: false,
+            panic_trips: false,
             replay: vec![EMPTY; caps::REPLAY].into_boxed_slice(),
             ring: [None; caps::RING],
             next_id: 1,
@@ -255,6 +276,9 @@ impl Intake {
             min_reply: self.adv[0].2.min(prev.2),
             paused: self.paused,
             threads_open: !self.threads_closed,
+            trips_only: self.trips_only,
+            approved_only: self.approved_only,
+            premod: self.premod,
         }
     }
 
@@ -393,7 +417,8 @@ impl Intake {
         n
     }
 
-    /// Records what a published ticket became (for idempotent retries).
+    /// Records what a published ticket became (for idempotent retries). A held post (pre-
+    /// moderation) is recorded as [`HELD`].
     pub fn published(&mut self, t: &Ticket, no: u64, seq: u64) {
         if let Some(s) = self.replay.get_mut(t.replay_slot as usize) {
             s.no = no;
@@ -435,9 +460,12 @@ impl Intake {
         }
         let flooded_threads = self.saturated_threads_since.is_some_and(|t| now_s - t >= caps::PANIC_THREADS_S);
         let flooded_posts = self.saturated_posts_since.is_some_and(|t| now_s - t >= caps::PANIC_POSTS_S);
-        if (flooded_threads || flooded_posts) && !self.threads_closed {
-            self.threads_closed = true;
-            self.closed_notice = true;
+        if flooded_threads || flooded_posts {
+            let (switch, other) = if self.panic_trips { (&mut self.trips_only, self.threads_closed) } else { (&mut self.threads_closed, self.trips_only) };
+            if !*switch && !other {
+                *switch = true;
+                self.closed_notice = true;
+            }
         }
         self.advertise(now_s);
     }

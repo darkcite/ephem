@@ -9,6 +9,10 @@
 //   thread → bump order as readers verify it → a retried submit gets the original number → the
 //   owner deletes an OP (the thread leaves the board) → the store follows every publish (OPFS) →
 //   after a reload the board comes back from the store on the same onion, posts intact, no whole-board CAR is served (406).
+//   BD-5 (owner moderation): a trip post shows its trip → delete with undo → mass delete from a
+//   post on (tombstones, mod log) → a banned trip is refused → pre-moderation holds a post until the
+//   owner approves it → trips-only refuses anonymous posts → lock and sticky → the moderation
+//   state (ban, switches, efforts) survives a reload in the encrypted own block.
 //
 // Pruning a full board (150 threads, 30-minute protection) cannot run in lab time: it is the
 // native test `crates/board/tests/host.rs::a_full_board_prunes_its_oldest_thread`, the same code.
@@ -32,15 +36,31 @@ async function page(who) {
 }
 
 /** A poster's post through the app's boards module (draft, Workers, submit). */
-const post = (p, name, onion, thread, sub, body, sage = false) => p.evaluate(async ([n, o, t, s, b, g]) => {
+const post = (p, name, onion, thread, sub, body, sage = false, trip = '') => p.evaluate(async ([n, o, t, s, b, g, tr]) => {
   try {
-    const r = await globalThis.ephemBoards.post(n, o, t, s, b, g);
+    const r = await globalThis.ephemBoards.post(n, o, t, s, b, g, { trip: tr });
     globalThis.lastDraft = r.draft;
-    return { no: r.no, seq: r.seq, solveMs: Math.round(r.solveMs), effort: r.effort };
+    return { no: r.no, seq: r.seq, held: r.held, trip: r.trip, solveMs: Math.round(r.solveMs), effort: r.effort };
   } catch (e) {
     return { error: String(e?.message || e) };
   }
-}, [name, onion, thread, sub, body, sage]);
+}, [name, onion, thread, sub, body, sage, trip]);
+
+/** The owner's BoardApp (board 0): `own(o, 'set_locked', no, true)`. */
+const own = (o, fn, ...args) => o.evaluate(([f, a]) => globalThis.ephemBoards.app[f](0, ...a), [fn, args]);
+const status = async (o) => JSON.parse(await own(o, 'status'));
+/** Waits for the deletes' undo window and the publish after it. */
+const settle = (p) => p.waitForTimeout(7_000);
+
+/** Saves a chat identity on `p` (posters: trips derive from it). */
+async function saveIdentity(p, label) {
+  await toSettings(p);
+  await p.click('#b-id-save');
+  await p.fill('#i-label', label);
+  await p.fill('#i-pass', PASS);
+  await p.fill('#i-pass2', PASS);
+  await Promise.all([p.waitForEvent('download'), p.click('#b-id-do-save')]);
+}
 
 const read = (p, name, onion, threads) => p.evaluate(async ([n, o, t]) => globalThis.ephemBoards.read(n, o, t), [name, onion, threads]);
 
@@ -49,12 +69,7 @@ try {
   const o = await page('owner');
   await o.goto(`${base}/tor.html`);
   await o.waitForSelector('#v-start:not([hidden])');
-  await toSettings(o);
-  await o.click('#b-id-save');
-  await o.fill('#i-label', 'Boards');
-  await o.fill('#i-pass', PASS);
-  await o.fill('#i-pass2', PASS);
-  await Promise.all([o.waitForEvent('download'), o.click('#b-id-do-save')]);
+  await saveIdentity(o, 'Boards');
   await torReady(o, 'owner');
   const t0 = Date.now();
   const { name, onion } = await o.evaluate(async () => {
@@ -71,6 +86,7 @@ try {
   for (const [p, who] of [[a, 'poster A'], [b, 'poster B']]) {
     await p.goto(`${base}/tor.html`);
     await p.waitForSelector('#v-start:not([hidden])');
+    if (p === a) await saveIdentity(a, 'Poster A'); // A posts under a trip later
     await torReady(p, who);
   }
   const ta = await post(a, name, onion, 0, 'First thread', 'Hello from poster A');
@@ -98,8 +114,8 @@ try {
   check('bump order: the owner\'s thread is newer than A\'s last non-sage bump', v.catalog.map((c) => c.no).join(',') === `${owner},${ta.no}`, v.catalog.map((c) => `${c.no}:${c.bump}`).join(' '));
 
   // ---- the owner deletes an OP: its thread leaves the board ----
-  await o.evaluate((n) => globalThis.ephemBoards.app.delete(0, n), owner);
-  await o.waitForTimeout(2_000);
+  await own(o, 'delete', owner);
+  await settle(o);
   const v2 = await read(a, name, onion, []);
   check('an OP deleted by the owner takes its thread off the board', v2.catalog.map((c) => c.no).join(',') === `${ta.no}` && v2.sequence > v.sequence);
 
@@ -109,6 +125,58 @@ try {
     const idx = await torBrowserGet(onion, '/');
     check('the root as one CAR is refused (406); the onion\'s page says it is a board', car.status === 406 && idx.status === 200 && /Ephem board/.test(idx.body), `${car.status}`);
   }
+
+  // ---- BD-5: owner moderation ----
+  // A trip: a stable key from A's identity, shown as ! + 16 characters.
+  const tr = await post(a, name, onion, ta.no, '', 'A speaks under a trip', false, 'lab');
+  const vt = await read(b, name, onion, [ta.no]);
+  const shown = vt.threads[0].posts.find((x) => x.no === tr.no);
+  check('a trip post: readers see the trip (! + 16 characters)', /^![a-z2-7]{16}$/.test(shown?.trip || '') && shown.trip === tr.trip, shown?.trip);
+  // Delete with undo: undone in the window, the post stays.
+  await own(o, 'delete', rb.no);
+  const undone = await own(o, 'undo', rb.no);
+  // Mass delete from a number on: both of these spam posts become tombstones.
+  const s1 = await post(b, name, onion, ta.no, '', 'spam one');
+  const s2 = await post(b, name, onion, ta.no, '', 'spam two');
+  const queued = await own(o, 'delete_from', s1.no);
+  await settle(o);
+  const vm = await read(b, name, onion, [ta.no]);
+  const posts = vm.threads[0].posts;
+  check('the owner mass-deletes (from a post on): readers see tombstones; an undone delete keeps its post',
+    undone === 1 && queued === 2 && [s1.no, s2.no].every((n) => posts.find((x) => x.no === n)?.del === 1) && posts.some((x) => x.no === rb.no && x.del === 0)
+      && vm.modlog.filter((m) => m.act === 'delete').length >= 2, `queued ${queued}`);
+  // Ban the trip: its next post is refused.
+  await own(o, 'ban', tr.no, 'lab test');
+  await o.waitForTimeout(1_500);
+  const banned = await post(a, name, onion, ta.no, '', 'banned trip', false, 'lab');
+  check('a banned trip is refused (E_BOARD_REFUSED)', /E_BOARD_REFUSED/.test(banned.error || ''), banned.error);
+  // Pre-moderation: held, then approved by the owner.
+  await own(o, 'set_switches', false, false, false, false, true, false);
+  await o.waitForTimeout(1_500);
+  const hp = await post(b, name, onion, ta.no, '', 'please approve me');
+  const heldList = JSON.parse(await own(o, 'held'));
+  const approvedNo = await own(o, 'approve', 0);
+  await o.waitForTimeout(2_000);
+  const vh = await read(a, name, onion, [ta.no]);
+  check('pre-moderation: the post is held (no number), then the owner approves it and readers see it',
+    hp.held === true && heldList.length === 1 && heldList[0].body === 'please approve me' && vh.threads[0].posts.some((x) => x.no === approvedNo && x.body === 'please approve me'));
+  // Trips-only: an anonymous post is refused (E_BOARD_PAUSED); lock, sticky and the mod log.
+  await own(o, 'set_switches', false, false, true, false, false, false);
+  await own(o, 'set_sticky', ta.no, true);
+  await o.waitForTimeout(1_500);
+  const anonRefused = await post(b, name, onion, ta.no, '', 'anon under trips-only');
+  check('trips-only: an anonymous post is refused (E_BOARD_PAUSED)', /E_BOARD_PAUSED/.test(anonRefused.error || ''), anonRefused.error);
+  await own(o, 'set_switches', false, false, false, false, false, false);
+  await own(o, 'set_locked', ta.no, true);
+  await o.waitForTimeout(1_500);
+  const locked = await post(b, name, onion, ta.no, '', 'into a locked thread');
+  const vl = await read(b, name, onion, []);
+  check('a locked thread refuses replies; sticky and lock show in the catalog and the mod log',
+    /E_BOARD_REFUSED/.test(locked.error || '') && vl.catalog[0].st && vl.catalog[0].lk && ['ban', 'sticky', 'lock', 'approve'].every((a) => vl.modlog.some((m) => m.act === a)), locked.error);
+  await own(o, 'set_locked', ta.no, false);
+  // State to survive the reload (the encrypted own block): the ban, trips-only, the efforts.
+  await own(o, 'set_switches', false, false, true, false, false, true);
+  await o.waitForTimeout(1_500);
 
   // ---- the store follows every publish; a reload brings the board back ----
   const kept = await o.evaluate(async (n) => ({ ...(await globalThis.ephemBoards.stored(n)), served: JSON.parse(globalThis.ephemBoards.app.status(0)).blocks }), name);
@@ -122,15 +190,21 @@ try {
   await o.waitForFunction(() => /Boards/.test(document.querySelector('#id-desc')?.textContent));
   await torReady(o, 'owner (reload)');
   const back = await o.evaluate(() => globalThis.ephemBoards.reopen(0));
-  await o.evaluate(() => globalThis.ephemBoards.app.set_efforts(0, 40, 80));
   await o.waitForFunction(() => /reachable|degraded/.test(globalThis.ephemBoards.app.reach(0)), null, { timeout: T });
+  const st = await status(o);
+  const sw = JSON.parse(await own(o, 'switches'));
+  check('after a reload the moderation state is back (encrypted own block): ban, trips-only, panic choice, efforts',
+    st.bans === 1 && sw.trips_only && sw.panic_trips && st.base_reply === 40 && st.base_thread === 80, JSON.stringify({ bans: st.bans, sw, base: st.base_reply }));
+  await own(o, 'set_switches', false, false, false, false, false, false);
   const v3 = await read(b, name, onion, [ta.no]);
+  const before = vl.next_no;
   check('after a reload the board comes back from the store, same onion, posts intact',
-    back.onion === onion && v3.threads[0]?.posts.length === 3 && v3.sequence > v2.sequence);
+    back.onion === onion && v3.threads[0]?.posts.length === posts.length + 1 && v3.sequence > vl.sequence);
+  await o.waitForTimeout(1_500);
   const after = await post(b, name, onion, ta.no, '', 'After the reload');
-  check('posting continues after the reload (numbers go on)', after.no === ra.no + 1, JSON.stringify(after));
+  check('posting continues after the reload (numbers go on)', after.no === before, JSON.stringify(after));
 
-  console.log(`  solve times: ${[ta, rb, ra, after].map((x) => `${x.solveMs} ms @${x.effort}`).join(', ')}`);
+  console.log(`  solve times: ${[ta, rb, ra, tr, after].map((x) => `${x.solveMs} ms @${x.effort}`).join(', ')}`);
   check('no unexpected page errors', unexpected(problems).length === 0, unexpected(problems).join(' | '));
 } catch (e) {
   check(`flow: ${e.message.split('\n')[0]}`, false);

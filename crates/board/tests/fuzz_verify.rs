@@ -29,10 +29,10 @@ fn mutated_boards_never_panic() {
     let mut b = Board::new(&[4; 32], "/f/", "fuzz", "", NOW).unwrap();
     for i in 0..3u64 {
         let key = SigningKey::from_bytes(&[i as u8 + 1; 32]);
-        let s = Signed { b: b.name().to_text(), t: 0, k: key.verifying_key().to_bytes(), n: [0; 16], sub: format!("t{i}"), body: "op".into(), sage: false, e: 0 };
+        let s = Signed { b: b.name().to_text(), t: 0, k: key.verifying_key().to_bytes(), n: [0; 16], sub: format!("t{i}"), body: "op".into(), sage: false, e: 0, trip: false };
         let sig = s.sign(&key);
         let no = b.accept(s, sig, cap::ANON, NOW).unwrap();
-        let s = Signed { b: b.name().to_text(), t: no, k: key.verifying_key().to_bytes(), n: [1; 16], sub: String::new(), body: "re".into(), sage: false, e: 0 };
+        let s = Signed { b: b.name().to_text(), t: no, k: key.verifying_key().to_bytes(), n: [1; 16], sub: String::new(), body: "re".into(), sage: false, e: 0, trip: false };
         let sig = s.sign(&key);
         b.accept(s, sig, cap::ANON, NOW).unwrap();
     }

@@ -53,8 +53,12 @@ fn serve(h: &mut Host, req: &[u8], now_ms: u64) -> Vec<u8> {
                 Ok(id) => id,
                 Err(r) => return short(|o| gateway::refusal(r, o)),
             };
-            assert!(h.due(now_ms + 1_000));
-            h.publish(now_ms + 1_000);
+            // The next publish (at most one a second).
+            let mut at = now_ms + 1_000;
+            while !h.due(at) {
+                at += 1_000;
+            }
+            h.publish(at);
             match h.answer(id).expect("answered at the publish") {
                 Ok((no, seq)) => short(|o| gateway::answer(no, seq, o)),
                 Err(r) => short(|o| gateway::refusal(r, o)),
@@ -83,7 +87,8 @@ fn status(resp: &[u8]) -> u16 {
     std::str::from_utf8(&resp[9..12]).unwrap().parse().unwrap()
 }
 
-struct Poster(SigningKey);
+/// A poster: its key, and whether that key is a trip (stable on the board).
+struct Poster(SigningKey, bool);
 
 impl Poster {
     /// `GET /pow`, solve, sign, `POST /submit`: the request bytes (kept for a retry).
@@ -93,11 +98,11 @@ impl Poster {
         let effort = if t == 0 { info.effort_thread } else { info.effort_reply };
         let k = self.0.verifying_key().to_bytes();
         let mut n = [0u8; 16];
-        n[8..].copy_from_slice(&text.len().to_le_bytes());
+        n[8..].copy_from_slice(&ephem_board::submit::body_hash(text.as_bytes())[..8]);
         n[0] = sage as u8;
         let mut c = Challenge::new(&name.to_bytes(), &info.seed, if t == 0 { kind::THREAD } else { kind::REPLY }, t, &k, &n, effort).unwrap();
         let solution = pow::solve(&mut c, &mut n, effort, &mut SolverMemory::new(), 10_000).unwrap();
-        let s = Signed { b: name.to_text(), t, k, n, sub: sub.into(), body: text.into(), sage, e: info.epoch };
+        let s = Signed { b: name.to_text(), t, k, n, sub: sub.into(), body: text.into(), sage, e: info.epoch, trip: self.1 };
         gateway::submit_request("board.onion", &submission(&s, &self.0, effort, solution).unwrap())
     }
 
@@ -146,10 +151,10 @@ fn owner_and_two_posters() {
     let board = Board::new(&[1; 32], "Lab board", "about", "be nice", T0).unwrap();
     let intake = Intake::new(board.name(), [2; 32], LOW, T0);
     let mut ms = T0 * 1000;
-    let mut h = Host::new(board, intake, ms);
+    let mut h = Host::new(board, intake, [9; 32], ms);
     let mut store = HashMap::new();
     sync(&mut h, &mut store);
-    let (a, b) = (Poster(SigningKey::from_bytes(&[3; 32])), Poster(SigningKey::from_bytes(&[4; 32])));
+    let (a, b) = (Poster(SigningKey::from_bytes(&[3; 32]), false), Poster(SigningKey::from_bytes(&[4; 32]), false));
 
     // Two threads (the thread budget: one per 2 minutes), then replies.
     let (t1, seq1) = posted(a.post(&mut h, ms, 0, "First", "op one", false));
@@ -204,7 +209,7 @@ fn a_full_board_prunes_its_oldest_thread() {
     let board = Board::new(&[1; 32], "Full", "", "", T0).unwrap();
     let intake = Intake::new(board.name(), [2; 32], LOW, T0);
     let mut ms = T0 * 1000;
-    let mut h = Host::new(board, intake, ms);
+    let mut h = Host::new(board, intake, [9; 32], ms);
     let mut store = HashMap::new();
     for i in 0..ephem_board::limits::THREADS {
         h.post_owner(0, &format!("thread {i}"), "op", false, ms / 1000 + i as u64).unwrap();
@@ -212,7 +217,7 @@ fn a_full_board_prunes_its_oldest_thread() {
     h.publish(ms);
     sync(&mut h, &mut store);
     ms += 3_600_000;
-    let p = Poster(SigningKey::from_bytes(&[5; 32]));
+    let p = Poster(SigningKey::from_bytes(&[5; 32]), false);
     let (no, _) = posted(p.post(&mut h, ms, 0, "Newest", "pushes one out", false));
     sync(&mut h, &mut store);
     let v = read(&mut h, ms, &[no]);
@@ -224,4 +229,126 @@ fn a_full_board_prunes_its_oldest_thread() {
     // The archived thread is still served as text.
     let arch = &v.archive[0].thread;
     assert_eq!(status(&serve(&mut h, &get(&format!("/ipfs/{}?format=car", arch.to_text())), ms)), 200);
+}
+
+/// Publishes once the undo window has passed.
+fn settle(h: &mut Host, ms: &mut u64) {
+    *ms += ephem_board::host::UNDO_MS + 1_000;
+    assert!(h.due(*ms));
+    h.publish(*ms);
+}
+
+#[test]
+fn owner_moderation() {
+    use ephem_board::board::Entry;
+    use ephem_board::own::Switches;
+    let board = Board::new(&[1; 32], "Moderated", "", "", T0).unwrap();
+    let intake = Intake::new(board.name(), [2; 32], LOW, T0);
+    let mut ms = T0 * 1000;
+    let mut h = Host::new(board, intake, [9; 32], ms);
+    let anon = Poster(SigningKey::from_bytes(&[3; 32]), false);
+    let tripper = Poster(SigningKey::from_bytes(&[4; 32]), true);
+    let (t, _) = posted(anon.post(&mut h, ms, 0, "Thread", "op", false));
+    ms += 1_000;
+    let (r1, _) = posted(tripper.post(&mut h, ms, t, "", "a trip speaks", false));
+    ms += 61_000;
+    let since = ms / 1000 - (ms / 1000) % 60;
+    let (r2, _) = posted(anon.post(&mut h, ms, t, "", "spam one", false));
+    let (r3, _) = posted(anon.post(&mut h, ms, t, "", "spam two", false));
+
+    // A delete waits for its undo window; an undo keeps the post.
+    h.delete(r1, ms).unwrap();
+    assert_eq!(h.undo(r1), 1);
+    // Mass delete: everything since a minute.
+    assert_eq!(h.delete_since(since, ms), 2);
+    settle(&mut h, &mut ms);
+    let v = read(&mut h, ms, &[t]);
+    let e = &v.threads[0].entries;
+    assert!(matches!(e[1], Entry::Post(_)), "undone: still there");
+    assert!(matches!(e[2], Entry::Tomb { no, .. } if no == r2) && matches!(e[3], Entry::Tomb { no, .. } if no == r3), "readers see tombstones");
+    assert_eq!(v.dels.len(), 2);
+    assert!(v.modlog.iter().filter(|m| m.act == "delete").count() == 2);
+
+    // Ban the trip: refused from now on.
+    h.ban(r1, "rude", ms / 1000).unwrap();
+    ms += 2_000;
+    assert_eq!(tripper.post(&mut h, ms, t, "", "again", false), Answer::Refused { status: 409, code: Refusal::Refused.code() });
+    h.unban(&tripper.0.verifying_key().to_bytes());
+
+    // Trips-only: an anonymous post is refused, a known trip passes, a new trip is refused.
+    h.set_switches(Switches { trips_only: true, ..h.switches() });
+    ms += 2_000;
+    assert_eq!(anon.post(&mut h, ms, t, "", "anon under trips-only", false), Answer::Refused { status: 423, code: Refusal::Paused.code() });
+    posted(tripper.post(&mut h, ms, t, "", "known trip", false));
+    let newcomer = Poster(SigningKey::from_bytes(&[5; 32]), true);
+    assert_eq!(newcomer.post(&mut h, ms, t, "", "new trip", false), Answer::Refused { status: 423, code: Refusal::Paused.code() });
+    h.approve_trip(&newcomer.0.verifying_key().to_bytes(), true);
+    posted(newcomer.post(&mut h, ms + 1_000, t, "", "approved trip", false));
+    h.set_switches(Switches::default());
+
+    // Pre-moderation: held (number 0), then approved by the owner.
+    h.set_switches(Switches { premod: true, ..Switches::default() });
+    ms += 2_000;
+    let held = anon.post(&mut h, ms, t, "", "please approve", false);
+    assert!(matches!(held, Answer::Posted { no: 0, .. }), "{held:?}");
+    assert_eq!(h.own.held.len(), 1);
+    let no = h.approve(0, ms / 1000).unwrap();
+    ms += 2_000;
+    h.publish(ms);
+    let v = read(&mut h, ms, &[t]);
+    assert!(v.threads[0].entries.iter().any(|e| matches!(e, Entry::Post(p) if p.no == no && p.s.body == "please approve")));
+
+    // Lock and sticky, logged; a locked thread refuses replies.
+    h.set_locked(t, true, ms / 1000).unwrap();
+    h.set_switches(Switches::default());
+    ms += 2_000;
+    h.publish(ms);
+    assert_eq!(anon.post(&mut h, ms, t, "", "into a locked thread", false), Answer::Refused { status: 409, code: Refusal::Refused.code() });
+    let v = read(&mut h, ms, &[]);
+    assert!(v.catalog[0].locked && v.modlog.iter().any(|m| m.act == "lock" && m.no == t));
+
+    // Everything moderation needs comes back with the board (the encrypted own block).
+    h.ban(no, "test", ms / 1000).unwrap();
+    h.set_switches(Switches { trips_only: true, panic_trips: true, ..Switches::default() });
+    ms += 2_000;
+    h.publish(ms);
+    let (record, blocks): (Vec<u8>, Vec<_>) = (h.served.record.clone(), h.served.blocks().map(|(c, b)| (c.clone(), b.to_vec())).collect());
+    let key = ed25519_dalek::SigningKey::from_bytes(&[1; 32]);
+    let name = h.served.name.clone();
+    let rec = ephem_channel::ipns::verify(&name, &record, 0).unwrap();
+    let root = Cid::parse(rec.value.strip_prefix("/ipfs/").unwrap()).unwrap();
+    let mut view = verify::read(&key.verifying_key(), &name, &root, &blocks, &[]).unwrap();
+    view.sequence = rec.sequence;
+    let again = Host::new(Board::load(&[1; 32], view, blocks).unwrap(), Intake::new(&name, [2; 32], Efforts::DEFAULT, T0), [9; 32], ms + 1_000);
+    assert_eq!(again.own.bans.len(), 1);
+    assert!(again.switches().trips_only && again.switches().panic_trips);
+    assert_eq!(again.intake.base, LOW, "efforts come back too");
+    assert!(again.own.known.contains(&tripper.0.verifying_key().to_bytes()));
+    let wrong = Host::new(Board::load(&[1; 32], verify::read(&key.verifying_key(), &name, &root, &h.served.blocks().map(|(c, b)| (c.clone(), b.to_vec())).collect::<Vec<_>>(), &[]).unwrap(), Vec::new()).unwrap(), Intake::new(&name, [2; 32], Efforts::DEFAULT, T0), [8; 32], ms + 1_000);
+    assert!(wrong.own.bans.is_empty(), "another key opens nothing");
+}
+
+#[test]
+fn a_stale_root_shows_later_deletions() {
+    use ephem_board::board::Entry;
+    let board = Board::new(&[1; 32], "Stale", "", "", T0).unwrap();
+    let intake = Intake::new(board.name(), [2; 32], LOW, T0);
+    let mut ms = T0 * 1000;
+    let mut h = Host::new(board, intake, [9; 32], ms);
+    let p = Poster(SigningKey::from_bytes(&[3; 32]), false);
+    let (t, _) = posted(p.post(&mut h, ms, 0, "T", "op", false));
+    ms += 1_000;
+    let (r, _) = posted(p.post(&mut h, ms, t, "", "later deleted", false));
+    // What a stale mirror keeps serving: this version.
+    let old_record = h.served.record.clone();
+    let old: Vec<_> = h.served.blocks().map(|(c, b)| (c.clone(), b.to_vec())).collect();
+    h.delete(r, ms).unwrap();
+    settle(&mut h, &mut ms);
+    let fresh = read(&mut h, ms, &[t]);
+    let known: Vec<[u8; 32]> = fresh.dels.iter().map(|(x, _)| *x).collect();
+    let name = h.served.name.clone();
+    let stale = verify::verify(&name, &old_record, &old, ms, 0, &[]).unwrap();
+    assert!(matches!(stale.threads[0].entries[1], Entry::Post(_)), "without the newer list the old root still shows it");
+    let stale = verify::verify(&name, &old_record, &old, ms, 0, &known).unwrap();
+    assert!(matches!(stale.threads[0].entries[1], Entry::Tomb { .. }), "a reader who saw the newer deletion list sees a tombstone");
 }

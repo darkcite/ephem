@@ -36,6 +36,9 @@ pub struct Signed {
     pub sage: bool,
     /// The proof-of-work epoch it was made in.
     pub e: u32,
+    /// `k` is the poster's trip key (stable on this board, G.4), not a per-post key: readers
+    /// show it as `!` + 16 characters ([`trip_text`]).
+    pub trip: bool,
 }
 
 impl Signed {
@@ -49,13 +52,14 @@ impl Signed {
             ("body", Value::Text(self.body.clone())),
             ("sage", Value::Bool(self.sage)),
             ("e", Value::Uint(u64::from(self.e))),
+            ("trip", Value::Bool(self.trip)),
         ])
     }
 
     /// Strict: every field present with its type, the limits kept, nothing else.
     pub fn from_value(v: &Value) -> Result<Self, BoardError> {
         let Value::Map(m) = v else { return Err(BoardError::Invalid) };
-        if m.len() != 8 {
+        if m.len() != 9 {
             return Err(BoardError::Invalid);
         }
         let text = |k: &str| v.get(k).and_then(Value::text).map(str::to_owned).ok_or(BoardError::Invalid);
@@ -69,6 +73,7 @@ impl Signed {
             body: text("body")?,
             sage: v.get("sage").and_then(Value::boolean).ok_or(BoardError::Invalid)?,
             e: v.get("e").and_then(Value::uint).and_then(|e| u32::try_from(e).ok()).ok_or(BoardError::Invalid)?,
+            trip: v.get("trip").and_then(Value::boolean).ok_or(BoardError::Invalid)?,
         };
         s.check()?;
         Ok(s)
@@ -103,6 +108,21 @@ impl Signed {
     }
 }
 
+/// A trip as shown: `!` + 16 base32 characters of `BLAKE2b-80("ephem-board-trip" ‖ k)` (80 bits,
+/// A-m2: 10 characters were grindable). The full key is shown on request.
+pub fn trip_text(k: &[u8; 32]) -> String {
+    use blake2::digest::{Update, VariableOutput};
+    let mut h = blake2::Blake2bVar::new(10).expect("10-byte output");
+    h.update(b"ephem-board-trip");
+    h.update(k);
+    let mut out = [0u8; 10];
+    h.finalize_variable(&mut out).expect("10-byte output");
+    let mut t = String::with_capacity(17);
+    t.push('!');
+    t.push_str(&ephem_channel::cid::base32(&out));
+    t
+}
+
 /// `prefix ‖ dag-cbor(v)`.
 pub fn domain(prefix: &[u8], v: &Value) -> Vec<u8> {
     let mut m = prefix.to_vec();
@@ -116,7 +136,7 @@ mod tests {
 
     pub(crate) fn sample(t: u64, body: &str) -> (Signed, SigningKey) {
         let key = SigningKey::from_bytes(&[9; 32]);
-        let s = Signed { b: "k51test".into(), t, k: key.verifying_key().to_bytes(), n: [1; 16], sub: if t == 0 { "Hi".into() } else { String::new() }, body: body.into(), sage: false, e: 7 };
+        let s = Signed { b: "k51test".into(), t, k: key.verifying_key().to_bytes(), n: [1; 16], sub: if t == 0 { "Hi".into() } else { String::new() }, body: body.into(), sage: false, e: 7, trip: false };
         (s, key)
     }
 
