@@ -2199,6 +2199,12 @@ async function main() {
   };
   addEventListener('online', netChanged);
   navigator.connection?.addEventListener?.('change', netChanged);
+  // Switching mode loads the other page: open chats end (§28.2). Ask only when one is live.
+  for (const a of document.querySelectorAll('a.mode-switch')) {
+    a.onclick = (e) => {
+      if ([...chats.values()].some((c) => c.open) && !confirm('Switching mode reloads Ephem and ends your open chats. Switch now?')) e.preventDefault();
+    };
+  }
   $('b-update').onclick = applyUpdate;
   $('b-update-later').onclick = () => { $('update').hidden = true; };
   $('b-id-save').onclick = () => { $('id-save').hidden = !$('id-save').hidden; $('id-load').hidden = true; $('id-saved').hidden = true; };
