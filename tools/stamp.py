@@ -24,10 +24,10 @@ import os
 import re
 
 APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app")
-MODULES = ["app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "perf.js", "pkg/ephem.js", "pkg/ephem_tor.js"]
-TOR_MODULES = ["app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "perf.js", "pkg/ephem_tor.js"]
-HASHED = ["app.css", "app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "perf.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest"]
-TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm", "channel.html", "redirect.js"]
+MODULES = ["app.js", "slots.js", "bridges.js", "channels.js", "boards.js", "ui.js", "perf.js", "pkg/ephem.js", "pkg/ephem_tor.js"]
+TOR_MODULES = ["app.js", "slots.js", "bridges.js", "channels.js", "boards.js", "ui.js", "perf.js", "pkg/ephem_tor.js"]
+HASHED = ["app.css", "app.js", "slots.js", "bridges.js", "channels.js", "boards.js", "pow-worker.js", "store-worker.js", "ui.js", "perf.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest"]
+TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm", "pkg/ephem_pow.wasm", "channel.html", "redirect.js"]
 # The Tor build's pages are precached with the direct app (security audit W-3: fetched on first
 # use, a tor.html of a later deploy pinned that deploy's app.js against this version's, and Tor
 # mode stayed broken). Only the large, integrity-pinned Tor build itself is fetched on first use.
@@ -83,6 +83,7 @@ def stamp_block(hashes, modules, wasm, connect):
         "{build}",
         f'<meta name="ephem-wasm" content="{hashes[wasm]}">',
         f'<meta name="ephem-tor-wasm" content="{hashes["pkg/ephem_tor_bg.wasm"]}">',
+        f'<meta name="ephem-pow-wasm" content="{hashes["pkg/ephem_pow.wasm"]}">',
         f'<link rel="stylesheet" href="app.css" integrity="{hashes["app.css"]}">',
         f'<script type="importmap">{importmap}</script>',
         f'<script type="module" src="app.js" integrity="{hashes["app.js"]}"></script>',

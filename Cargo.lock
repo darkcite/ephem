@@ -1203,6 +1203,7 @@ name = "ephem-channel-web"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "ephem-board",
  "ephem-channel",
  "ephem-crypto",
  "ephem-tor",
@@ -1240,6 +1241,14 @@ dependencies = [
  "snow",
  "x25519-dalek",
  "zeroize",
+]
+
+[[package]]
+name = "ephem-pow"
+version = "0.1.0"
+dependencies = [
+ "ephem-board",
+ "equix",
 ]
 
 [[package]]

@@ -302,7 +302,7 @@ Revision 1 had the host decode every attacker image in its own browser's native 
 
 ### G.11.1 The app
 
-- Following lists boards beside channels (follow entries gain `"k": "board"`; `saveFollows` keeps it, and an app that does not know a kind shows "update the app" instead of trying it as a channel, B-m4). A reader fetches the record, the 10 catalog buckets (as one request for the changed ones), and per thread the thread block plus missing chunks. Every block is checked by CID, every post by its poster signature and the deletion list, the root by the record.
+- Following lists boards beside channels (follow entries gain `"k": "board"`; `saveFollows` keeps it, and an app that does not know a kind shows "update the app" instead of trying it as a channel, B-m4). A reader fetches **the index** in one request, `GET /ipns/<name>?format=ephem-board` → `u16 len ‖ record ‖ CAR(root; manifest, 10 buckets, threads, archive, arch_threads, dels, modlog)` (as built, BD-3: the record and the blocks it names always come from the same version, and one Tor round trip replaces eleven), then per open thread `GET /ipfs/<thread>?format=car` (the thread block and its chunks). Every block is checked by CID, every post by its poster signature and the deletion list, the root by the record.
 - **Response caps per request** (A-m3): record ≤ 10 KiB, block ≤ 1 MiB, a bucket or thread CAR ≤ 1.5 MiB. The channel gateway's 64 MiB `MAX_RESPONSE` does not apply to boards.
 - **Cold start:** the catalog is shown at once from the last verified copy (CIDs in IndexedDB) and refreshed behind it (B-UX-3).
 - Refresh: an open thread every 30 s while on screen; the catalog on open and every 10 min with the follow list. **Watched threads** (≤ 32) in RAM, or in the key file as TLV `0x07 WATCHED` when signed in.
@@ -367,8 +367,10 @@ Revision 1 relied on the identity-wide vault lease, which is taken silently once
 | Submit RX | arti `DataStream` → preallocated submit slot | **1 copy** | Unavoidable: the stream yields into a buffer we own (as for chats, F.3.2) |
 | Submit RX | header, replay, PoW, `h`, signature, CBOR | 0 | Views over the slot; the borrowing decoder (G.6.2 step 6) |
 | Host store | text of accepted posts → block bytes | **1 copy** | The block is new bytes (dag-cbor with `no`, `ts`); ≤ 2.4 KiB per post, into the arena |
-| Host store | block → OPFS file (Worker, `SyncAccessHandle`) | **1 copy** (browser) | `write` from a wasm memory view |
-| Serve | OPFS block → response slot | **1 copy** | OPFS reads return a new buffer wasm cannot address (§11.6) |
+| Host store | block → OPFS file (Worker, `SyncAccessHandle`) | **2 copies** (as built, BD-3) | wasm memory → a JS `Uint8Array` (`BoardApp.delta`), then *transferred* (not copied) to the store Worker, which writes it; each block once, when it is new (`Board::build_into` skips unchanged full chunks and archived threads) |
+| Serve | held block → response | **1 copy** (as built, BD-3) | Blocks are served from wasm memory (the store is for restarts); a response is head + body built once (`gateway::Served`); the index is built once per version and shared (`Rc`) |
+| Serve | refusal, answer, `/pow` | 0 | Written into a 256-byte stack buffer (`gateway::SHORT`) |
+| Reopen | OPFS → JS → wasm | **2 copies** | Setup path: the store Worker reads each file, wasm copies it in (`BoardApp.open`) |
 | v2 poster TX | canvas RGBA → encoder Worker's memory | **1 copy** | Setup path, a documented exception (§22); the Worker is terminated after the post |
 | v2 host | image bytes → decoder Worker; pixels → thumbnail | **1 copy** each | Isolation is the point: the decoder runs in a separate, killable instance |
 

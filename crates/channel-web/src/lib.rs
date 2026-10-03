@@ -20,8 +20,11 @@
 // so `cargo test --workspace` builds.
 #![cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 
+mod boards;
 mod https;
 mod json;
+
+pub use boards::{BoardApp, Draft};
 
 use ephem_channel::car;
 use ephem_channel::cbor::Value;
@@ -86,6 +89,8 @@ struct State {
     vault: Vault,
     vault_seq: u64,
     vault_known: bool,
+    /// Boards hosted here (docs/BOARDS.md).
+    boards: boards::Boards,
 }
 
 /// An owned channel's onion service and what it serves.
@@ -107,6 +112,7 @@ impl State {
         self.vault = Vault::default();
         self.vault_seq = 0;
         self.vault_known = false;
+        self.boards.hosted.clear();
     }
 
     /// The cell serving channel `name` (updated in place if it is online), holding `h`.

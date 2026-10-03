@@ -49,6 +49,11 @@ export function init(c) {
   if (globalThis.ephemTorLab) globalThis.ephemChannelsRefresh = refreshAll; // lab: refresh now
 }
 
+/** Tor mode: the page's ChannelApp (boards share its identity and Tor client). */
+export function channelApp() {
+  return ctx?.TOR ? ch : null;
+}
+
 /** Direct mode: the Tor part's own WebAssembly memory, once loaded (for the performance readout). */
 let torWasm = null;
 export function memories() {

@@ -2,7 +2,7 @@
 # Copyright 2026 Anton (darkcite)
 [workspace]
 resolver = "2"
-members = ["crates/proto", "crates/crypto", "crates/core", "crates/snowflake", "crates/tor", "crates/wasm", "crates/channel", "crates/channel-web", "crates/board"]
+members = ["crates/proto", "crates/crypto", "crates/core", "crates/snowflake", "crates/tor", "crates/wasm", "crates/channel", "crates/channel-web", "crates/board", "crates/pow"]
 
 [workspace.package]
 version = "0.1.0"
@@ -42,3 +42,11 @@ arti-client = { path = "vendor/arti-client" }
 tor-dirmgr = { path = "vendor/tor-dirmgr" }
 tor-persist = { path = "vendor/tor-persist" }
 tor-hsservice = { path = "vendor/tor-hsservice" }
+
+# The boards' PoW solver runs in posters' Workers: speed over size (spike B-P1 used opt-level 3).
+[profile.release.package.ephem-pow]
+opt-level = 3
+[profile.release.package.equix]
+opt-level = 3
+[profile.release.package.hashx]
+opt-level = 3

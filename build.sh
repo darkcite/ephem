@@ -46,5 +46,12 @@ for variant in ephem:"" ephem_tor:"--features tor"; do
     wasm-opt -Os --enable-bulk-memory --enable-nontrapping-float-to-int -o "app/pkg/${name}_bg.wasm" "app/pkg/${name}_bg.wasm"
   fi
 done
+# The boards' proof-of-work solver for Web Workers (crates/pow): a raw module with no imports and
+# no JS glue; pages fetch it with its SHA-384 and hand the compiled module to their Workers.
+cargo build --release --locked --target wasm32-unknown-unknown -p ephem-pow
+cp target/wasm32-unknown-unknown/release/ephem_pow.wasm app/pkg/ephem_pow.wasm
+if command -v wasm-opt >/dev/null; then
+  wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int -o app/pkg/ephem_pow.wasm app/pkg/ephem_pow.wasm
+fi
 python3 tools/stamp.py
 ls -l app/pkg

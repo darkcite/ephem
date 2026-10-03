@@ -9,6 +9,7 @@ license.workspace = true
 
 [dependencies]
 ephem-channel = { path = "../channel" }
+ephem-board = { path = "../board" }
 ephem-crypto = { path = "../crypto" }
 ephem-tor = { path = "../tor", default-features = false }
 wasm-bindgen = "=0.2.129"

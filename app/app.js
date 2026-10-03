@@ -13,6 +13,7 @@
 import * as slots from './slots.js';
 import * as bridges from './bridges.js';
 import * as channels from './channels.js';
+import * as boards from './boards.js';
 import * as perf from './perf.js';
 import { avatar } from './ui.js';
 
@@ -2080,6 +2081,7 @@ async function main() {
     })),
   });
   channels.init({ TOR, phone, app, mod: TOR ? mod : null, showPane, setTab, setStatus, error, persist, scan, download, notify, notice, ramSections: () => !app.identity_label() });
+  boards.init({ TOR, mod: TOR ? mod : null, ch: channels.channelApp(), error });
   renderIdentity();
   if (TOR) beginTor();
 
