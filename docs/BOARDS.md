@@ -100,10 +100,10 @@ IPNS record ──▶ root {v:1, kind:"board", manifest⁴², cat:[bucket⁴² �
   thread        {no, sub, chunks: [chunk⁴² …] ≤ 8, r, st, lk}
   chunk         {p: [post …] ≤ 64, oldest first}
   post          {no, ts, s, cap}   or tombstone {no, ts, del, by}
-  s (signed)    {b: board name, t: thread no (0 = new), k: pk, n: [16] nonce, sub, body, sage, e: epoch}
+  s (signed)    {b: board name, t: thread no (0 = new), k: pk, n: [16] nonce, sub, body, sage, e: epoch, trip}
   archive       {t: [{no, sub, ex, pruned, thread (ref)}] ≤ 256}
   arch_threads  {t: [thread⁴² …]}                                       pin index of archived (text-only) threads
-  dels          {d: [{h: BLAKE2b-256 of the deleted s, at}] ≤ 4 096, 30 days}   signed by the record
+  dels          {d: [{h: SHA-256 of the deleted s, at}] ≤ 4 096, 30 days}      signed by the record
   modlog        {a: [{ts, act, no, why}] ≤ 1 024, newest last}
   own           XChaCha20-Poly1305 ciphertext, padded to 4 KiB steps   bans, filters, efforts, held queue
   ev            reserved for the v2 event log (always null in v1)
@@ -270,6 +270,16 @@ Revision 1 had the host decode every attacker image in its own browser's native 
 - **Filters and bans live in the encrypted `own` block** (G.5.1), unreadable to spammers, carried across devices.
 - **Reports** (kind 4, a small PoW) go to a ring of 256, shown in the owner view.
 
+**As built (BD-5, 2026-10-03):**
+- **Trips are flagged in `s`** (`trip: bool`, signed): readers show `!` + 16 base32 characters of `BLAKE2b-80("ephem-board-trip" ‖ k)` only for flagged posts; a per-post key is never shown as a trip. A trip key is `HKDF(seed, "p2pchat/board-trip/" ‖ board name ‖ "/" ‖ label)`.
+- **Trips-only admits known trips:** a flagged key with an accepted post on this board (the 512 most recent, kept in `own`) or an owner-approved one. A flag alone would let a flood claim fresh "trips"; a new trip cannot start posting while the switch is on. **Approved trips only** admits the owner's list (≤ 256).
+- **Pre-moderation:** an admitted post is held (≤ 8, in `own`); the submitter gets `200` with number **0** (and so does a retry); the owner approves (numbered and published then) or rejects.
+- **Deletes wait 5 s** (`UNDO_MS`) for an undo, then publish with a mod-log entry. **Mass delete:** since a time (minute-rounded `ts`), **from a post number on** (exact), or every post of a key.
+- **Bans** (≤ 256 keys) refuse with `E_BOARD_REFUSED`; trips-only and approved-only refuse with `E_BOARD_PAUSED`. `/pow` byte 54 carries the switches (bit 0 trips-only, bit 1 approved only, bit 2 pre-moderation), so the reply box can say so before any work.
+- **R8's panic mode** turns on trips-only instead of closing new threads when the owner chose so (`panic_trips`).
+- **`own`** is sealed at each publish where it changed: `nonce(24) ‖ XChaCha20-Poly1305(HKDF(seed, "p2pchat/board-own/" ‖ index), AAD "ephem-board-own-v1" ‖ board pk, u32 len ‖ dag-cbor ‖ zeros)`, 4 KiB steps, ≤ 64 KiB at every cap. A reopen restores bans, approvals, known trips, held posts, switches and efforts.
+- **Readers keep the deletion lists they saw** (per board, ≤ 4 096 hashes) and apply them to any older root a stale mirror serves later (`verify(…, known_dels)`).
+
 ### G.9.2 Illegal content (CSAM and the like)
 
 - **The owner is the publisher.** The owner's tab signs and serves everything it accepts.
@@ -282,7 +292,7 @@ Revision 1 had the host decode every attacker image in its own browser's native 
 1. "You publish whatever your board accepts. You are responsible for it where you live."
 2. "Anyone with the link can post. Spam and illegal content will arrive; only you can remove it, and only while your hosting tab is online."
 3. "Deleting removes a post from your board and tells mirrors and readers to drop it. Copies made by others before that may survive."
-4. "Host the board in its own tab: hosting it beside your chat lets anyone who can reach both tell they are the same person." (The app enforces the separate tab.)
+4. "Your board is hosted in this tab, beside your chats and channels: their onions go online and offline together, which can link them. To keep them apart, host the board from another browser profile." (R6)
 5. "Your hosting tab's IP is visible to the volunteer Snowflake proxy it uses, and anyone can make it send traffic by posting. For stronger protection use bridges you trust (Settings → Tor bridges)." (A-M5)
 6. (v2, images on) "Images greatly raise the risk. Turn them on only if you will pre-moderate."
 7. The channel warnings of D.3 (writing style, posting times; a separate identity is recommended).
