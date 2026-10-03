@@ -56,6 +56,7 @@ try {
   await Promise.all([o.waitForEvent('download'), o.click('#b-id-do-save')]);
   await torReady(o, 'owner');
   await o.click('#tab-own');
+  await o.waitForSelector('#v-own-new:not([hidden]) #ch-new:not([hidden])', { timeout: 30_000 }); // My channels has opened
   await o.click('#b-board-new');
   await o.waitForSelector('#v-board-new:not([hidden])');
   await o.fill('#bn-title', 'Lab /b/');
