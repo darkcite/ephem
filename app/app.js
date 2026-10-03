@@ -1769,7 +1769,7 @@ const bc = 'BroadcastChannel' in globalThis ? new BroadcastChannel('p2pchat-code
 
 function takeFragment() {
   const h = location.hash;
-  if (!/^#([iarqtkbc]=|tab=)/.test(h)) return null;
+  if (!/^#([iarqtkbcB]=|tab=)/.test(h)) return null;
   history.replaceState(null, '', location.pathname);
   return h;
 }
