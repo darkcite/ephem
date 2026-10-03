@@ -64,6 +64,8 @@ export function channelApp() {
 }
 
 /** The follow list, boards included (`k: 'board'`; their rows are boards.js's). */
+/** Resolves once the channels' Tor client is up (boards read and post over it). */
+export const torIsUp = () => torUp;
 export const followList = () => follows;
 export const saveFollowList = () => saveFollows();
 export function setBoardsHook(f) {

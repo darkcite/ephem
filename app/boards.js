@@ -58,6 +58,13 @@ function app() {
   return starting;
 }
 
+/** The BoardApp once its Tor client is up (reading, posting and mirroring need it). */
+async function net() {
+  const b = await app();
+  await channels.torIsUp();
+  return b;
+}
+
 const signedIn = () => !!ctx.app.identity_label();
 const short = (n) => `${n.slice(0, 12)}…`;
 
@@ -376,7 +383,7 @@ async function refresh() {
   const known = views.get(c.read);
   const onions = [...new Set([...c.onions, ...(f?.o || []), ...(known?.mirrors || [])])];
   try {
-    const b = await app();
+    const b = await net();
     const v = JSON.parse(await b.read(c.read, onions.join(','), f?.s || 0, c.thread ? [c.thread] : []));
     views.set(c.read, v);
     if (f) {
@@ -523,7 +530,7 @@ async function mirror() {
   note.hidden = false;
   note.textContent = 'Starting the mirror…';
   try {
-    const b = await app();
+    const b = await net();
     const onion = await b.mirror(c.read, c.onions.join(','), mirrorSeed(c.read));
     note.textContent = `Mirroring on ${onion}. It refreshes every 10 s while this tab is open. Send this address to the board's owner to sign it into the board.`;
   } catch (e) {
@@ -555,7 +562,7 @@ function presolve() {
   if (box?.key === key) return box.promise;
   const state = $('bd-post-state');
   const promise = (async () => {
-    const b = await app();
+    const b = await net();
     const onion = c.onions[0];
     const draft = await b.draft(c.read, onion, c.thread || 0, trip);
     const sw = JSON.parse(draft.switches);
@@ -656,7 +663,7 @@ export async function solve(params, onProgress) {
 /** Opens a reply box, solves, signs and submits: resolves to `{no, seq, held, draft}` (`held`:
  *  pre-moderation, no number yet). `trip`: a label to post under the identity's trip key. */
 export async function post(name, onion, thread, sub, body, sage, { trip = '', onProgress } = {}) {
-  const b = await app();
+  const b = await net();
   const draft = await b.draft(name, onion, thread, trip);
   const t0 = performance.now();
   const s = await solve(draft.params(), onProgress);
@@ -672,7 +679,7 @@ export async function resend(draft) {
 
 /** Reads and verifies board `name` with the given threads (numbers). */
 export async function read(name, onions, threads = [], minSeq = 0) {
-  return JSON.parse(await (await app()).read(name, onions, minSeq, threads.map(Number)));
+  return JSON.parse(await (await net()).read(name, onions, minSeq, threads.map(Number)));
 }
 
 // ---- wiring -----------------------------------------------------------------------------------
