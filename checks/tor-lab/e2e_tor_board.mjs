@@ -79,6 +79,7 @@ try {
   check('a second thread inside the thread budget is refused', /E_BOARD_BUSY/.test(early.error || ''), early.error);
   const rb = await post(b, name, onion, ta.no, '', 'Reply from B, bumps');
   check('poster B replies', rb.no === 2, JSON.stringify(rb));
+  await o.waitForTimeout(1_500); // bumps are in seconds: the owner's thread a second later
   const owner = await o.evaluate(() => globalThis.ephemBoards.app.post(0, 0, 'Owner thread', 'From the owner', false));
   await o.waitForTimeout(2_000); // the next publish
   const ra = await post(a, name, onion, ta.no, '', 'Reply from A, sage', true);
@@ -110,9 +111,15 @@ try {
   }
 
   // ---- the store follows every publish; a reload brings the board back ----
-  const kept = await o.evaluate((n) => globalThis.ephemBoards.stored(n), name);
-  check('the hosted board is in the block store (OPFS, one file per block)', kept.record > 0 && kept.blocks >= 15, JSON.stringify(kept));
+  const kept = await o.evaluate(async (n) => ({ ...(await globalThis.ephemBoards.stored(n)), served: JSON.parse(globalThis.ephemBoards.app.status(0)).blocks }), name);
+  check('the store holds exactly the served blocks (OPFS, one file per block; unreachable ones deleted)', kept.record > 0 && kept.blocks === kept.served, JSON.stringify(kept));
   await o.reload();
+  await o.waitForSelector('#v-start:not([hidden])');
+  await toSettings(o);
+  await o.locator('#slots li', { hasText: 'Boards' }).locator('button', { hasText: 'Sign in' }).click();
+  await o.locator('#slots li input[type=password]').fill(PASS);
+  await o.locator('#slots li', { hasText: 'Boards' }).locator('button', { hasText: 'Sign in' }).click();
+  await o.waitForFunction(() => /Boards/.test(document.querySelector('#id-desc')?.textContent));
   await torReady(o, 'owner (reload)');
   const back = await o.evaluate(() => globalThis.ephemBoards.reopen(0));
   await o.evaluate(() => globalThis.ephemBoards.app.set_efforts(0, 40, 80));

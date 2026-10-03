@@ -231,7 +231,7 @@ impl BoardApp {
     }
 
     /// The owner's view of board `index`: `{name, onion, seq, threads, next_no, paused,
-    /// threads_closed, closed_notice, effort_reply, effort_thread}`.
+    /// threads_closed, closed_notice, effort_reply, effort_thread, blocks}`.
     pub fn status(&self, index: u32) -> String {
         let st = self.st.borrow();
         let Some(b) = st.boards.hosted.iter().find(|b| b.index == index) else { return String::new() };
@@ -244,7 +244,7 @@ impl BoardApp {
         json::string(&mut o, &b.onion);
         let _ = write!(
             o,
-            ",\"seq\":{},\"threads\":{},\"next_no\":{},\"paused\":{},\"threads_closed\":{},\"closed_notice\":{},\"effort_reply\":{},\"effort_thread\":{}}}",
+            ",\"seq\":{},\"threads\":{},\"next_no\":{},\"paused\":{},\"threads_closed\":{},\"closed_notice\":{},\"effort_reply\":{},\"effort_thread\":{},\"blocks\":{}}}",
             h.board.seq,
             h.board.threads.len(),
             h.board.next_no,
@@ -252,7 +252,8 @@ impl BoardApp {
             h.intake.threads_closed,
             h.intake.closed_notice,
             info.effort_reply,
-            info.effort_thread
+            info.effort_thread,
+            h.served.blocks().count()
         );
         o
     }

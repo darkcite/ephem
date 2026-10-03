@@ -66,7 +66,7 @@ pub struct View {
     pub root: Cid,
     pub sequence: u64,
     pub manifest: Manifest,
-    /// Sorted for display: sticky first, then by bump (newest first).
+    /// Sorted for display: sticky first, then by bump (newest first; on a tie, the newer thread).
     pub catalog: Vec<CatalogEntry>,
     /// The threads whose blocks were held, catalog order.
     pub threads: Vec<ThreadView>,
@@ -268,7 +268,7 @@ pub fn read(key: &VerifyingKey, name: &Cid, root: &Cid, blocks: &[Block], known_
     if catalog.len() != pinned.len() {
         return Err(BoardError::Invalid);
     }
-    catalog.sort_by(|a, b| b.sticky.cmp(&a.sticky).then(b.bump.cmp(&a.bump)));
+    catalog.sort_by(|a, b| b.sticky.cmp(&a.sticky).then(b.bump.cmp(&a.bump)).then(b.no.cmp(&a.no)));
     let mut threads = Vec::new();
     for ce in &catalog {
         if let Some(mut t) = thread(&by, &ce.thread, &name_text, &pk, next_no, &deleted)? {
