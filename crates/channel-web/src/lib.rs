@@ -492,6 +492,13 @@ impl ChannelApp {
             let (_, mut key) = st.borrow().id.as_ref().ok_or_else(|| err("sign in first"))?.vault_seeds();
             let opened = vault::open(&name, &key, &body, now_s());
             key.fill(0);
+            if let Err(vault::VaultError::Newer(seq)) = opened {
+                // Written by a newer app: never overwrite it from here (docs/BOARDS.md G.13.1).
+                let mut st = st.borrow_mut();
+                st.vault_seq = st.vault_seq.max(seq);
+                st.vault_known = false;
+                return Err(err("E_VAULT_NEWER: your other device runs a newer Ephem; update the app on this device to manage your channels and boards here"));
+            }
             let (v, seq) = opened.map_err(|e| err(format!("vault: {e:?}")))?;
             let mut st = st.borrow_mut();
             // On a tie the network's record wins: two devices can publish the same sequence at
@@ -534,47 +541,7 @@ impl ChannelApp {
     /// open here) with the writer lease `{device (32 hex), until}` through a Tor exit (`PUT`, as
     /// `publish_ipfs`). Resolves to the new sequence.
     pub fn vault_publish(&self, host: &str, extra_root: &[u8], device: &str, until: f64) -> Result<js_sys::Promise, JsValue> {
-        let tor = self.tor()?;
-        let dev = unhex16(device).ok_or_else(|| err("device id: 32 hex digits"))?;
-        let (v, seq, record, name) = {
-            let st = self.st.borrow();
-            if st.vault_seq > 0 && !st.vault_known {
-                return Err(err("the list of your channels could not be read yet; not overwriting it"));
-            }
-            let mut entries: Vec<Entry> = st.own.iter().map(entry_of).collect();
-            for e in &st.vault.entries {
-                if !entries.iter().any(|x| x.index == e.index) {
-                    entries.push(e.clone());
-                }
-            }
-            entries.sort_by_key(|e| e.index);
-            entries.truncate(vault::MAX_ENTRIES);
-            let v = Vault { lease: Lease { device: dev, until: until as u64 }, entries };
-            let seq = st.vault_seq + 1;
-            let (mut sign, mut key) = st.id.as_ref().ok_or_else(|| err("sign in first"))?.vault_seeds();
-            let mut nonce = [0u8; 24];
-            ephem_crypto::random(&mut nonce);
-            let record = vault::seal(&sign, &key, &v, seq, now_s(), &nonce);
-            let name = vault::name(&sign);
-            sign.fill(0);
-            key.fill(0);
-            (v, seq, record.map_err(|e| err(format!("vault: {e:?}")))?, name)
-        };
-        let (host, root, st) = (host.to_owned(), extra_root.to_vec(), self.st.clone());
-        Ok(wasm_bindgen_futures::future_to_promise(async move {
-            let path = format!("/routing/v1/ipns/{}", name.to_text());
-            let status = with_timeout(FETCH_TIMEOUT_MS, https::request(&tor, "PUT", &host, &path, gateway::CT_RECORD, &record, &root)).await.map_err(err)?.0;
-            if !(200..300).contains(&status) {
-                return Err(err(format!("the routing service answered {status}")));
-            }
-            let mut st = st.borrow_mut();
-            if seq > st.vault_seq {
-                st.vault = v;
-                st.vault_seq = seq;
-                st.vault_known = true;
-            }
-            Ok(JsValue::from(seq as f64))
-        }))
+        publish_vault(&self.st, host, extra_root, device, until, true)
     }
 
     /// Continues channel `index` from the vault, without its blocks (§D.11.3 step 4): the
@@ -741,6 +708,66 @@ impl ChannelApp {
     }
 }
 
+/// Publishes the vault (§D.11, docs/BOARDS.md G.13) through a Tor exit. `channels`: this device
+/// writes the channels (their lease and entries are refreshed); otherwise they stay as last read
+/// and only the boards hosted here are (each board has its own lease). Boards hosted here get the
+/// lease `{device, until}`; other boards stay as last read. Resolves to the new sequence.
+fn publish_vault(st_rc: &Rc<RefCell<State>>, host: &str, extra_root: &[u8], device: &str, until: f64, channels: bool) -> Result<js_sys::Promise, JsValue> {
+    let tor = st_rc.borrow().tor.borrow().clone().ok_or_else(|| err("Tor is not started"))?;
+    let dev = unhex16(device).ok_or_else(|| err("device id: 32 hex digits"))?;
+    let (v, seq, record, name) = {
+        let st = st_rc.borrow();
+        if (st.vault_seq > 0 || !channels) && !st.vault_known {
+            return Err(err("the list of your channels could not be read yet; not overwriting it"));
+        }
+        let (lease, entries) = if channels {
+            let mut entries: Vec<Entry> = st.own.iter().map(entry_of).collect();
+            for e in &st.vault.entries {
+                if !entries.iter().any(|x| x.index == e.index) {
+                    entries.push(e.clone());
+                }
+            }
+            entries.sort_by_key(|e| e.index);
+            entries.truncate(vault::MAX_ENTRIES);
+            (Lease { device: dev, until: until as u64 }, entries)
+        } else {
+            (st.vault.lease.clone(), st.vault.entries.clone())
+        };
+        let mut boards: Vec<vault::BoardEntry> = st.boards.vault_entries(Lease { device: dev, until: until as u64 }, now_s());
+        for b in &st.vault.boards {
+            if !boards.iter().any(|x| x.index == b.index) {
+                boards.push(b.clone());
+            }
+        }
+        boards.sort_by_key(|b| b.index);
+        let v = Vault { lease, entries, boards };
+        let seq = st.vault_seq + 1;
+        let (mut sign, mut key) = st.id.as_ref().ok_or_else(|| err("sign in first"))?.vault_seeds();
+        let mut nonce = [0u8; 24];
+        ephem_crypto::random(&mut nonce);
+        let record = vault::seal(&sign, &key, &v, seq, now_s(), &nonce);
+        let name = vault::name(&sign);
+        sign.fill(0);
+        key.fill(0);
+        (v, seq, record.map_err(|e| err(format!("vault: {e:?}")))?, name)
+    };
+    let (host, root, st) = (host.to_owned(), extra_root.to_vec(), st_rc.clone());
+    Ok(wasm_bindgen_futures::future_to_promise(async move {
+        let path = format!("/routing/v1/ipns/{}", name.to_text());
+        let status = with_timeout(FETCH_TIMEOUT_MS, https::request(&tor, "PUT", &host, &path, gateway::CT_RECORD, &record, &root)).await.map_err(err)?.0;
+        if !(200..300).contains(&status) {
+            return Err(err(format!("the routing service answered {status}")));
+        }
+        let mut st = st.borrow_mut();
+        if seq > st.vault_seq {
+            st.vault = v;
+            st.vault_seq = seq;
+            st.vault_known = true;
+        }
+        Ok(JsValue::from(seq as f64))
+    }))
+}
+
 /// An open channel as the vault lists it.
 fn entry_of(o: &Own) -> Entry {
     let h = o.hosted.borrow();
@@ -760,7 +787,8 @@ fn unhex16(s: &str) -> Option<[u8; 16]> {
     Some(out)
 }
 
-/// `{"seq","device","until","channels":[{"index","title","count","missing"…}]}`.
+/// `{"seq","device","until","channels":[{"index","title","count","missing"…}],"boards":[{"index",
+/// "title","next_no","seq","updated","device","until","mirrors"}…]}`.
 fn vault_json(v: &Vault, seq: u64) -> String {
     use std::fmt::Write;
     let mut o = String::with_capacity(128 + v.entries.len() * 128);
@@ -777,6 +805,26 @@ fn vault_json(v: &Vault, seq: u64) -> String {
         json::string(&mut o, &e.title);
         o.push_str(",\"mirrors\":[");
         for (j, m) in e.mirrors.iter().enumerate() {
+            if j > 0 {
+                o.push(',');
+            }
+            json::string(&mut o, m);
+        }
+        o.push_str("]}");
+    }
+    o.push_str("],\"boards\":[");
+    for (i, b) in v.boards.iter().enumerate() {
+        if i > 0 {
+            o.push(',');
+        }
+        let _ = write!(o, "{{\"index\":{},\"next_no\":{},\"seq\":{},\"updated\":{},\"until\":{},\"device\":\"", b.index, b.next_no, b.seq, b.updated, b.lease.until);
+        for x in b.lease.device {
+            let _ = write!(o, "{x:02x}");
+        }
+        o.push_str("\",\"title\":");
+        json::string(&mut o, &b.title);
+        o.push_str(",\"mirrors\":[");
+        for (j, m) in b.mirrors.iter().enumerate() {
             if j > 0 {
                 o.push(',');
             }

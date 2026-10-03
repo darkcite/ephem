@@ -75,6 +75,29 @@ export function setBoardsHook(f, open) {
 }
 const isChannel = (f) => f.k !== 'board';
 
+/** The vault for boards (docs/BOARDS.md G.13): the last vault read, a fresh read, and the board
+ *  side of publishing (each board has its own lease; the channels' stays as read). */
+export const vaultApi = {
+  last: () => vault,
+  leaseS: () => LEASE_S,
+  device: () => deviceId(),
+  async fetch() {
+    const j = await ch.vault_fetch(...routing());
+    if (j) vault = JSON.parse(j);
+    saveFloor();
+    return vault;
+  },
+  async publishBoards(boardApp) {
+    // Read, then write: never over a list this device has not seen (the other device's boards
+    // and channels stay as they are).
+    await this.fetch();
+    await boardApp.vault_publish(...routing(), deviceId(), Math.floor(Date.now() / 1000) + LEASE_S);
+    vault = JSON.parse(ch.vault());
+    saveFloor();
+    return vault;
+  },
+};
+
 /** Direct mode: the Tor part's own WebAssembly memory, once loaded (for the performance readout). */
 let torWasm = null;
 export function memories() {
@@ -914,6 +937,7 @@ async function syncVault(takeover = false) {
     renderOwned();
     if (current?.own !== undefined && owned.some((o) => o.i === current.own)) showOwner(current.own);
     backfillOwned();
+    boardsHook?.();
   } catch (e) {
     ctx.error(e?.message || e);
   } finally {
@@ -1039,6 +1063,7 @@ async function renew() {
     vault = j ? JSON.parse(j) : vault;
     leaseCheckedAt = Date.now();
     saveFloor();
+    boardsHook?.();
   } catch (e) {
     return console.info('vault:', e?.message || e);
   }

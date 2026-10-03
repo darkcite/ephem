@@ -6,7 +6,7 @@
 //! ```text
 //! IPNS record (V2-only, the vault name) ─▶ value "/ipfs/<CIDv1 raw, identity multihash>"
 //!   the CID inlines: nonce(24) ‖ XChaCha20-Poly1305(vault key, AAD, padded plaintext) ‖ tag(16)
-//!   plaintext = u16 length ‖ dag-cbor {v, dev, until, ch: [entry…]} ‖ zero padding
+//!   plaintext = u16 length ‖ dag-cbor {v: 2, dev, until, ch: [entry…], bd: [board…]} ‖ zero padding
 //! ```
 //!
 //! The ciphertext rides inside the record, so reading it needs no block from anyone; the
@@ -35,6 +35,11 @@ pub const VALIDITY_S: u64 = 30 * 24 * 3600;
 pub const TTL_NS: u64 = 60_000_000_000;
 /// Owned channels a vault lists (the page looks at indices 0‥16).
 pub const MAX_ENTRIES: usize = 16;
+/// Owned boards (docs/BOARDS.md G.4: indices 0‥3).
+pub const MAX_BOARDS: usize = 4;
+/// The vault format this app writes. Version 2 adds boards (G.13); a vault of a newer version
+/// is never overwritten here (its device says "update the app").
+pub const VERSION: u64 = 2;
 
 /// One owned channel as the vault remembers it: enough to list it, re-sign its manifest and
 /// continue its chain without holding its blocks (§D.11.3 step 4).
@@ -62,10 +67,28 @@ pub struct Lease {
     pub until: u64,
 }
 
+/// One owned board (docs/BOARDS.md G.13): enough to list it, bound its numbers and continue it
+/// without its blocks. Each board has its own lease, so moving channels never moves boards.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoardEntry {
+    pub index: u32,
+    pub title: String,
+    /// The root of its last record (`None`: unknown).
+    pub root: Option<Cid>,
+    pub next_no: u64,
+    /// Its last record's sequence and when this entry was written (Unix seconds).
+    pub seq: u64,
+    pub updated: u64,
+    pub mirrors: Vec<String>,
+    /// The device hosting it, until when.
+    pub lease: Lease,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Vault {
     pub lease: Lease,
     pub entries: Vec<Entry>,
+    pub boards: Vec<BoardEntry>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -75,6 +98,44 @@ pub enum VaultError {
     Record(RecordError),
     /// Not an inline CID, a bad tag (wrong key or tampered), or malformed plaintext.
     Invalid,
+    /// Written by a newer app (a version this one does not know): read-only here; the record's
+    /// sequence is given so the device never publishes below it.
+    Newer(u64),
+}
+
+impl BoardEntry {
+    fn value(&self) -> Value {
+        cbor::map(vec![
+            ("i", Value::Uint(u64::from(self.index))),
+            ("t", Value::Text(self.title.clone())),
+            ("r", self.root.clone().map_or(Value::Null, Value::Link)),
+            ("n", Value::Uint(self.next_no)),
+            ("s", Value::Uint(self.seq)),
+            ("u", Value::Uint(self.updated)),
+            ("m", Value::Array(self.mirrors.iter().cloned().map(Value::Text).collect())),
+            ("dev", Value::Bytes(self.lease.device.to_vec())),
+            ("until", Value::Uint(self.lease.until)),
+        ])
+    }
+
+    fn from_value(v: &Value) -> Option<Self> {
+        let uint = |k: &str| v.get(k).and_then(Value::uint);
+        let root = match v.get("r")? {
+            Value::Null => None,
+            Value::Link(c) => Some(c.clone()),
+            _ => return None,
+        };
+        Some(BoardEntry {
+            index: u32::try_from(uint("i")?).ok().filter(|i| (*i as usize) < MAX_BOARDS)?,
+            title: v.get("t")?.text()?.to_owned(),
+            root,
+            next_no: uint("n")?,
+            seq: uint("s")?,
+            updated: uint("u")?,
+            mirrors: v.get("m")?.array()?.iter().map(|m| m.text().map(str::to_owned)).collect::<Option<_>>()?,
+            lease: Lease { device: v.get("dev")?.bytes()?.try_into().ok()?, until: uint("until")? },
+        })
+    }
 }
 
 impl Entry {
@@ -118,28 +179,39 @@ impl Entry {
 impl Vault {
     fn encode(&self) -> Vec<u8> {
         cbor::map(vec![
-            ("v", Value::Uint(1)),
+            ("v", Value::Uint(VERSION)),
             ("dev", Value::Bytes(self.lease.device.to_vec())),
             ("until", Value::Uint(self.lease.until)),
             ("ch", Value::Array(self.entries.iter().map(Entry::value).collect())),
+            ("bd", Value::Array(self.boards.iter().map(BoardEntry::value).collect())),
         ])
         .encode()
     }
 
-    fn decode(b: &[u8]) -> Option<Self> {
-        let v = Value::decode(b)?;
-        if v.get("v")?.uint()? != 1 {
-            return None;
+    /// Versions 1 (channels only) and 2; `Err(true)`: a newer version, `Err(false)`: malformed.
+    fn decode(b: &[u8]) -> Result<Self, bool> {
+        let v = Value::decode(b).ok_or(false)?;
+        let version = v.get("v").and_then(Value::uint).ok_or(false)?;
+        if version > VERSION {
+            return Err(true);
         }
-        let entries: Vec<Entry> = v.get("ch")?.array()?.iter().map(Entry::from_value).collect::<Option<_>>()?;
-        if entries.len() > MAX_ENTRIES {
-            return None;
-        }
-        Some(Vault { lease: Lease { device: v.get("dev")?.bytes()?.try_into().ok()?, until: v.get("until")?.uint()? }, entries })
+        let inner = || {
+            let entries: Vec<Entry> = v.get("ch")?.array()?.iter().map(Entry::from_value).collect::<Option<_>>()?;
+            let boards: Vec<BoardEntry> = match (version, v.get("bd")) {
+                (1, _) => Vec::new(),
+                (_, Some(b)) => b.array()?.iter().map(BoardEntry::from_value).collect::<Option<_>>()?,
+                _ => return None,
+            };
+            if entries.len() > MAX_ENTRIES || boards.len() > MAX_BOARDS {
+                return None;
+            }
+            Some(Vault { lease: Lease { device: v.get("dev")?.bytes()?.try_into().ok()?, until: v.get("until")?.uint()? }, entries, boards })
+        };
+        inner().ok_or(false)
     }
 
-    /// The padded plaintext; drops `about` texts, then mirror lists, if that is what it takes
-    /// to fit (the channel's own manifest still has them).
+    /// The padded plaintext; drops `about` texts, then the channels' mirror lists, then the
+    /// boards', if that is what it takes to fit (their own manifests still have them).
     fn plaintext(&self) -> Result<Vec<u8>, VaultError> {
         let mut v = self.clone();
         let mut enc = v.encode();
@@ -149,6 +221,10 @@ impl Vault {
         }
         if enc.len() + 2 > MAX_PLAIN {
             v.entries.iter_mut().for_each(|e| e.mirrors.clear());
+            enc = v.encode();
+        }
+        if enc.len() + 2 > MAX_PLAIN {
+            v.boards.iter_mut().for_each(|b| b.mirrors.clear());
             enc = v.encode();
         }
         let size = BUCKETS.iter().copied().find(|&b| enc.len() + 2 <= b).ok_or(VaultError::TooLarge)?;
@@ -220,7 +296,7 @@ pub fn open(name: &Cid, key: &[u8; 32], record: &[u8], now_s: u64) -> Result<(Va
     XChaCha20Poly1305::new(key.into()).decrypt_in_place_detached(&nonce, &aad(r.sequence), body, &tag).map_err(|_| VaultError::Invalid)?;
     let len = usize::from(u16::from_be_bytes([body[0], body[1]]));
     let enc = body.get(2..2 + len).ok_or(VaultError::Invalid)?;
-    let v = Vault::decode(enc).ok_or(VaultError::Invalid)?;
+    let v = Vault::decode(enc).map_err(|newer| if newer { VaultError::Newer(r.sequence) } else { VaultError::Invalid })?;
     Ok((v, r.sequence))
 }
 
@@ -246,7 +322,7 @@ mod tests {
     }
 
     fn vault(n: u32, about: usize) -> Vault {
-        Vault { lease: Lease { device: [7; 16], until: NOW + 900 }, entries: (0..n).map(|i| entry(i, about)).collect() }
+        Vault { lease: Lease { device: [7; 16], until: NOW + 900 }, entries: (0..n).map(|i| entry(i, about)).collect(), boards: Vec::new() }
     }
 
     #[test]
@@ -281,7 +357,7 @@ mod tests {
         let (v, _) = open(&name(&sign), &key, &rec, NOW).unwrap();
         assert!(v.entries.iter().all(|e| e.about.is_empty() && e.title.len() == 128));
         // A padded plaintext of the maximum size, too.
-        let v = Vault { lease: Lease::default(), entries: vec![Entry { about: "x".repeat(4800), ..entry(0, 0) }] };
+        let v = Vault { lease: Lease::default(), entries: vec![Entry { about: "x".repeat(4800), ..entry(0, 0) }], boards: Vec::new() };
         assert!(v.plaintext().unwrap().len() == MAX_PLAIN);
         assert!(seal(&sign, &key, &v, 1, NOW, &[3; 24]).unwrap().len() <= ipns::MAX_RECORD);
     }
@@ -297,5 +373,53 @@ mod tests {
         }
         assert_eq!(inline_data("/ipfs/bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua"), None, "a hashed CID is not inline");
         assert_eq!(inline_data(&inline_path(b"hello")).as_deref(), Some(&b"hello"[..]));
+    }
+
+    fn board(i: u32) -> BoardEntry {
+        BoardEntry {
+            index: i,
+            title: "t".repeat(128),
+            root: Some(Cid::of(DAG_CBOR, &i.to_be_bytes())),
+            next_no: 1234,
+            seq: 1_790_000_000_000,
+            updated: NOW,
+            mirrors: vec![format!("{}.onion", "m".repeat(56)); 8],
+            lease: Lease { device: [i as u8; 16], until: NOW + 900 },
+        }
+    }
+
+    #[test]
+    fn boards_and_their_leases() {
+        let (sign, key) = ([1; 32], [2; 32]);
+        let mut v = vault(MAX_ENTRIES as u32, 1024);
+        v.entries.iter_mut().for_each(|e| e.title = "t".repeat(128));
+        v.boards = (0..MAX_BOARDS as u32).map(board).collect();
+        let rec = seal(&sign, &key, &v, 7, NOW, &[3; 24]).unwrap();
+        assert!(rec.len() <= ipns::MAX_RECORD, "16 channels and 4 boards fit: {} bytes", rec.len());
+        let (back, _) = open(&name(&sign), &key, &rec, NOW).unwrap();
+        assert!(back.boards.iter().zip(&v.boards).all(|(a, b)| a.index == b.index && a.lease == b.lease && a.next_no == b.next_no && a.root == b.root), "boards and their leases");
+        let small = Vault { boards: v.boards.clone(), ..Vault::default() };
+        let (back, _) = open(&name(&sign), &key, &seal(&sign, &key, &small, 8, NOW, &[3; 24]).unwrap(), NOW).unwrap();
+        assert_eq!(back.boards, v.boards, "with room, boards keep their mirror lists too");
+    }
+
+    #[test]
+    fn a_version_1_vault_still_opens_and_a_newer_one_is_refused() {
+        let (sign, key) = ([1; 32], [2; 32]);
+        let seal_raw = |enc: Vec<u8>, seq: u64| {
+            let mut plain = vec![0u8; 1024];
+            plain[..2].copy_from_slice(&(enc.len() as u16).to_be_bytes());
+            plain[2..2 + enc.len()].copy_from_slice(&enc);
+            let tag = XChaCha20Poly1305::new((&key).into()).encrypt_in_place_detached(XNonce::from_slice(&[3; 24]), &aad(seq), &mut plain).unwrap();
+            let mut sealed = [3u8; 24].to_vec();
+            sealed.extend_from_slice(&plain);
+            sealed.extend_from_slice(&tag);
+            ipns::create_v2(&SigningKey::from_bytes(&sign), &Record { value: inline_path(&sealed), sequence: seq, validity: NOW + VALIDITY_S, ttl_ns: TTL_NS })
+        };
+        let v1 = cbor::map(vec![("v", Value::Uint(1)), ("dev", Value::Bytes(vec![7; 16])), ("until", Value::Uint(NOW)), ("ch", Value::Array(vec![entry(0, 3).value()]))]).encode();
+        let (v, _) = open(&name(&sign), &key, &seal_raw(v1, 4), NOW).unwrap();
+        assert!(v.entries.len() == 1 && v.boards.is_empty(), "an older app's vault");
+        let v3 = cbor::map(vec![("v", Value::Uint(3)), ("dev", Value::Bytes(vec![7; 16])), ("until", Value::Uint(NOW)), ("ch", Value::Array(vec![]))]).encode();
+        assert_eq!(open(&name(&sign), &key, &seal_raw(v3, 9), NOW), Err(VaultError::Newer(9)), "never overwritten by this app");
     }
 }

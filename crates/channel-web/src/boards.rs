@@ -81,6 +81,28 @@ pub(crate) struct Boards {
     mirrors: Vec<Mirrored>,
 }
 
+impl Boards {
+    /// The vault entries of the boards hosted here, with this device's lease (G.13).
+    pub(crate) fn vault_entries(&self, lease: ephem_channel::vault::Lease, now_s: u64) -> Vec<ephem_channel::vault::BoardEntry> {
+        self.hosted
+            .iter()
+            .map(|b| {
+                let h = b.host.borrow();
+                ephem_channel::vault::BoardEntry {
+                    index: b.index,
+                    title: h.board.manifest.title.clone(),
+                    root: Some(h.served.root.clone()),
+                    next_no: h.board.next_no,
+                    seq: h.board.seq,
+                    updated: now_s,
+                    mirrors: h.board.manifest.mirrors.clone(),
+                    lease: lease.clone(),
+                }
+            })
+            .collect()
+    }
+}
+
 /// What a mirror serves: the last verified version.
 pub(crate) struct Mirror {
     served: Served,
@@ -169,15 +191,8 @@ impl BoardApp {
         r.map_err(err)
     }
 
-    fn start(&self, index: u32, board: Board, pow_secret: &[u8; 32], mut own_key: [u8; 32]) {
-        let intake = Intake::new(board.name(), *pow_secret, Efforts::DEFAULT, now_s());
-        let host = Rc::new(RefCell::new(Host::new(board, intake, own_key, now_ms())));
-        own_key.fill(0);
-        let mut st = self.st.borrow_mut();
-        st.boards.hosted.retain(|b| b.index != index);
-        st.boards.hosted.push(Hosted { index, host: host.clone(), onion: String::new(), svc: None });
-        drop(st);
-        wasm_bindgen_futures::spawn_local(publish_loop(Rc::downgrade(&host), Rc::downgrade(&self.st), index));
+    fn start(&self, index: u32, board: Board, pow_secret: &[u8; 32], own_key: [u8; 32]) {
+        start_host(&self.st, index, board, pow_secret, own_key);
     }
 
     /// Indices of the boards open here.
@@ -422,6 +437,86 @@ impl BoardApp {
         h.borrow_mut().board.set_mirrors(list(csv)).map_err(|e| err(format!("{e:?}")))?;
         h.borrow_mut().touch();
         Ok(())
+    }
+
+    // ---- several devices (G.13) ----
+
+    /// "Host this board here": board `index` is read in full (index, every thread, the
+    /// archive and the encrypted `own` block) from `onions` (its own address, served by the
+    /// other device, then its mirrors), verified, and hosted here. Numbers continue from at
+    /// least `next_no_floor` (G.13.6, computed by the page from the vault). Resolves to its
+    /// onion address.
+    pub fn take_over(&self, index: u32, onions: &str, next_no_floor: f64) -> Result<js_sys::Promise, JsValue> {
+        let tor = self.tor()?;
+        let mut s = self.seeds(index)?;
+        let key = ed25519_dalek::SigningKey::from_bytes(&s[0]);
+        let name = Cid::ipns_name(&key.verifying_key().to_bytes());
+        let mut sources: Vec<String> = Vec::with_capacity(1 + ephem_board::limits::MIRRORS);
+        sources.push(onion_of(&s[1]));
+        for o in list(onions) {
+            if is_onion(&o) && !sources.contains(&o) {
+                sources.push(o);
+            }
+        }
+        let seeds = s;
+        s.iter_mut().for_each(|x| x.fill(0));
+        let st = self.st.clone();
+        Ok(wasm_bindgen_futures::future_to_promise(async move {
+            let mut seeds = seeds;
+            let r = async {
+                let mut last = String::from("no source");
+                for round in 0..READ_ROUNDS {
+                    for o in &sources {
+                        match with_timeout(FETCH_MS * 2, pull(&tor, &name, o, None, round > 0)).await {
+                            Ok(Some(p)) => {
+                                let mut view = verify::read(&key.verifying_key(), &name, &p.root, &p.blocks, &[]).map_err(|e| format!("{e:?}"))?;
+                                view.sequence = p.seq;
+                                let mut board = Board::load(&seeds[0], view, p.blocks).map_err(|e| format!("{e:?}"))?;
+                                board.next_no = board.next_no.max(next_no_floor as u64);
+                                start_host(&st, index, board, &seeds[2], seeds[3]);
+                                return Ok(());
+                            }
+                            Ok(None) => {}
+                            Err(e) => last = format!("{o}: {e}"),
+                        }
+                    }
+                    sleep_ms(2_000 << round).await;
+                }
+                Err(last)
+            }
+            .await;
+            seeds.iter_mut().for_each(|x| x.fill(0));
+            r.map_err(err)?;
+            Ok(JsValue::UNDEFINED)
+        }))
+    }
+
+    /// Continues board `index` without its blocks (G.13.9, no source answered): an empty
+    /// catalog under the same name and onion, numbers from `next_no` on, records above `seq`.
+    pub fn continue_board(&self, index: u32, title: &str, next_no: f64, seq: f64, mirrors: &str) -> Result<(), JsValue> {
+        let mut s = self.seeds(index)?;
+        let r = Board::new(&s[0], title, "", "", now_s()).map(|mut b| {
+            b.next_no = (next_no as u64).max(1);
+            b.seq = seq as u64;
+            let _ = b.set_mirrors(list(mirrors));
+            start_host(&self.st, index, b, &s[2], s[3]);
+        });
+        s.iter_mut().for_each(|x| x.fill(0));
+        r.map_err(|e| err(format!("{e:?}")))
+    }
+
+    /// Board `index`'s own onion address (the same on every device of the identity).
+    pub fn board_onion(&self, index: u32) -> Result<String, JsValue> {
+        let mut s = self.seeds(index)?;
+        let o = onion_of(&s[1]);
+        s.iter_mut().for_each(|x| x.fill(0));
+        Ok(o)
+    }
+
+    /// Publishes the vault with this device's lease on the boards it hosts (G.13.2); the
+    /// channels' lease and entries stay as last read. As `ChannelApp.vault_publish`.
+    pub fn vault_publish(&self, host: &str, extra_root: &[u8], device: &str, until: f64) -> Result<js_sys::Promise, JsValue> {
+        crate::publish_vault(&self.st, host, extra_root, device, until, false)
     }
 
     // ---- mirrors (G.10: read-only in v1) ----
@@ -677,6 +772,10 @@ impl Draft {
     }
 }
 
+fn onion_of(seed: &[u8; 32]) -> String {
+    ephem_tor::web::onion_address(&ed25519_dalek::SigningKey::from_bytes(seed).verifying_key().to_bytes())
+}
+
 fn post_key(h: &Host, no: u64) -> Result<[u8; 32], JsValue> {
     h.board.threads.iter().flat_map(|t| t.entries.iter()).find_map(|e| if let Entry::Post(p) = e && p.no == no { Some(p.s.k) } else { None }).ok_or_else(|| err("no such post"))
 }
@@ -879,6 +978,58 @@ pub fn view_json(v: &View) -> String {
     o
 }
 
+fn start_host(st_rc: &Rc<RefCell<State>>, index: u32, board: Board, pow_secret: &[u8; 32], mut own_key: [u8; 32]) {
+    let intake = Intake::new(board.name(), *pow_secret, Efforts::DEFAULT, now_s());
+    let host = Rc::new(RefCell::new(Host::new(board, intake, own_key, now_ms())));
+    own_key.fill(0);
+    let mut st = st_rc.borrow_mut();
+    st.boards.hosted.retain(|b| b.index != index);
+    st.boards.hosted.push(Hosted { index, host: host.clone(), onion: String::new(), svc: None });
+    drop(st);
+    wasm_bindgen_futures::spawn_local(publish_loop(Rc::downgrade(&host), Rc::downgrade(st_rc), index));
+    wasm_bindgen_futures::spawn_local(fence_loop(Rc::downgrade(&host), Rc::downgrade(st_rc), index));
+}
+
+/// How often a host checks that no other device of its owner published the board (G.13.5).
+pub const FENCE_MS: u32 = 30_000;
+
+/// Fencing (G.13.5): while the board is hosted here, its record is read from its mirrors and
+/// from its own onion (on a fresh circuit, which may reach another device serving the same
+/// address); a newer record signed by the board key means another device of the owner writes
+/// it now: this tab stops hosting at once and tells the page (`"fenced"`).
+async fn fence_loop(host: Weak<RefCell<Host>>, st: Weak<RefCell<State>>, index: u32) {
+    loop {
+        sleep_ms(FENCE_MS).await;
+        let Some(h) = host.upgrade() else { return };
+        let Some(state) = st.upgrade() else { return };
+        let Some(tor) = state.borrow().tor.borrow().clone() else { continue };
+        let (name, mine, mut sources) = {
+            let h = h.borrow();
+            (h.served.name.clone(), h.board.seq, h.board.manifest.mirrors.clone())
+        };
+        if let Some(onion) = state.borrow().boards.hosted.iter().find(|b| b.index == index).map(|b| b.onion.clone()).filter(|o| !o.is_empty()) {
+            sources.push(onion);
+        }
+        drop((h, state));
+        let path = format!("/ipns/{}?format=ipns-record", name.to_text());
+        for o in &sources {
+            let Ok(resp) = with_timeout(FETCH_MS, fetch(&tor, o, &ephem_channel::gateway::get(o, &path), true, gateway::MAX_RECORD)).await else { continue };
+            let Ok(body) = ephem_channel::gateway::parse_response(&resp) else { continue };
+            let Ok(rec) = ipns::verify(&name, body, now_s()) else { continue };
+            if rec.sequence > mine {
+                tracing::info!("board {index}: a newer record (sequence {} > {mine}) from another device: not hosting here any more", rec.sequence);
+                let Some(state) = st.upgrade() else { return };
+                state.borrow_mut().boards.hosted.retain(|b| b.index != index);
+                let f = state.borrow().boards.listener.clone();
+                if let Some(f) = f {
+                    let _ = f.call2(&JsValue::NULL, &JsValue::from(index), &JsValue::from_str("fenced"));
+                }
+                return;
+            }
+        }
+    }
+}
+
 /// How often a mirror pulls (G.10: at most every 10 s; 8 mirrors polling each second would
 /// exceed the writer's link, A-B2).
 pub const PULL_MS: u32 = 10_000;
@@ -903,6 +1054,16 @@ async fn pull(tor: &Tor, name: &Cid, onion: &str, prev: Option<(u64, &std::colle
         let resp = fetch(tor, onion, &ephem_channel::gateway::get(onion, &format!("/ipfs/{}?format=car", c.to_text())), fresh, gateway::MAX_CAR).await?;
         let body = ephem_channel::gateway::parse_response(&resp).map_err(|e| format!("thread: {e:?}"))?;
         blocks.extend(ephem_channel::car::read(body).ok_or("thread: not a valid CAR")?.1);
+    }
+    // The owner-state block (encrypted, opaque here): kept so another device of the owner can
+    // take the board over with its bans and switches (G.13.8). Best effort.
+    let own = blocks.iter().find(|(c, _)| *c == root).and_then(|(_, b)| ephem_channel::cbor::Value::decode(b)).and_then(|r| r.get("own").and_then(ephem_channel::cbor::Value::link).cloned());
+    if let Some(own) = own.filter(|c| !held(c))
+        && let Ok(resp) = fetch(tor, onion, &ephem_channel::gateway::get(onion, &format!("/ipfs/{}?format=raw", own.to_text())), fresh, ephem_board::limits::OWN + 1024).await
+        && let Ok(b) = ephem_channel::gateway::parse_response(&resp)
+        && own.verifies(b)
+    {
+        blocks.push((own, b.to_vec()));
     }
     // The new threads' posts are checked here; unchanged threads (same CID) were before.
     let v = verify::verify(name, &record, &blocks, now_ms(), min, &[]).map_err(|e| format!("{e:?}"))?;

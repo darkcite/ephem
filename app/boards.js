@@ -48,11 +48,12 @@ export function init(c) {
 
 function adopt(b) {
   boards = b;
-  boards.set_listener((index) => {
+  boards.set_listener((index, why) => {
+    if (why === 'fenced') return standDown(index, 'Another of your devices published this board: it hosts it now, and this tab stopped.');
     persist(index);
     if (current?.own === index && !$('v-board-own').hidden) renderOwn();
   });
-  if (globalThis.ephemTorLab) globalThis.ephemBoards = { app: boards, host, reopen, post, resend, read, solve, stored };
+  if (globalThis.ephemTorLab) globalThis.ephemBoards = { app: boards, host, reopen, post, resend, read, solve, stored, canHost };
   return boards;
 }
 
@@ -163,12 +164,18 @@ async function scanOwned() {
     const b = await app();
     const found = [];
     if (signedIn()) {
+      const vault = channels.vaultApi.last();
       for (let i = 0; i < MAX_BOARDS; i++) {
         const name = b.name(i);
         const open = b.open_boards().includes(i);
-        if (open || (await storeCall({ op: 'load', name })).record) {
+        const entry = vault?.boards?.find((e) => e.index === i);
+        if (open || entry || (await storeCall({ op: 'load', name })).record) {
           const prev = owned.find((o) => o.i === i && o.name === name);
-          found.push(prev || { i, name, title: '', onion: '' });
+          const o = prev || { i, name, title: entry?.title || '', onion: '' };
+          o.entry = entry;
+          o.away = !open && leasedElsewhere(entry);
+          if (!open) o.onion = '';
+          found.push(o);
         }
       }
     }
@@ -179,13 +186,139 @@ async function scanOwned() {
     scanning = false;
   }
   renderOwned();
+  autoTakeOver();
+}
+
+// ---- several devices (G.13): one host per board, explicit takeovers ----------------------
+
+/** Desktop Chrome and Firefox host boards; phones, Safari and the installed app do not (their
+ *  background tabs are suspended, B-M5). */
+export function canHost() {
+  const ua = navigator.userAgent;
+  const mobile = /Mobi|Android|iPhone|iPad|iPod/i.test(ua) || navigator.userAgentData?.mobile === true;
+  const safari = /Safari\//.test(ua) && !/Chrome|Chromium|Firefox|Edg\//.test(ua);
+  const pwa = matchMedia('(display-mode: standalone)').matches;
+  return !mobile && !safari && !pwa;
+}
+
+const renewMs = () => (channels.vaultApi.leaseS() * 1000) / 3;
+const leasedElsewhere = (e) => !!e && e.device !== channels.vaultApi.device() && e.until * 1000 > Date.now();
+const claimedAt = new Map();         // index → when this device took the board over (ms)
+let renewTimer = 0;
+
+/** A host-capable device takes a board over by itself only once the other device's lease has
+ *  been expired for two renewal periods (the routing service caches answers, A-m7); otherwise
+ *  it offers "Host this board here". */
+function autoTakeOver() {
+  if (!canHost()) return;
+  for (const o of owned) {
+    const e = o.entry;
+    if (o.away || o.onion || !e || e.device === channels.vaultApi.device() || boards.open_boards().includes(o.i)) continue;
+    if (e.until * 1000 + 2 * renewMs() <= Date.now() && !o.taking) takeOver(o.i);
+  }
+}
+
+/** The page's lower bound for numbers (G.13.6): the other device could not post past its lease. */
+function numberFloor(e) {
+  if (!e) return 1;
+  return e.next_no + 120 * Math.max(0, Math.ceil((e.until - e.updated) / 60));
+}
+
+async function takeOver(i) {
+  const o = owned.find((x) => x.i === i);
+  if (!o || o.taking) return;
+  if (!canHost()) return ctx.error('Hosting a board needs desktop Chrome or Firefox: phones, Safari and the installed app stop background tabs.');
+  o.taking = true;
+  $('ba-state').textContent = 'Reading the board from your other device or its mirrors through Tor (up to a few minutes)…';
+  $('b-ba-host').disabled = true;
+  try {
+    const b = await net();
+    await b.take_over(i, (o.entry?.mirrors || []).join(','), numberFloor(o.entry));
+    o.name = b.name(i);
+    names.set(i, o.name);
+    await persist(i);
+    o.onion = b.serve(i);
+    o.away = false;
+    claimedAt.set(i, Date.now());
+    await channels.vaultApi.publishBoards(b).catch((e) => console.info('vault:', e?.message || e));
+    scheduleRenew();
+    renderOwned();
+    showOwn(i);
+  } catch (e) {
+    $('ba-state').textContent = `The board could not be read from your other device or its mirrors (${e?.message || e}). You can continue it here without its posts: numbers continue, its threads come back if a mirror still has them.`;
+    $('b-ba-continue').hidden = false;
+  } finally {
+    o.taking = false;
+    $('b-ba-host').disabled = !canHost();
+  }
+}
+
+async function continueHere(i) {
+  const o = owned.find((x) => x.i === i);
+  const e = o?.entry;
+  try {
+    const b = await net();
+    b.continue_board(i, e?.title || o?.title || 'Board', numberFloor(e), e?.seq || 0, (e?.mirrors || []).join(','));
+    names.set(i, b.name(i));
+    await persist(i);
+    o.onion = b.serve(i);
+    o.away = false;
+    claimedAt.set(i, Date.now());
+    await channels.vaultApi.publishBoards(b).catch(() => {});
+    scheduleRenew();
+    showOwn(i);
+  } catch (err) {
+    ctx.error(`The board could not continue here: ${err?.message || err}`);
+  }
+}
+
+/** Another device hosts board `i` now: stop here, say why. */
+function standDown(i, why) {
+  boards.close(i);
+  const o = owned.find((x) => x.i === i);
+  if (o) Object.assign(o, { onion: '', away: true, why });
+  renderOwned();
+  if (current?.own === i) showAway(o);
+}
+
+function showAway(o) {
+  ctx.showPane('v-board-away');
+  $('ba-title').textContent = `▦ ${o.title || short(o.name)}`;
+  const e = o.entry;
+  $('ba-state').textContent = o.why || (e && e.until * 1000 > Date.now()
+    ? `Your other device hosts this board (its lease runs until at least ${new Date(e.until * 1000).toLocaleTimeString()}; it renews it while it runs).`
+    : 'No device hosts this board right now.');
+  $('b-ba-host').disabled = !canHost();
+  $('ba-host-note').hidden = canHost();
+  $('b-ba-continue').hidden = true;
+}
+
+/** Every third of a lease: a host checks nobody took its boards over, then renews its leases. */
+function scheduleRenew() {
+  clearTimeout(renewTimer);
+  renewTimer = setTimeout(renew, renewMs());
+}
+
+async function renew() {
+  scheduleRenew();
+  if (!boards || !signedIn() || !boards.open_boards().length) return;
+  let vault;
+  try { vault = await channels.vaultApi.fetch(); } catch (e) { return console.info('vault:', e?.message || e); }
+  for (const i of boards.open_boards()) {
+    const e = vault?.boards?.find((x) => x.index === i);
+    // A takeover within the last lease keeps its claim (a renewal of the other device raced it).
+    if (leasedElsewhere(e) && Date.now() - (claimedAt.get(i) || 0) > channels.vaultApi.leaseS() * 1000) {
+      standDown(i, 'Your other device hosts this board now: this tab stopped hosting it.');
+    }
+  }
+  if (boards.open_boards().length) await channels.vaultApi.publishBoards(boards).catch((e) => console.info('vault:', e?.message || e));
 }
 
 function renderOwned() {
   const ul = $('board-owns');
   ul.replaceChildren();
   for (const o of owned) {
-    const li = row(o.title || short(o.name), o.onion ? 'online' : 'stored here: tap to host', current?.own === o.i);
+    const li = row(o.title || short(o.name), o.onion ? 'online' : o.away ? 'hosted on your other device' : 'stored here: tap to host', current?.own === o.i);
     li.className += o.onion ? ' ok' : '';
     li.onclick = () => { ctx.setTab('own'); showOwn(o.i); };
     ul.append(li);
@@ -205,6 +338,11 @@ function row(title, sub, active) {
 function showNew() {
   ctx.setTab('own');
   ctx.showPane('v-board-new');
+  if (!canHost()) {
+    $('bn-identity').textContent = 'Hosting a board needs desktop Chrome or Firefox: phones, Safari and the installed app stop background tabs. You can read and post on boards here.';
+    $('b-board-create').disabled = true;
+    return;
+  }
   $('bn-identity').textContent = signedIn()
     ? `Owned by your identity “${ctx.app.identity_label()}”: the board's keys are derived from it.`
     : 'Boards need a saved identity: save or sign in to one in Settings → Your identity first.';
@@ -234,6 +372,8 @@ async function showOwn(i, thread = 0) {
   ctx.showPane('v-board-own');
   renderOwned();
   const o = owned.find((x) => x.i === i);
+  if (o?.away || (o && !(await app()).open_boards().includes(i) && leasedElsewhere(o.entry))) return showAway(o);
+  if (o && !o.onion && !canHost()) return showAway(Object.assign(o, { why: 'Hosting a board needs desktop Chrome or Firefox: phones, Safari and the installed app stop background tabs.' }));
   try {
     const b = await app();
     if (!b.open_boards().includes(i)) {
@@ -247,6 +387,9 @@ async function showOwn(i, thread = 0) {
   }
   renderOwned();
   renderOwn();
+  claimedAt.set(i, claimedAt.get(i) || Date.now());
+  channels.vaultApi.publishBoards(boards).catch((e) => console.info('vault:', e?.message || e));
+  scheduleRenew();
   // The onion's reachability and the counters change without a publish.
   clearInterval(ownTimer);
   ownTimer = setInterval(() => {
@@ -691,6 +834,8 @@ export async function read(name, onions, threads = [], minSeq = 0) {
 
 function wire() {
   $('b-board-new').onclick = showNew;
+  $('b-ba-host').onclick = () => { if (current?.own !== undefined) takeOver(current.own); };
+  $('b-ba-continue').onclick = () => { if (current?.own !== undefined) continueHere(current.own); };
   $('b-board-create').onclick = create;
   $('b-bo-copy').onclick = () => navigator.clipboard?.writeText($('bo-link').value);
   $('b-bo-open').onclick = () => {
