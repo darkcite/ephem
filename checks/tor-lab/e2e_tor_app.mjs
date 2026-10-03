@@ -83,7 +83,7 @@ try {
   await a.waitForFunction(() => document.querySelector('#v-code .link')?.value.includes('#t='), null, { timeout: 10_000 });
   const link = await a.inputValue('#v-code .link');
   const code = link.split('#t=')[1];
-  check('Alice: one Tor invite (kind 5, 104 bytes), no answer box', Buffer.from(code, 'base64url').length === 104 && await a.isHidden('#answer-box'), `${code.length} chars`);
+  check('Alice: one Tor invite (kind 5, 120 bytes with the key commitment), no answer box', Buffer.from(code, 'base64url').length === 120 && await a.isHidden('#answer-box'), `${code.length} chars`);
 
   const t1 = Date.now();
   await openCode(b);

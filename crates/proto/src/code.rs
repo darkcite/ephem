@@ -2,19 +2,24 @@
 // Copyright 2026 Anton (darkcite)
 //! Invite / answer codes (§8.3): fixed little-endian layout, parsed in place.
 
-use crate::VERSION;
 use crate::buf::{Buf, Rd};
 use crate::candidate::CandidateBin;
 
+/// Version of the code format (frames and cards keep [`crate::VERSION`]). 2 (2026-10-03): the
+/// responder of the handshake commits to its Noise ephemeral key in its code (security audit
+/// F-01; §10.4).
+pub const CODE_VERSION: u8 = 2;
 pub const MAX_CANDIDATES: usize = 8;
-/// Largest encoded code: header + ids + key + expiry + creds (1+32, 1+32) + fp + 8 × 19.
-pub const MAX_CODE_LEN: usize = 4 + 16 + 16 + 32 + 4 + 33 + 33 + 32 + MAX_CANDIDATES * 19;
+/// Length of an ephemeral-key commitment ([`Code::commit`]).
+pub const COMMIT_LEN: usize = 16;
+/// Largest encoded code: header + ids + key + commitment + expiry + creds (1+32, 1+32) + fp + 8 × 19.
+pub const MAX_CODE_LEN: usize = 4 + 16 + 16 + 32 + COMMIT_LEN + 4 + 33 + 33 + 32 + MAX_CANDIDATES * 19;
 /// Smallest valid code: a Tor invite (§28.4), which has no ICE part.
 pub const MIN_CODE_LEN: usize = TOR_CODE_LEN;
-/// Smallest valid WebRTC code: an answer with minimal credentials and no candidates.
+/// Smallest valid WebRTC code: an invite with minimal credentials and no candidates.
 const MIN_RTC_CODE_LEN: usize = 4 + 16 + 32 + (1 + 4) + (1 + 22) + 32;
-/// A Tor invite: header, invite_id, room_id, static_pk, onion_pk, expires_at.
-pub const TOR_CODE_LEN: usize = 4 + 16 + 16 + 32 + 32 + 4;
+/// A Tor invite: header, invite_id, room_id, static_pk, onion_pk, commitment, expires_at.
+pub const TOR_CODE_LEN: usize = 4 + 16 + 16 + 32 + 32 + COMMIT_LEN + 4;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -42,6 +47,13 @@ impl Kind {
     #[inline(always)]
     pub const fn is_invite(self) -> bool {
         matches!(self, Self::Invite | Self::ResumeInvite | Self::TorInvite)
+    }
+
+    /// Codes of the handshake's responder (it sends Noise message 2, so it picks its ephemeral
+    /// key last): they carry a commitment to that key.
+    #[inline(always)]
+    pub const fn commits(self) -> bool {
+        matches!(self, Self::Answer | Self::ResumeAnswer | Self::TorInvite)
     }
 }
 
@@ -164,6 +176,11 @@ pub struct Code {
     pub static_pk: [u8; 32],
     /// Tor invites: the inviter's onion service key (its `.onion` address). Zero otherwise.
     pub onion_pk: [u8; 32],
+    /// Answers and Tor invites ([`Kind::commits`]): a commitment to the Noise ephemeral key
+    /// the sender will use in message 2 (`ephem_crypto::noise::commit`). Without it, someone
+    /// who swapped the codes could try ephemeral keys until both sides' safety codes match
+    /// (security audit F-01). Zero for other kinds.
+    pub commit: [u8; COMMIT_LEN],
     pub expires_at: u32,
     /// WebRTC codes only (empty for a Tor invite).
     pub ice: IceParams,
@@ -172,7 +189,7 @@ pub struct Code {
 impl Code {
     pub fn encode(&self, out: &mut [u8]) -> Result<usize, ()> {
         let mut b = Buf::new(out);
-        b.u8(VERSION)?;
+        b.u8(CODE_VERSION)?;
         b.u8(self.kind as u8)?;
         b.u8(self.flags)?;
         b.u8(self.ice.n_cand)?;
@@ -183,6 +200,9 @@ impl Code {
         b.put(&self.static_pk)?;
         if self.kind == Kind::TorInvite {
             b.put(&self.onion_pk)?;
+        }
+        if self.kind.commits() {
+            b.put(&self.commit)?;
         }
         if self.kind.is_invite() {
             b.u32(self.expires_at)?;
@@ -202,7 +222,7 @@ impl Code {
             return Err(InvalidInvite);
         }
         let mut r = Rd::new(src);
-        if r.u8().ok_or(InvalidInvite)? != VERSION {
+        if r.u8().ok_or(InvalidInvite)? != CODE_VERSION {
             return Err(ProtocolMismatch);
         }
         let kind = Kind::from_u8(r.u8().ok_or(InvalidInvite)?).ok_or(InvalidInvite)?;
@@ -219,6 +239,7 @@ impl Code {
         let room_id = if kind.is_invite() { r.arr::<16>().ok_or(InvalidInvite)? } else { [0; 16] };
         let static_pk = r.arr::<32>().ok_or(InvalidInvite)?;
         let onion_pk = if tor { r.arr::<32>().ok_or(InvalidInvite)? } else { [0; 32] };
+        let commit = if kind.commits() { r.arr::<COMMIT_LEN>().ok_or(InvalidInvite)? } else { [0; COMMIT_LEN] };
         let expires_at = if kind.is_invite() { r.u32().ok_or(InvalidInvite)? } else { 0 };
         let ice = if tor {
             if n_cand != 0 {
@@ -231,7 +252,7 @@ impl Code {
         if r.remaining() != 0 {
             return Err(InvalidInvite);
         }
-        Ok(Self { kind, flags, invite_id, room_id, static_pk, onion_pk, expires_at, ice })
+        Ok(Self { kind, flags, invite_id, room_id, static_pk, onion_pk, commit, expires_at, ice })
     }
 }
 
@@ -248,16 +269,16 @@ mod tests {
         };
         ice.push(CandidateBin::from_sdp_parts("9090b126-3aae-4a3e-b714-5d089ddfbff0.local", "41731", "host").unwrap());
         ice.push(CandidateBin::from_sdp_parts("171.97.169.36", "55298", "srflx").unwrap());
-        Code { kind, flags: 0, invite_id: [7; 16], room_id: if kind.is_invite() { [9; 16] } else { [0; 16] }, static_pk: [3; 32], onion_pk: [0; 32], expires_at: if kind.is_invite() { 1_790_000_000 } else { 0 }, ice }
+        Code { kind, flags: 0, invite_id: [7; 16], room_id: if kind.is_invite() { [9; 16] } else { [0; 16] }, static_pk: [3; 32], onion_pk: [0; 32], commit: if kind.commits() { [5; COMMIT_LEN] } else { [0; COMMIT_LEN] }, expires_at: if kind.is_invite() { 1_790_000_000 } else { 0 }, ice }
     }
 
     #[test]
     fn tor_invite_roundtrip_and_strictness() {
-        let c = Code { kind: Kind::TorInvite, flags: flags::GROUP, invite_id: [1; 16], room_id: [2; 16], static_pk: [3; 32], onion_pk: [4; 32], expires_at: 1_790_000_000, ice: IceParams::EMPTY };
+        let c = Code { kind: Kind::TorInvite, flags: flags::GROUP, invite_id: [1; 16], room_id: [2; 16], static_pk: [3; 32], onion_pk: [4; 32], commit: [5; COMMIT_LEN], expires_at: 1_790_000_000, ice: IceParams::EMPTY };
         let mut out = [0u8; MAX_CODE_LEN];
         let n = c.encode(&mut out).unwrap();
         assert_eq!(n, TOR_CODE_LEN);
-        assert_eq!(n, 104, "§28.4");
+        assert_eq!(n, 120, "§28.4");
         assert_eq!(Code::decode(&out[..n]).unwrap(), c);
         assert!(Code::decode(&out[..n - 1]).is_err(), "short");
         let mut long = out[..n].to_vec();
@@ -282,6 +303,7 @@ mod tests {
         let c = sample(Kind::Answer);
         let mut out = [0u8; MAX_CODE_LEN];
         let n = c.encode(&mut out).unwrap();
+        assert_eq!(n, 160 - 16 - 4 + COMMIT_LEN, "an answer: no room id or expiry, a commitment");
         assert_eq!(Code::decode(&out[..n]).unwrap(), c);
     }
 
@@ -292,8 +314,8 @@ mod tests {
         let n = c.encode(&mut out).unwrap();
         assert!(Code::decode(&out[..n + 1]).is_err(), "trailing byte");
         let mut bad = out;
-        bad[0] = 2;
-        assert_eq!(Code::decode(&bad[..n]), Err(crate::ErrorCode::ProtocolMismatch));
+        bad[0] = 1;
+        assert_eq!(Code::decode(&bad[..n]), Err(crate::ErrorCode::ProtocolMismatch), "a version-1 code (no commitment)");
         let mut bad = out;
         bad[2] = 0x80;
         assert!(Code::decode(&bad[..n]).is_err(), "reserved flag");

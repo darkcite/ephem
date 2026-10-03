@@ -409,7 +409,7 @@ Alice (offerer)                                   Bob (answerer)
 
 | Off | Size | Field | Notes |
 |---|---|---|---|
-| 0 | 1 | `ver` | Protocol major version = `1` |
+| 0 | 1 | `ver` | Code format version = `2` (2026-10-03: the commitment below; frames and contact cards keep version `1`) |
 | 1 | 1 | `kind` | `1` = INVITE, `2` = ANSWER, `3` = RESUME_INVITE, `4` = RESUME_ANSWER, `5` = TOR_INVITE (§28.4), `6` = CONTACT_CARD (§7.5) |
 | 2 | 1 | `flags` | bit0 `LAN_ONLY`, bit1 `GROUP` (MVP-3), bit2 `TRANSFER` (identity transfer, §7.6), bit3 `OBSERVER` (room invite for a read-only member, §14.2). Other bits are reserved and MUST be 0 |
 | 3 | 1 | `n_cand` | 0..=8 |
@@ -427,7 +427,9 @@ Alice (offerer)                                   Bob (answerer)
 | 32 | `dtls_fp` (SHA-256 of the DTLS certificate) |
 | var | `n_cand` × `CandidateBin` (§8.4) |
 
-**ANSWER / RESUME_ANSWER body:** `invite_id` (echoed back, 16), `static_pk` (32), `ufrag`, `pwd`, `dtls_fp`, candidates. There is no room ID and no expiry.
+**ANSWER / RESUME_ANSWER body:** `invite_id` (echoed back, 16), `static_pk` (32), `e_commit` (16), `ufrag`, `pwd`, `dtls_fp`, candidates. There is no room ID and no expiry.
+
+**`e_commit`** (answers and TOR_INVITE, §28.4): `BLAKE2s("ephem-e-commit-v1" ‖ e)[..16]`, where `e` is the X25519 ephemeral public key the code's sender will put in Noise message 2. The answerer (KK responder) and the Tor host (IK responder) draw that key before writing their code; the initiator checks message 2's key against the commitment before reading anything else (`E_AUTH_FAILED` on a mismatch). Why (security audit F-01): message 2's sender picks its ephemeral key last, so a man in the middle who swapped the codes could otherwise try keys until the 6-digit safety codes of its two handshakes match (about 10⁶ tries, seconds on one machine). With the commitment every key is fixed before any is revealed. Each code serves one handshake; a Tor host uses its committed key for the first connection only (later redials come from the pinned peer and use fresh keys).
 
 Rules:
 
@@ -575,6 +577,7 @@ Why not MLS: with one committer and no delivery service MLS adds a group key, ep
   - **6 decimal digits** = `u32::from_le_bytes([s[0], s[1], s[2], 0]) % 10^6` (24 bits, negligible bias);
   - **4 emoji**, one per byte of `s[3..7]`, from a fixed 256-entry table: the contiguous Unicode block U+1F400..U+1F4FF (animals and objects), entry `b` = `U+1F400 + b` followed by U+FE0F (emoji presentation).
 - It is shown on both devices after the handshake.
+- **Why 6 digits are enough:** the responder commits to its ephemeral key in its code (§8.3 `e_commit`), so neither side, nor anyone in the middle, can steer the handshake hash; a forged match has probability 10⁻⁶ per attempt and every attempt needs new codes.
 - Both exchange scenarios are supported. The core decides the SAS policy from where the code came from (`CodeSource` in §6.2):
 
   | How the code arrived (either side) | SAS policy |
@@ -1342,7 +1345,7 @@ tor.html ── core (sans-IO, Noise, rooms) ── Tor streams (crates/wasm fea
 
 ### 28.4 One-way invite (single QR) and handshake
 
-**TOR_INVITE** (`kind = 5`), about 104 B:
+**TOR_INVITE** (`kind = 5`), 120 B (104 B before code version 2):
 
 | Size | Field |
 |---|---|
@@ -1351,6 +1354,7 @@ tor.html ── core (sans-IO, Noise, rooms) ── Tor streams (crates/wasm fea
 | 16 | `room_id` |
 | 32 | `static_pk` (X25519) |
 | 32 | `onion_pk` (Ed25519, the v3 onion address) |
+| 16 | `e_commit`: the host's committed Noise ephemeral key for the first connection (§8.3, security audit F-01) |
 | 4 | `expires_at` |
 
 The virtual port is fixed. There are no ICE candidates, fingerprints or answer.

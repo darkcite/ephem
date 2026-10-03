@@ -17,8 +17,9 @@ use crate::identity::{Identity, PeerId};
 use crate::sas::Sas;
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};
+use blake2::{Blake2s256, Digest};
 use ephem_proto::ErrorCode;
-use ephem_proto::code::MAX_CODE_LEN;
+use ephem_proto::code::{COMMIT_LEN, MAX_CODE_LEN};
 use ephem_proto::frame::{FrameType, HEADER_LEN, Header, TAG_LEN};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -34,13 +35,76 @@ pub const IK_MSG1_LEN: usize = 32 + 48 + IK_PAYLOAD_LEN + 16;
 /// Largest handshake message.
 pub const MAX_HS_MSG_LEN: usize = IK_MSG1_LEN;
 
+/// The responder's Noise ephemeral key, drawn **before** its code is written, so the code can
+/// commit to it (security audit F-01, §10.4). Without the commitment the responder, who sends
+/// message 2 and so picks its ephemeral key last, could try keys until the safety codes of two
+/// handshakes it sits between match (about 10⁶ tries for the 6 digits). Used for one handshake.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct Ephemeral {
+    secret: [u8; 32],
+}
+
+impl Ephemeral {
+    pub fn random() -> Self {
+        let mut secret = [0u8; 32];
+        crate::random(&mut secret);
+        Self { secret }
+    }
+
+    /// The commitment the responder's code carries.
+    pub fn commit(&self) -> [u8; COMMIT_LEN] {
+        commit(x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(self.secret)).as_bytes())
+    }
+}
+
+/// `BLAKE2s("ephem-e-commit-v1" ‖ e)[..16]`: binding for the committer (finding another key with
+/// the same commitment is a 2⁶⁴ birthday search at best, and gains one extra try).
+pub fn commit(e_pub: &[u8; 32]) -> [u8; COMMIT_LEN] {
+    let mut h = Blake2s256::new();
+    h.update(b"ephem-e-commit-v1");
+    h.update(e_pub);
+    let d = h.finalize();
+    let mut out = [0u8; COMMIT_LEN];
+    out.copy_from_slice(&d[..COMMIT_LEN]);
+    out
+}
+
+/// What one side of a handshake brings to the commitment: the responder its committed key, the
+/// initiator the commitment it read from the responder's code. Contact dials (pinned keys, no
+/// codes, §28.7) and later reconnections of a Tor chat use none.
+#[derive(Clone)]
+pub enum Commitment {
+    None,
+    /// Responder: use this ephemeral key in message 2.
+    Mine(Ephemeral),
+    /// Initiator: message 2's ephemeral key must have this commitment.
+    Theirs([u8; COMMIT_LEN]),
+}
+
 pub struct Handshake {
     hs: snow::HandshakeState,
+    expect: Option<[u8; COMMIT_LEN]>,
+}
+
+fn apply<'b>(builder: snow::Builder<'b>, c: &'b Commitment) -> snow::Builder<'b> {
+    match c {
+        // The only way snow takes a chosen ephemeral key; its name is about tests, the key here
+        // is fresh from the CSPRNG and used once.
+        Commitment::Mine(e) => builder.fixed_ephemeral_key_for_testing_only(&e.secret),
+        _ => builder,
+    }
+}
+
+fn expected(c: &Commitment) -> Option<[u8; COMMIT_LEN]> {
+    match c {
+        Commitment::Theirs(h) => Some(*h),
+        _ => None,
+    }
 }
 
 impl Handshake {
     /// `initiator` = the offerer (§10.1). Prologue = `"p2pchat/1" ‖ invite ‖ answer`.
-    pub fn new(id: &Identity, remote: &PeerId, initiator: bool, invite: &[u8], answer: &[u8]) -> Result<Self, ErrorCode> {
+    pub fn new(id: &Identity, remote: &PeerId, initiator: bool, invite: &[u8], answer: &[u8], c_: &Commitment) -> Result<Self, ErrorCode> {
         debug_assert!(invite.len() <= MAX_CODE_LEN && answer.len() <= MAX_CODE_LEN);
         let mut prologue = [0u8; PROLOGUE_TAG.len() + 2 * MAX_CODE_LEN];
         let a = PROLOGUE_TAG.len();
@@ -55,28 +119,44 @@ impl Handshake {
             .and_then(|b| b.remote_public_key(&remote.0))
             .and_then(|b| b.prologue(&prologue[..c]))
             .map_err(|_| ErrorCode::CryptoFailed)?;
+        let builder = apply(builder, c_);
         let hs = if initiator { builder.build_initiator() } else { builder.build_responder() };
-        Ok(Self { hs: hs.map_err(|_| ErrorCode::CryptoFailed)? })
+        Ok(Self { hs: hs.map_err(|_| ErrorCode::CryptoFailed)?, expect: expected(c_) })
     }
 
     /// Tor mode (§28.4), the dialer: Noise IK to the inviter's static key. `prologue` =
     /// the Tor invite code (the same bytes on both sides).
-    pub fn ik_initiator(id: &Identity, remote: &PeerId, prologue: &[u8]) -> Result<Self, ErrorCode> {
+    /// `c`: the host's commitment from the invite (first connection), or `Commitment::None`.
+    pub fn ik_initiator(id: &Identity, remote: &PeerId, prologue: &[u8], c: &Commitment) -> Result<Self, ErrorCode> {
         let builder = snow::Builder::new(PARAMS_IK.parse().map_err(|_| ErrorCode::CryptoFailed)?)
             .local_private_key(id.x_secret())
             .and_then(|b| b.remote_public_key(&remote.0))
             .and_then(|b| b.prologue(prologue))
             .map_err(|_| ErrorCode::CryptoFailed)?;
-        Ok(Self { hs: builder.build_initiator().map_err(|_| ErrorCode::CryptoFailed)? })
+        Ok(Self { hs: builder.build_initiator().map_err(|_| ErrorCode::CryptoFailed)?, expect: expected(c) })
     }
 
     /// Tor mode, the inviter: Noise IK responder; the dialer's key arrives in message 1.
-    pub fn ik_responder(id: &Identity, prologue: &[u8]) -> Result<Self, ErrorCode> {
+    /// `c`: the key the invite committed to (first connection), or `Commitment::None`.
+    pub fn ik_responder(id: &Identity, prologue: &[u8], c: &Commitment) -> Result<Self, ErrorCode> {
         let builder = snow::Builder::new(PARAMS_IK.parse().map_err(|_| ErrorCode::CryptoFailed)?)
             .local_private_key(id.x_secret())
             .and_then(|b| b.prologue(prologue))
             .map_err(|_| ErrorCode::CryptoFailed)?;
-        Ok(Self { hs: builder.build_responder().map_err(|_| ErrorCode::CryptoFailed)? })
+        let builder = apply(builder, c);
+        Ok(Self { hs: builder.build_responder().map_err(|_| ErrorCode::CryptoFailed)?, expect: expected(c) })
+    }
+
+    /// Initiator, reading message 2: its first 32 bytes are the responder's ephemeral key, which
+    /// must match the commitment from the responder's code before anything else is done.
+    fn check_commitment(&self, msg: &[u8]) -> Result<(), ErrorCode> {
+        match self.expect {
+            Some(h) if self.hs.is_initiator() => {
+                let e: &[u8; 32] = msg.get(..32).and_then(|e| e.try_into().ok()).ok_or(ErrorCode::CryptoFailed)?;
+                if commit(e) == h { Ok(()) } else { Err(ErrorCode::AuthFailed) }
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Writes a handshake message with `payload` (IK message 1).
@@ -86,6 +166,7 @@ impl Handshake {
 
     /// Reads a handshake message and its payload (IK message 1); returns the payload length.
     pub fn read_payload(&mut self, msg: &[u8], payload: &mut [u8]) -> Result<usize, ErrorCode> {
+        self.check_commitment(msg)?;
         self.hs.read_message(msg, payload).map_err(|_| ErrorCode::CryptoFailed)
     }
 
@@ -112,6 +193,7 @@ impl Handshake {
     }
 
     pub fn read(&mut self, msg: &[u8]) -> Result<(), ErrorCode> {
+        self.check_commitment(msg)?;
         let mut payload = [0u8; 0];
         match self.hs.read_message(msg, &mut payload) {
             Ok(0) => Ok(()),
@@ -227,8 +309,8 @@ mod tests {
     fn pair() -> (Transport, Sas, Transport, Sas) {
         let a = Identity::from_seed(&[1; 32]);
         let b = Identity::from_seed(&[2; 32]);
-        let mut i = Handshake::new(&a, &b.peer_id(), true, b"INV", b"ANS").unwrap();
-        let mut r = Handshake::new(&b, &a.peer_id(), false, b"INV", b"ANS").unwrap();
+        let mut i = Handshake::new(&a, &b.peer_id(), true, b"INV", b"ANS", &Commitment::None).unwrap();
+        let mut r = Handshake::new(&b, &a.peer_id(), false, b"INV", b"ANS", &Commitment::None).unwrap();
         let mut m = [0u8; 128];
         let n = i.write(&mut m).unwrap();
         assert_eq!(n, HS_MSG_LEN);
@@ -245,8 +327,8 @@ mod tests {
     fn ik_tor_handshake() {
         let host = Identity::from_seed(&[1; 32]);
         let dialer = Identity::from_seed(&[2; 32]);
-        let mut i = Handshake::ik_initiator(&dialer, &host.peer_id(), b"TOR-INVITE").unwrap();
-        let mut r = Handshake::ik_responder(&host, b"TOR-INVITE").unwrap();
+        let mut i = Handshake::ik_initiator(&dialer, &host.peer_id(), b"TOR-INVITE", &Commitment::None).unwrap();
+        let mut r = Handshake::ik_responder(&host, b"TOR-INVITE", &Commitment::None).unwrap();
         let payload = [7u8; IK_PAYLOAD_LEN];
         let mut m = [0u8; MAX_HS_MSG_LEN];
         let n = i.write_payload(&payload, &mut m).unwrap();
@@ -263,11 +345,11 @@ mod tests {
         assert_eq!(si, sr);
 
         // Wrong prologue (another invite) or a responder with another key: message 1 fails.
-        let mut i = Handshake::ik_initiator(&dialer, &host.peer_id(), b"TOR-INVITE").unwrap();
+        let mut i = Handshake::ik_initiator(&dialer, &host.peer_id(), b"TOR-INVITE", &Commitment::None).unwrap();
         let n = i.write_payload(&payload, &mut m).unwrap();
-        assert!(Handshake::ik_responder(&host, b"OTHER").unwrap().read_payload(&m[..n], &mut got).is_err());
+        assert!(Handshake::ik_responder(&host, b"OTHER", &Commitment::None).unwrap().read_payload(&m[..n], &mut got).is_err());
         let other = Identity::from_seed(&[3; 32]);
-        assert!(Handshake::ik_responder(&other, b"TOR-INVITE").unwrap().read_payload(&m[..n], &mut got).is_err());
+        assert!(Handshake::ik_responder(&other, b"TOR-INVITE", &Commitment::None).unwrap().read_payload(&m[..n], &mut got).is_err());
         assert_ne!(host.onion_pk(), host.sign_pk(), "separate onion key");
         assert_eq!(host.onion_pk(), Identity::from_seed(&[1; 32]).onion_pk(), "stable");
     }
@@ -311,10 +393,40 @@ mod tests {
         // Different prologue (tampered code) → handshake fails.
         let a = Identity::from_seed(&[1; 32]);
         let b = Identity::from_seed(&[2; 32]);
-        let mut i = Handshake::new(&a, &b.peer_id(), true, b"INV", b"ANS").unwrap();
-        let mut r = Handshake::new(&b, &a.peer_id(), false, b"INV", b"ANX").unwrap();
+        let mut i = Handshake::new(&a, &b.peer_id(), true, b"INV", b"ANS", &Commitment::None).unwrap();
+        let mut r = Handshake::new(&b, &a.peer_id(), false, b"INV", b"ANX", &Commitment::None).unwrap();
         let mut m = [0u8; 128];
         let n = i.write(&mut m).unwrap();
         assert!(r.read(&m[..n]).is_err());
+    }
+
+    /// F-01: the initiator accepts message 2 only with the ephemeral key the responder's code
+    /// committed to; a responder that picks another key (the grinding attack) is refused.
+    #[test]
+    fn responder_ephemeral_is_committed() {
+        let (a, b) = (Identity::from_seed(&[1; 32]), Identity::from_seed(&[2; 32]));
+        let e = Ephemeral::random();
+        let run = |mine: Ephemeral, theirs: [u8; COMMIT_LEN]| {
+            let mut i = Handshake::new(&a, &b.peer_id(), true, b"INV", b"ANS", &Commitment::Theirs(theirs)).unwrap();
+            let mut r = Handshake::new(&b, &a.peer_id(), false, b"INV", b"ANS", &Commitment::Mine(mine)).unwrap();
+            let mut m = [0u8; 128];
+            let n = i.write(&mut m).unwrap();
+            r.read(&m[..n]).unwrap();
+            let n = r.write(&mut m).unwrap();
+            i.read(&m[..n])
+        };
+        assert_eq!(run(e.clone(), e.commit()), Ok(()));
+        assert_eq!(run(Ephemeral::random(), e.commit()), Err(ErrorCode::AuthFailed));
+
+        // Tor mode: the host commits in its invite.
+        let host_e = Ephemeral::random();
+        let mut i = Handshake::ik_initiator(&a, &b.peer_id(), b"TOR", &Commitment::Theirs(host_e.commit())).unwrap();
+        let mut r = Handshake::ik_responder(&b, b"TOR", &Commitment::Mine(host_e)).unwrap();
+        let mut m = [0u8; MAX_HS_MSG_LEN];
+        let mut p = [0u8; IK_PAYLOAD_LEN];
+        let n = i.write_payload(&[7; IK_PAYLOAD_LEN], &mut m).unwrap();
+        r.read_payload(&m[..n], &mut p).unwrap();
+        let n = r.write(&mut m).unwrap();
+        assert!(i.read(&m[..n]).is_ok() && i.is_finished());
     }
 }

@@ -143,7 +143,7 @@ pub(crate) fn invite(inner: &Shared, ttl_s: u32) -> Result<(), ErrorCode> {
 /// The TOR_INVITE of hosting link `id`: to the UI (CODE 5), or sealed to a room member through
 /// the owner (§14.4). Nothing else to start: the peer dials us.
 pub(crate) fn offer(inner: &Shared, id: u32) {
-    // Copy of the 104-byte code out of the session (setup path): sending it borrows the tab.
+    // Copy of the 120-byte code out of the session (setup path): sending it borrows the tab.
     let mut code = [0u8; TOR_CODE_LEN];
     let (i, via_owner) = {
         let mut g = inner.borrow_mut();

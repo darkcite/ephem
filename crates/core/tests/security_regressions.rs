@@ -5,10 +5,10 @@
 
 use ephem_core::session::{Event, Privacy, Session, Settings, State};
 use ephem_crypto::Identity;
-use ephem_crypto::noise::{Handshake, Transport};
+use ephem_crypto::noise::{Commitment, Ephemeral, Handshake, Transport};
 use ephem_proto::buf::Buf;
 use ephem_proto::candidate::CandidateBin;
-use ephem_proto::code::{Code, Cred, IceParams, Kind, MAX_CODE_LEN};
+use ephem_proto::code::{COMMIT_LEN, Code, Cred, IceParams, Kind, MAX_CODE_LEN};
 use ephem_proto::frame::{FrameType, HEADER_LEN, Header, MAX_FRAME, rtype, write_record};
 use ephem_proto::sdp::MAX_SDP_LEN;
 
@@ -33,7 +33,7 @@ fn remote_candidates_follow_the_privacy_mode() {
     let victim = Identity::from_seed(&[1; 32]);
     let cands = [("198.51.100.7", "40000", "srflx"), ("2001:db8::7", "40001", "srflx"), ("203.0.113.5", "40002", "host"), ("192.168.1.20", "40003", "host"), ("fd00::20", "40004", "host")];
     let inv = Code {
-        kind: Kind::Invite, flags: 0, invite_id: [1; 16], room_id: [2; 16], static_pk: attacker.peer_id().0, onion_pk: [0; 32],
+        kind: Kind::Invite, flags: 0, invite_id: [1; 16], room_id: [2; 16], static_pk: attacker.peer_id().0, onion_pk: [0; 32], commit: [0; COMMIT_LEN],
         expires_at: NOW_S + 300,
         ice: ice(&cands),
     };
@@ -63,6 +63,14 @@ struct Rig {
 }
 
 fn rig(transfer: bool) -> Rig {
+    let e = Ephemeral::random();
+    let c = e.commit();
+    try_rig(transfer, e, c).unwrap()
+}
+
+/// Alice runs a real Session; Bob answers by hand with ephemeral key `e` and the commitment `c`
+/// in his answer code. `None`: Alice refused the handshake.
+fn try_rig(transfer: bool, e: Ephemeral, c: [u8; COMMIT_LEN]) -> Option<Rig> {
     let a = Identity::from_seed(&[1; 32]);
     let b = Identity::from_seed(&[2; 32]);
     let mut alice = if transfer {
@@ -71,23 +79,25 @@ fn rig(transfer: bool) -> Rig {
         Session::offerer(&a, [3; 16], [4; 16], NOW_S + 300, Privacy::Default, false, Settings::default())
     };
     let invite = alice.build_code(&a, ALICE_SDP).unwrap().to_vec();
-    let ans = Code { kind: Kind::Answer, flags: 0, invite_id: [3; 16], room_id: [0; 16], static_pk: b.peer_id().0, onion_pk: [0; 32], expires_at: 0, ice: ice(&[("198.51.100.9", "4000", "srflx")]) };
+    let ans = Code { kind: Kind::Answer, flags: 0, invite_id: [3; 16], room_id: [0; 16], static_pk: b.peer_id().0, onion_pk: [0; 32], commit: c, expires_at: 0, ice: ice(&[("198.51.100.9", "4000", "srflx")]) };
     let mut abuf = [0u8; MAX_CODE_LEN];
     let an = ans.encode(&mut abuf).unwrap();
     alice.apply_answer(&a, &abuf[..an], NOW_S, false).unwrap();
     let mut out: Vec<Vec<u8>> = Vec::new();
-    alice.on_open(NOW_MS, &mut |e| if let Event::Send(f) = e { out.push(f.to_vec()) });
+    alice.on_open(NOW_MS, &mut |ev| if let Event::Send(f) = ev { out.push(f.to_vec()) });
     let m1 = out.pop().unwrap();
-    let mut hs = Handshake::new(&b, &a.peer_id(), false, &invite, &abuf[..an]).unwrap();
+    let mut hs = Handshake::new(&b, &a.peer_id(), false, &invite, &abuf[..an], &Commitment::Mine(e)).unwrap();
     hs.read(&m1[HEADER_LEN..]).unwrap();
     let mut m2 = [0u8; 128];
     Header { ftype: FrameType::Handshake, flags: 0, seq: 1 }.write(&mut m2).unwrap();
     let n = hs.write(&mut m2[HEADER_LEN..]).unwrap();
     let mut f = m2[..HEADER_LEN + n].to_vec();
     alice.on_frame(NOW_MS, &mut f, &mut |_| {});
-    assert_eq!(alice.state(), State::Connected);
+    if alice.state() != State::Connected {
+        return None;
+    }
     let (bob_tx, _) = hs.finish().unwrap();
-    Rig { alice, bob_tx, out: Vec::new(), events: Vec::new() }
+    Some(Rig { alice, bob_tx, out: Vec::new(), events: Vec::new() })
 }
 
 impl Rig {
@@ -126,4 +136,13 @@ fn hello_nick_with_row_separators_is_refused() {
         assert!(!r.events.iter().any(|e| e.starts_with("hello")), "{:?}", r.events);
         assert_ne!(r.alice.state(), State::Connected);
     }
+}
+
+/// F-01: an answerer that sends message 2 with an ephemeral key other than the one its answer
+/// committed to (what a man in the middle grinding for matching safety codes must do) is refused.
+#[test]
+fn uncommitted_ephemeral_is_refused() {
+    let committed = Ephemeral::random();
+    assert!(try_rig(false, Ephemeral::random(), committed.commit()).is_none(), "another key than the committed one");
+    assert!(try_rig(false, committed.clone(), committed.commit()).is_some(), "the committed key");
 }

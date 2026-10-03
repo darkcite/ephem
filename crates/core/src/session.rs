@@ -12,7 +12,8 @@
 
 use crate::messages::{MsgRef, Pending, TTL_CHOICES, Timers};
 use crate::room::{MAX_MEMBERS, RoomRole};
-use ephem_crypto::noise::{HS_MSG_LEN, Handshake, IK_PAYLOAD_LEN, MAX_HS_MSG_LEN, Transport};
+use ephem_crypto::noise::{Commitment, Ephemeral, HS_MSG_LEN, Handshake, IK_PAYLOAD_LEN, MAX_HS_MSG_LEN, Transport};
+use ephem_proto::code::COMMIT_LEN;
 use ephem_crypto::sas::Sas;
 use ephem_crypto::{Identity, PeerId};
 use ephem_proto::ErrorCode;
@@ -260,6 +261,11 @@ pub struct Session {
     answer: [u8; MAX_CODE_LEN],
     answer_len: u16,
     hs: Option<Handshake>,
+    /// Responder of the next handshake (answerer, Tor host before its first connection): the
+    /// ephemeral key our code committed to (F-01, §10.4).
+    my_e: Option<Ephemeral>,
+    /// Initiator: the responder's commitment from its code (answer, Tor invite).
+    their_commit: Option<[u8; COMMIT_LEN]>,
     tr: Option<Transport>,
     tx: [u8; MAX_FRAME],
     // ---- chat ----
@@ -357,6 +363,8 @@ impl Session {
             answer: [0; MAX_CODE_LEN],
             answer_len: 0,
             hs: None,
+            my_e: None,
+            their_commit: None,
             tr: None,
             tx: [0; MAX_FRAME],
             local: id.peer_id(),
@@ -606,6 +614,7 @@ impl Session {
         s.room_id = room_id;
         s.expires_at = expires_at;
         s.state = State::AwaitingAnswer;
+        s.my_e = Some(Ephemeral::random());
         s.encode_tor_invite();
         s
     }
@@ -656,6 +665,7 @@ impl Session {
             room_id: self.room_id,
             static_pk: self.local.0,
             onion_pk: self.onion_pk,
+            commit: self.my_e.as_ref().map_or([0; COMMIT_LEN], Ephemeral::commit),
             expires_at: self.expires_at,
             ice: IceParams::EMPTY,
         };
@@ -682,6 +692,7 @@ impl Session {
         s.expires_at = c.expires_at;
         s.code_flags = c.flags;
         s.scanned = scanned;
+        s.their_commit = Some(c.commit);
         s.invite[..invite.len()].copy_from_slice(invite);
         s.invite_len = invite.len() as u16;
         s.state = State::Gathering;
@@ -719,7 +730,13 @@ impl Session {
             return Err(ErrorCode::NotPermitted);
         }
         self.drop_path();
-        self.hs = Some(Handshake::ik_initiator(id, &self.remote, &self.invite[..self.invite_len as usize])?);
+        // The invite's commitment binds the host's first connection only; a later redial (the
+        // peer is pinned by then) uses a fresh host key, see `tor_accept`.
+        let c = match self.their_commit {
+            Some(h) if !self.ever_connected => Commitment::Theirs(h),
+            _ => Commitment::None,
+        };
+        self.hs = Some(Handshake::ik_initiator(id, &self.remote, &self.invite[..self.invite_len as usize], &c)?);
         self.state = State::Connecting;
         Ok(())
     }
@@ -740,7 +757,14 @@ impl Session {
         if h.ftype != FrameType::Handshake {
             return Ok(false);
         }
-        let mut hs = Handshake::ik_responder(id, &self.invite[..self.invite_len as usize])?;
+        // First connection: the key the invite committed to. It serves one handshake: once
+        // connected the peer is pinned, and a redial gets a fresh key (reusing the committed one
+        // would let a dialer that saw it try its own keys offline, F-01).
+        let c = match &self.my_e {
+            Some(e) if !self.ever_connected => Commitment::Mine(e.clone()),
+            _ => Commitment::None,
+        };
+        let mut hs = Handshake::ik_responder(id, &self.invite[..self.invite_len as usize], &c)?;
         let mut payload = [0u8; IK_PAYLOAD_LEN];
         match hs.read_payload(&frame[HEADER_LEN..], &mut payload) {
             Ok(IK_PAYLOAD_LEN) => {}
@@ -820,6 +844,8 @@ impl Session {
             (true, true) => Kind::ResumeInvite,
             (false, true) => Kind::ResumeAnswer,
         };
+        // The answer commits to the ephemeral key of our Noise message 2 (F-01).
+        self.my_e = if invite { None } else { Some(Ephemeral::random()) };
         let code = Code {
             kind,
             flags: if invite { self.code_flags } else { 0 },
@@ -827,6 +853,7 @@ impl Session {
             room_id: if invite { self.room_id } else { [0; 16] },
             static_pk: self.local.0,
             onion_pk: [0; 32],
+            commit: self.my_e.as_ref().map_or([0; COMMIT_LEN], Ephemeral::commit),
             expires_at: if invite { self.expires_at } else { 0 },
             ice,
         };
@@ -867,6 +894,7 @@ impl Session {
         }
         self.remote = PeerId(c.static_pk);
         self.remote_ice = self.privacy.filter_remote(&c.ice, self.drop_ipv6);
+        self.their_commit = Some(c.commit);
         self.answer[..answer.len()].copy_from_slice(answer);
         self.answer_len = answer.len() as u16;
         if !self.ever_connected {
@@ -876,12 +904,18 @@ impl Session {
     }
 
     fn arm_handshake(&mut self, id: &Identity) -> Result<(), ErrorCode> {
+        // Each code serves one handshake, so the committed key is used once.
+        let c = match self.role {
+            Role::Offerer => Commitment::Theirs(self.their_commit.take().ok_or(ErrorCode::CryptoFailed)?),
+            Role::Answerer => Commitment::Mine(self.my_e.take().ok_or(ErrorCode::CryptoFailed)?),
+        };
         let hs = Handshake::new(
             id,
             &self.remote,
             self.role == Role::Offerer,
             &self.invite[..self.invite_len as usize],
             &self.answer[..self.answer_len as usize],
+            &c,
         )?;
         self.hs = Some(hs);
         self.state = State::Connecting;
