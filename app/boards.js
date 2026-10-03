@@ -110,6 +110,7 @@ export async function solve(params, onProgress) {
         w.onerror = (e) => reject(new Error(e.message || 'proof-of-work worker failed'));
         w.onmessage = (e) => {
           if (e.data.solution) resolve(e.data);
+          else if (e.data.error) reject(new Error(`proof of work: ${e.data.error}`));
           else onProgress?.((attempts += 4));
         };
         const start = crypto.getRandomValues(new Uint8Array(16));
