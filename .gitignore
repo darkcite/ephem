@@ -4,3 +4,5 @@
 __pycache__/
 /checks/spikes/*/target/
 /checks/spikes/*/pkg/
+# Served by GitHub Pages for the phone timing spike (B-P1b): the 55 KB Equi-X wasm.
+!/checks/spikes/equix_bench/pkg/

@@ -1,0 +1,20 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- Copyright 2026 Anton (darkcite) -->
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; style-src 'unsafe-inline'">
+<title>Ephem · PoW timing (B-P1b)</title>
+<style>
+  body { font: 16px/1.45 system-ui, sans-serif; background: #0f1216; color: #e6e9ee; margin: 0; padding: 16px; max-width: 640px; }
+  h1 { font-size: 20px; } button { font: inherit; padding: 12px 18px; border-radius: 10px; border: 1px solid #4b78c8; background: #2b4f8f; color: #fff; }
+  pre { white-space: pre-wrap; background: #171b21; padding: 12px; border-radius: 8px; font-size: 13px; }
+  .note { color: #9aa3ad; font-size: 14px; }
+</style>
+<h1>Proof-of-work timing (spike B-P1b)</h1>
+<p class="note">Measures how fast this device solves the boards' proof of work (Equi-X, in wasm, the same code the app will run). Takes about 40 s. Keep the screen on and this tab in front; plug the phone in if you can. Nothing is sent anywhere: copy the result and send it to whoever asked.</p>
+<button id="run">Run the test</button> <button id="copy" hidden>Copy the result</button>
+<pre id="out">Not run yet.</pre>
+<script type="module" src="phone.js"></script>
+</html>
