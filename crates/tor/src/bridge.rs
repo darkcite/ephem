@@ -33,6 +33,11 @@ pub const DEFAULT_ICE: [&str; 9] = [
     "stun:stun.voys.nl:3478",
 ];
 
+/// The brokers used when a line names none (`url=`): the Tor Project's, as Tor Browser uses
+/// them, directly and through its CDN (reachable where the broker's name is blocked). The Tor
+/// Project hands out Snowflake lines without a broker because its apps carry these built in.
+pub const DEFAULT_BROKERS: [&str; 2] = ["https://snowflake-broker.torproject.net/", "https://1098762253.rsc.cdn77.org/"];
+
 /// Why a line is not used, or what in it is ignored.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Problem {
@@ -45,10 +50,9 @@ pub enum Problem {
     NoFingerprint,
     BadFingerprint,
     FingerprintMismatch,
-    NoBroker,
     BadBroker,
-    AmpCacheOnly,
     // Notes: the line is used, this option is not.
+    DefaultBroker,
     FrontIgnored,
     UtlsIgnored,
     AmpCacheIgnored,
@@ -61,7 +65,7 @@ pub enum Problem {
 
 impl Problem {
     pub fn is_error(self) -> bool {
-        (self as u8) <= (Problem::AmpCacheOnly as u8)
+        (self as u8) <= (Problem::BadBroker as u8)
     }
 
     pub fn reason(self) -> &'static str {
@@ -74,9 +78,8 @@ impl Problem {
             Problem::NoFingerprint => "no bridge fingerprint",
             Problem::BadFingerprint => "the fingerprint must be 40 hexadecimal characters",
             Problem::FingerprintMismatch => "the line has two different fingerprints",
-            Problem::NoBroker => "no broker: the line needs url=https://…",
             Problem::BadBroker => "the broker (url=) must be an https:// address",
-            Problem::AmpCacheOnly => "AMP cache rendezvous is not supported yet; add a url= broker",
+            Problem::DefaultBroker => "no broker (url=): the Tor Project's Snowflake brokers are used, as in Tor Browser",
             Problem::FrontIgnored => "domain fronting (front=/fronts=) is ignored: browsers cannot do it; the url= address is used as is",
             Problem::UtlsIgnored => "utls options are ignored: the browser's own TLS is used",
             Problem::AmpCacheIgnored => "ampcache= is ignored (not supported yet)",
@@ -212,12 +215,12 @@ fn parse_line(line: &str, n: u32, out: &mut Bridges) -> Result<(), Problem> {
         }
     }
     let fp = fp.ok_or(Problem::NoFingerprint)?;
-    let url = match url {
-        Some(u) if broker(u) => u,
+    let brokers: &[&str] = match url {
+        Some(u) if broker(u) => &[u],
         Some(_) => return Err(Problem::BadBroker),
-        None if amp => return Err(Problem::AmpCacheOnly),
-        None => return Err(Problem::NoBroker),
+        None => &DEFAULT_BROKERS,
     };
+    let default_broker = url.is_none();
     let default_stun = stuns.is_empty();
     if default_stun {
         stuns.extend_from_slice(&DEFAULT_ICE);
@@ -230,11 +233,13 @@ fn parse_line(line: &str, n: u32, out: &mut Bridges) -> Result<(), Problem> {
             out.problems.push((n, Problem::TooManyBridges));
         }
     }
-    push_unique(&mut out.brokers, url);
+    for b in brokers {
+        push_unique(&mut out.brokers, b);
+    }
     for s in stuns {
         push_unique(&mut out.ice, s);
     }
-    let flagged = [(notes[0], Problem::FrontIgnored), (notes[1], Problem::UtlsIgnored), (amp, Problem::AmpCacheIgnored), (turn, Problem::TurnIgnored), (bad_stun, Problem::BadStunIgnored), (default_stun, Problem::DefaultStun), (notes[2], Problem::UnknownOption)];
+    let flagged = [(default_broker, Problem::DefaultBroker), (notes[0], Problem::FrontIgnored), (notes[1], Problem::UtlsIgnored), (amp, Problem::AmpCacheIgnored), (turn, Problem::TurnIgnored), (bad_stun, Problem::BadStunIgnored), (default_stun, Problem::DefaultStun), (notes[2], Problem::UnknownOption)];
     for (on, p) in flagged {
         if on {
             out.problems.push((n, p));
@@ -271,7 +276,6 @@ meek_lite 192.0.2.20:80 url=https://meek.example/ front=ajax.example
 conjure 143.110.214.222:80 url=https://registration.refraction.network/api
 # a comment
 
-snowflake 192.0.2.3:80 0123456789ABCDEF0123456789ABCDEF01234567 ampcache=https://cdn.ampproject.org/ ice=stun:s.example:3478
 snowflake 192.0.2.3:80 0123 url=https://b.example/ ice=stun:s.example:3478
 snowflake 192.0.2.3:80 url=https://b.example/ ice=stun:s.example:3478
 snowflake 192.0.2.3:80 0123456789ABCDEF0123456789ABCDEF01234567 url=http://b.example/ ice=stun:s.example:3478
@@ -284,11 +288,10 @@ snowflake 192.0.2.3:80 0123456789ABCDEF0123456789ABCDEF01234567 fingerprint=1123
             (3, Problem::Meek),
             (4, Problem::PlainBridge),
             (5, Problem::OtherTransport),
-            (8, Problem::AmpCacheOnly),
-            (9, Problem::BadFingerprint),
-            (10, Problem::NoFingerprint),
-            (11, Problem::BadBroker),
-            (12, Problem::FingerprintMismatch),
+            (8, Problem::BadFingerprint),
+            (9, Problem::NoFingerprint),
+            (10, Problem::BadBroker),
+            (11, Problem::FingerprintMismatch),
         ];
         assert_eq!(b.problems, want);
         assert!(want.iter().all(|(_, p)| p.is_error() && !p.reason().is_empty()));
@@ -333,5 +336,20 @@ snowflake 192.0.2.3:80 0123456789ABCDEF0123456789ABCDEF01234567 fingerprint=1123
         }
         assert!(!broker("https://") && !broker("https://u@h/") && broker("https://h/") && broker("http://localhost:1/"));
         assert!(stun("stun:h:1") && !stun("stun:h") && !stun("stun::1") && !stun("stun:h:0"));
+    }
+
+    #[test]
+    fn a_line_without_a_broker_uses_the_tor_projects() {
+        // As bridges.torproject.org and Tor Browser's settings show Snowflake: the placeholder
+        // address and the fingerprint only (their apps carry the broker built in).
+        let b = parse("snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72\nsnowflake 192.0.2.4:80 8838024498816A039FCBBAB14E6F40A0843051FA ampcache=https://cdn.ampproject.org/");
+        assert!(b.usable());
+        assert_eq!(b.brokers, DEFAULT_BROKERS.to_vec());
+        assert_eq!(b.fingerprints.len(), 2);
+        assert!(b.problems.contains(&(1, Problem::DefaultBroker)) && b.problems.contains(&(2, Problem::AmpCacheIgnored)));
+        assert!(!Problem::DefaultBroker.is_error());
+        // A broker given is used as is, and alone.
+        let b = parse("snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://b.example/");
+        assert_eq!(b.brokers, vec!["https://b.example/"]);
     }
 }
