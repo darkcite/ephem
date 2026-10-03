@@ -7,7 +7,12 @@
 //
 // Boards live in the existing tabs, marked ▦ (R5): followed boards in Following (entries with
 // `k: 'board'` in the channels' follow list), owned boards in My channels, hosted from this tab
-// (R6). Links: `tor.html#B=<name>&o=<onion>[&m=<mirror>,…]`.
+// (R6). Links: `tor.html#B=<name>&o=<onion>[&m=<mirror>,…]`; the onions are only where to read
+// first: posts go to the onion the board key signed (`host`, BF-1).
+//
+// Kept (BF-4, BF-5): the boards mirrored and published to IPFS in the key file (section 0x07; RAM
+// for a temporary identity), mirror onion keys derived from the identity, the last catalogs of up
+// to 8 boards in this tab's sessionStorage (32 KiB each). Nothing of boards in localStorage.
 import * as channels from './channels.js';
 import { avatar } from './ui.js';
 
@@ -16,6 +21,13 @@ const $meta = (n) => document.querySelector(`meta[name="${n}"]`)?.content;
 const MAX_BOARDS = 4;
 const UNDO_MS = 5_000;               // the host's undo window (crates/board host::UNDO_MS)
 const REFRESH_MS = 30_000;           // an open board on screen (G.11.1)
+const READ_ONIONS = 9;               // addresses a read tries (Rust keeps 1 + 8 mirrors)
+// The most work a reply box solves (BF-2): the adaptive ×64 of the default base efforts
+// (crates/board pipeline::Efforts::DEFAULT). A board asking more is refused, not obeyed.
+const MAX_EFFORT = { reply: 700 * 64, thread: 5600 * 64 };
+const TLV_BOARDS = 0x07;             // key-file section: { m: [{ n, o }], i: [name] }
+const VIEW_BYTES = 32 * 1024;        // one cached catalog (sessionStorage)
+const VIEW_BOARDS = 8;
 let ctx = null;
 let boards = null;                   // BoardApp
 let starting = null;                 // Promise of boards (direct mode: loads the Tor part)
@@ -27,9 +39,13 @@ const names = new Map();             // hosted index → board name (the store's
 let owned = [];                      // [{ i, name, title, onion }]
 let current = null;                  // on screen: { read, onions, thread } | { own, thread }
 const views = new Map();             // board name → last verified view (shown at once, B-UX-3)
-let box = null;                      // the reply box's pre-solve: { key, promise }
+let box = null;                      // the reply box's pre-solve: { key, promise, stop }
 let refreshTimer = 0;
 let ownTimer = 0;
+let ownHover = false;                // the pointer is over the owner view: no re-render under it
+let ramPrefs = { m: [], i: [] };     // a temporary identity's mirrors and IPFS opt-ins
+const ramSeeds = new Map();          // board name → mirror seed (temporary identity, this tab)
+const tripWarned = new Set();        // boards where the trip warning was accepted (this tab)
 
 export function init(c) {
   ctx = c;
@@ -46,6 +62,10 @@ export function init(c) {
   if (ctx.TOR && ctx.ch) adopt(new ctx.mod.BoardApp(ctx.ch));
   if (ctx.TOR) channels.torIsUp().then(resumeMirrors);
   setInterval(publishIpfs, 60_000);
+  // Earlier versions kept board data in localStorage (catalogs, mirror keys, lists): gone.
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith('ephem-board-')) localStorage.removeItem(k);
+  } catch { /* storage blocked */ }
 }
 
 function adopt(b) {
@@ -74,7 +94,9 @@ async function net() {
 }
 
 const signedIn = () => !!ctx.app.identity_label();
-const short = (n) => `${n.slice(0, 12)}…`;
+// Every board name starts `k51qzi5uqu5d`: its end tells boards apart (BF-7).
+const short = (n) => `…${n.slice(-8)}`;
+const named = (title, n) => (title ? `${title} · ${short(n)}` : short(n));
 
 // ---- links ----------------------------------------------------------------------------------
 
@@ -95,19 +117,36 @@ export async function openLink(text) {
 
 // ---- the block store ------------------------------------------------------------------------
 
-function storeCall(msg, transfer = []) {
-  if (!store) {
-    store = new Worker(new URL('./store-worker.js', import.meta.url));
-    store.onmessage = (e) => {
+/** A Worker's script, fetched with the SHA-384 this build pinned and started from a blob: URL:
+ *  it then runs under the page's CSP (BF-6). No pin, no Worker. */
+const workerUrls = new Map();
+function workerUrl(file, meta) {
+  if (!workerUrls.has(file)) {
+    workerUrls.set(file, (async () => {
+      const integrity = $meta(meta);
+      if (!integrity) throw new Error(`${file}: this build carries no integrity for it`);
+      const res = await fetch(new URL(`./${file}`, import.meta.url), { integrity });
+      return URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: 'text/javascript' }));
+    })());
+  }
+  return workerUrls.get(file);
+}
+
+async function storeCall(msg, transfer = []) {
+  store ||= workerUrl('store-worker.js', 'ephem-store-worker').then((url) => {
+    const w = new Worker(url);
+    w.onmessage = (e) => {
       const r = storeWaiting.get(e.data.id);
       storeWaiting.delete(e.data.id);
       r?.(e.data);
     };
-  }
+    return w;
+  });
+  const w = await store;
   const id = ++storeSeq;
   return new Promise((resolve, reject) => {
     storeWaiting.set(id, (d) => (d.error ? reject(new Error(d.error)) : resolve(d)));
-    store.postMessage({ id, ...msg }, transfer);
+    w.postMessage({ id, ...msg }, transfer);
   });
 }
 
@@ -235,7 +274,8 @@ async function takeOver(i) {
   $('b-ba-host').disabled = true;
   try {
     const b = await net();
-    await b.take_over(i, (o.entry?.mirrors || []).join(','), numberFloor(o.entry));
+    // Nothing older than the vault names, its root preferred (BW-2).
+    await b.take_over(i, (o.entry?.mirrors || []).join(','), numberFloor(o.entry), o.entry?.seq || 0, o.entry?.root || '');
     o.name = b.name(i);
     names.set(i, o.name);
     await persist(i);
@@ -285,7 +325,7 @@ function standDown(i, why) {
 
 function showAway(o) {
   ctx.showPane('v-board-away');
-  $('ba-title').textContent = `▦ ${o.title || short(o.name)}`;
+  $('ba-title').textContent = `▦ ${named(o.title, o.name)}`;
   const e = o.entry;
   $('ba-state').textContent = o.why || (e && e.until * 1000 > Date.now()
     ? `Your other device hosts this board (its lease runs until at least ${new Date(e.until * 1000).toLocaleTimeString()}; it renews it while it runs).`
@@ -320,7 +360,7 @@ function renderOwned() {
   const ul = $('board-owns');
   ul.replaceChildren();
   for (const o of owned) {
-    const li = row(o.title || short(o.name), o.onion ? 'online' : o.away ? 'hosted on your other device' : 'stored here: tap to host', current?.own === o.i);
+    const li = row(named(o.title, o.name), o.onion ? 'online' : o.away ? 'hosted on your other device' : 'stored here: tap to host', current?.own === o.i);
     li.className += o.onion ? ' ok' : '';
     li.onclick = () => { ctx.setTab('own'); showOwn(o.i); };
     ul.append(li);
@@ -394,8 +434,9 @@ async function showOwn(i, thread = 0) {
   scheduleRenew();
   // The onion's reachability and the counters change without a publish.
   clearInterval(ownTimer);
+  // Never under the pointer (BF-9: a button must not move between aiming and clicking).
   ownTimer = setInterval(() => {
-    if (current?.own === i && !$('v-board-own').hidden && !document.activeElement?.closest?.('#v-board-own')) renderOwn();
+    if (current?.own === i && !$('v-board-own').hidden && !ownHover && !document.activeElement?.closest?.('#v-board-own')) renderOwn();
   }, 3_000);
 }
 
@@ -408,7 +449,7 @@ function renderOwn() {
   try { v = JSON.parse(boards.owner_view(i, current.thread ? [current.thread] : [])); } catch { return; }
   const o = owned.find((x) => x.i === i);
   if (o) o.title = v.title;
-  $('bo-title').textContent = `▦ ${v.title}`;
+  $('bo-title').textContent = `▦ ${named(v.title, v.name)}`;
   const reach = boards.reach(i);
   const online = { reachable: 'Online through Tor', degraded: 'Online through Tor (degraded)', publishing: 'Publishing its onion…', unreachable: 'Tor is still setting up its onion' }[reach] || 'Offline';
   $('bo-state').textContent = `${online} · ${st.threads} threads · next No. ${st.next_no} · version ${st.seq}`
@@ -450,20 +491,37 @@ function renderOwn() {
   }));
 }
 
+/** Bulk and lasting actions ask first, naming what they touch (BF-9). */
+const sure = (q) => confirm(q);
+
 function ownerActions(i, p, thread) {
   const a = [['Delete', () => del(i, p.no)]];
   if (p.trip) {
-    a.push(['Ban trip', () => act(() => boards.ban(i, p.no, ''))]);
+    a.push(['Ban trip', () => sure(`Ban the trip ${p.trip}? It can post again only after an unban.`) && act(() => boards.ban(i, p.no, ''))]);
     a.push(['Approve trip', () => act(() => boards.approve_trip_of(i, p.no, true))]);
-    a.push(['Delete all of this trip', () => act(() => boards.delete_by_key_of(i, p.no))]);
+    a.push(['Delete all of this trip', () => sure(`Delete every post of the trip ${p.trip}, archived ones included? (5 s to undo)`) && delMany(() => boards.delete_by_key_of(i, p.no))]);
   }
   if (p.no === thread) {
     const row = JSON.parse(boards.owner_view(i, [])).catalog.find((c) => c.no === thread);
     a.push([row?.lk ? 'Unlock' : 'Lock', () => act(() => boards.set_locked(i, thread, !row?.lk))]);
     a.push([row?.st ? 'Unstick' : 'Sticky', () => act(() => boards.set_sticky(i, thread, !row?.st))]);
-    a.push(['Prune', () => act(() => boards.prune(i, thread))]);
+    a.push(['Prune', () => sure(`Move thread No. ${thread} to the archive now?`) && act(() => boards.prune(i, thread))]);
   }
   return a;
+}
+
+/** A mass delete: queued with the undo window, as single deletes. */
+function delMany(f) {
+  let n = 0;
+  act(() => { n = f(); });
+  $('bo-undo-text').textContent = `Deleting ${n} posts…`;
+  $('bo-undo').hidden = false;
+  $('b-bo-undo').onclick = () => {
+    boards.undo(current.own, 0);
+    $('bo-undo').hidden = true;
+  };
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => { $('bo-undo').hidden = true; renderOwn(); }, UNDO_MS + 1_500);
 }
 
 function act(f) {
@@ -504,13 +562,15 @@ function renderFollows() {
   if (!ul) return;
   ul.replaceChildren();
   for (const f of follows()) {
-    const li = row(f.t || short(f.n), f.err ? 'unreachable right now' : f.stale ? 'host offline (stale)' : `${f.up === false ? 'host offline · ' : ''}${f.last || ''}`, current?.read === f.n);
+    const li = row(named(f.t, f.n), f.err ? 'unreachable right now' : f.stale ? 'host offline (stale)' : `${f.up === false ? 'host offline · ' : ''}${f.last || ''}`, current?.read === f.n);
     li.onclick = () => { ctx.setTab('follow'); showBoard(f.n, f.o); };
     ul.append(li);
   }
 }
 
 async function showBoard(name, onions, thread = 0) {
+  // A trip typed for another board does not carry over (BF-8).
+  if (current?.read !== name) $('bd-trip').value = '';
   current = { read: name, onions, thread };
   ctx.showPane('v-board');
   renderFollows();
@@ -533,7 +593,8 @@ async function refresh() {
   if (!c?.read) return;
   const f = follows().find((x) => x.n === c.read);
   const known = views.get(c.read);
-  const onions = [...new Set([...c.onions, ...(f?.o || []), ...(known?.mirrors || [])])];
+  // The signed host and mirrors first, then the link's hints; a read takes 9 (BF-3).
+  const onions = [...new Set([known?.host, ...(known?.mirrors || []), ...(f?.o || []), ...c.onions].filter(Boolean))].slice(0, READ_ONIONS);
   try {
     const b = await net();
     const v = JSON.parse(await b.read(c.read, onions.join(','), f?.s || 0, c.thread ? [c.thread] : []));
@@ -542,7 +603,8 @@ async function refresh() {
     if (f) {
       f.t = v.title;
       f.s = v.sequence;
-      f.o = [...new Set([...f.o, ...v.mirrors])];
+      // What the board signs now, nothing else: the host first (posts and the online notice).
+      f.o = [v.host, ...v.mirrors];
       f.err = false;
       f.stale = v.stale;
       f.last = v.catalog[0] ? (v.catalog[0].sub || v.catalog[0].ex).slice(0, 60) : 'no threads yet';
@@ -558,13 +620,15 @@ async function refresh() {
 
 function renderBoard(v) {
   const c = current;
-  $('bd-title').textContent = `▦ ${v.title}`;
+  $('bd-title').textContent = `▦ ${named(v.title, v.name)}`;
   $('bd-about').textContent = v.about;
   $('bd-rules').textContent = v.rules;
   $('bd-rules-box').hidden = !v.rules;
-  $('bd-source').textContent = v.stale
-    ? `Board not updated since ${new Date(v.updated * 1000).toLocaleString()}; the host is offline. Reading only.`
-    : `Verified through Tor: signed by the board key, version ${v.sequence}, updated ${new Date(v.updated * 1000).toLocaleString()}.`;
+  $('bd-source').textContent = v.cached
+    ? `The last verified copy, read ${new Date(v.cachedAt).toLocaleString()} (not checked again yet).`
+    : v.stale
+      ? `Board not updated since ${new Date(v.updated * 1000).toLocaleString()}; the host is offline. Reading only.`
+      : `Verified through Tor: signed by the board key, version ${v.sequence}, updated ${new Date(v.updated * 1000).toLocaleString()}. Posts go to its own onion, ${v.host}.`;
   $('bd-source').classList.toggle('stale', !!v.stale);
   const followed = follows().some((f) => f.n === v.name);
   $('b-bd-follow').hidden = followed;
@@ -579,7 +643,7 @@ function renderBoard(v) {
     const [n, o] = l.split('@');
     const a = document.createElement('a');
     a.href = `#B=${n}&o=${o}`;
-    a.textContent = `${n.slice(0, 14)}…`;
+    a.textContent = short(n);
     a.onclick = (e) => { e.preventDefault(); showBoard(n, [o]); };
     return [a, ' '];
   })] : []));
@@ -661,7 +725,8 @@ async function follow() {
   const v = views.get(c?.read);
   if (!v) return;
   const list = channels.followList();
-  if (!list.some((f) => f.n === v.name)) list.push({ n: v.name, o: [...new Set([...c.onions, ...v.mirrors])], s: v.sequence, t: v.title, k: 'board' });
+  // The signed host and mirrors, not the link's onions (BF-1, BF-3).
+  if (!list.some((f) => f.n === v.name)) list.push({ n: v.name, o: [v.host, ...v.mirrors], s: v.sequence, t: v.title, k: 'board' });
   await channels.saveFollowList();
   renderBoard(v);
 }
@@ -675,15 +740,12 @@ async function unfollow() {
   if (v) renderBoard(v);
 }
 
-function mirrorSeed(n) {
-  const k = `ephem-board-mirror:${n}`;
-  let s = null;
-  try { s = localStorage.getItem(k); } catch { /* storage blocked */ }
-  if (!s) {
-    s = [...crypto.getRandomValues(new Uint8Array(32))].map((x) => x.toString(16).padStart(2, '0')).join('');
-    try { localStorage.setItem(k, s); } catch { /* the mirror's address changes next visit */ }
-  }
-  return Uint8Array.from(s.match(/../g).map((x) => parseInt(x, 16)));
+/** The mirror's onion key: derived from the identity (the same address on every visit), or
+ *  random for this tab under a temporary identity (BF-5: no key in browser storage). */
+function mirrorSeed(b, n) {
+  if (signedIn()) return b.mirror_seed(n);
+  if (!ramSeeds.has(n)) ramSeeds.set(n, crypto.getRandomValues(new Uint8Array(32)));
+  return ramSeeds.get(n);
 }
 
 async function mirror() {
@@ -694,9 +756,11 @@ async function mirror() {
   note.textContent = 'Starting the mirror…';
   try {
     const b = await net();
-    const onion = await b.mirror(c.read, c.onions.join(','), mirrorSeed(c.read));
-    note.textContent = `Mirroring on ${onion}. It refreshes every 10 s while this tab is open, and starts again when Ephem opens. Send this address to the board's owner to sign it into the board.`;
-    rememberMirror(c.read, c.onions);
+    const v = views.get(c.read);
+    const sources = [...new Set([v?.host, ...(v?.mirrors || []), ...c.onions].filter(Boolean))].slice(0, READ_ONIONS);
+    const onion = await b.mirror(c.read, sources.join(','), mirrorSeed(b, c.read));
+    note.textContent = `Mirroring on ${onion}. It refreshes every 10 s while this tab is open${signedIn() ? ', and starts again when Ephem opens with this identity' : ''}. Send this address to the board's owner to sign it into the board.`;
+    rememberMirror(c.read, sources);
     $('bd-mirror-ipfs-row').hidden = false;
     $('bd-mirror-ipfs').checked = ipfsOn(c.read);
   } catch (e) {
@@ -714,43 +778,70 @@ function sorted(v) {
   return { ...v, catalog };
 }
 
-// ---- kept across visits: the last catalog (B-UX-3), mirrors, the IPFS opt-ins ------------------
+// ---- kept: the last catalogs (B-UX-3, this tab), mirrors and the IPFS opt-ins (key file) -------
 
-const store$ = {
-  get(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked or full */ } },
-};
+const VIEWS = 'ephem-board-views';
 
-/** The last verified catalog of a board (no thread bodies), shown at once on the next visit. */
+/** The last verified catalog of a board, small (BF-4): shown at once when the board opens again
+ *  in this tab, labelled as a copy. At most VIEW_BOARDS boards of VIEW_BYTES each. */
 function cacheView(v) {
-  store$.set(`ephem-board-view:${v.name}`, { ...v, threads: [] });
+  const small = {
+    name: v.name, sequence: v.sequence, updated: v.updated, stale: v.stale, host: v.host, title: v.title,
+    about: v.about.slice(0, 1024), rules: '', mirrors: v.mirrors, see_also: v.see_also, next_no: v.next_no,
+    catalog: v.catalog.slice(0, 60), threads: [], archive: [], modlog: [], cached: true, cachedAt: Date.now(),
+  };
+  const text = JSON.stringify(small);
+  if (text.length > VIEW_BYTES) return;
+  try {
+    const order = JSON.parse(sessionStorage.getItem(VIEWS) || '[]').filter((n) => n !== v.name);
+    order.push(v.name);
+    while (order.length > VIEW_BOARDS) sessionStorage.removeItem(`ephem-board-view:${order.shift()}`);
+    sessionStorage.setItem(`ephem-board-view:${v.name}`, text);
+    sessionStorage.setItem(VIEWS, JSON.stringify(order));
+  } catch { /* storage blocked or full: no copy */ }
 }
+
 function cachedView(name) {
-  const v = store$.get(`ephem-board-view:${name}`);
+  let v = null;
+  try { v = JSON.parse(sessionStorage.getItem(`ephem-board-view:${name}`) || 'null'); } catch { /* none */ }
   if (v) views.set(name, v);
   return v;
 }
 
-function rememberMirror(name, onions) {
-  const list = (store$.get('ephem-board-mirrors') || []).filter((m) => m.n !== name);
-  list.push({ n: name, o: onions });
-  store$.set('ephem-board-mirrors', list.slice(-8));
+/** Mirrors and IPFS opt-ins: the key file's section for a saved identity, RAM otherwise. */
+function prefs() {
+  if (!signedIn()) return ramPrefs;
+  let p = {};
+  try { p = JSON.parse(ctx.app.section(TLV_BOARDS) || '{}'); } catch { /* unreadable: start over */ }
+  return { m: Array.isArray(p.m) ? p.m : [], i: Array.isArray(p.i) ? p.i : [] };
 }
 
-/** Mirrors this browser kept start again once Tor is up. */
+async function savePrefs(p) {
+  if (!signedIn()) return void (ramPrefs = p);
+  if (ctx.app.set_section(TLV_BOARDS, JSON.stringify(p)) === 0) await ctx.persist?.();
+  else ctx.error('Your board settings are too large to save in the key file.');
+}
+
+function rememberMirror(name, onions) {
+  const p = prefs();
+  p.m = p.m.filter((m) => m.n !== name).concat([{ n: name, o: onions }]).slice(-8);
+  savePrefs(p);
+}
+
+/** Mirrors this identity kept start again once Tor is up. */
 async function resumeMirrors() {
-  const list = store$.get('ephem-board-mirrors') || [];
+  const list = prefs().m;
   if (!list.length) return;
   const b = await net();
-  for (const m of list) b.mirror(m.n, m.o.join(','), mirrorSeed(m.n)).catch((e) => console.info('board mirror:', e?.message || e));
+  for (const m of list) b.mirror(m.n, m.o.join(','), mirrorSeed(b, m.n)).catch((e) => console.info('board mirror:', e?.message || e));
 }
 
-const ipfsOn = (name) => !!name && (store$.get('ephem-board-ipfs') || []).includes(name);
+const ipfsOn = (name) => !!name && prefs().i.includes(name);
 function setIpfs(name, on) {
   if (!name) return;
-  const list = (store$.get('ephem-board-ipfs') || []).filter((n) => n !== name);
-  if (on) list.push(name);
-  store$.set('ephem-board-ipfs', list);
+  const p = prefs();
+  p.i = p.i.filter((n) => n !== name).concat(on ? [name] : []);
+  savePrefs(p);
   if (on) publishIpfs();
 }
 
@@ -761,7 +852,7 @@ async function publishIpfs() {
   if (!boards || Date.now() - ipfsAt < 10 * 60_000) return;
   ipfsAt = Date.now();
   const [host, root] = channels.vaultApi.routing();
-  for (const name of store$.get('ephem-board-ipfs') || []) {
+  for (const name of prefs().i) {
     boards.publish_ipfs(name, host, root).catch((e) => console.info('board ipfs:', e?.message || e));
   }
 }
@@ -774,12 +865,18 @@ function setBox() {
   $('bd-sub').hidden = !!t;
   $('bd-trip-row').hidden = !signedIn();
   $('bd-post-state').textContent = '';
-  box = null;
+  dropBox();
   const key = draftKey();
   try { $('bd-body').value = sessionStorage.getItem(key) || ''; } catch { $('bd-body').value = ''; }
 }
 
 const draftKey = () => `ephem-board-draft:${current?.read}:${current?.thread || 0}`;
+
+/** The reply box's solve goes: its Workers stop (BF-2). */
+function dropBox() {
+  box?.job.stop?.();
+  box = null;
+}
 
 /** Starts the proof of work for the reply box now (on focus), so most posts wait for nothing. */
 function presolve() {
@@ -788,27 +885,36 @@ function presolve() {
   const trip = signedIn() ? $('bd-trip').value.trim() : '';
   const key = `${c.read}|${c.thread || 0}|${trip}`;
   if (box?.key === key) return box.promise;
+  dropBox();
   const state = $('bd-post-state');
+  const job = {};
+  const mine = () => box?.job === job;
   const promise = (async () => {
     const b = await net();
-    const onion = c.onions[0];
+    // Posts go to the onion the board key signed, never to a link's (BF-1).
+    if (!views.get(c.read)?.host) await refresh();
+    const onion = views.get(c.read)?.host;
+    if (!onion) throw new Error('E_BOARD_UNREAD: the board has not been read yet');
     const draft = await b.draft(c.read, onion, c.thread || 0, trip);
     const sw = JSON.parse(draft.switches);
     if (draft.paused) throw new Error('E_BOARD_PAUSED: posting is paused on this board');
     if (!c.thread && !draft.threads_open) throw new Error('E_BOARD_PAUSED: new threads are closed on this board');
-    if (sw.trips_only && !trip) state.textContent = 'This board accepts trips only right now.';
+    if (draft.effort_now > (c.thread ? MAX_EFFORT.reply : MAX_EFFORT.thread)) throw new Error(`E_BOARD_POW_TOO_HIGH: the board asks for effort ${draft.effort_now}`);
+    if (sw.trips_only && !trip && mine()) state.textContent = 'This board accepts trips only right now.';
     const t0 = performance.now();
-    const s = await solve(draft.params(), (n) => { state.textContent = `Preparing your post (proof of work, ${n} attempts)…`; });
-    state.textContent = `Ready (${Math.round((performance.now() - t0) / 1000)} s of work).`;
+    const s = await solve(draft.params(), (n) => { if (mine()) state.textContent = `Preparing your post (proof of work at effort ${draft.effort_now}, ${n} attempts)…`; }, job);
+    if (mine()) state.textContent = `Ready (${Math.round((performance.now() - t0) / 1000)} s of work).`;
     return { draft, s, premod: sw.premod };
   })();
-  box = { key, promise };
-  promise.catch(() => { if (box?.promise === promise) box = null; });
+  box = { key, promise, job };
+  promise.catch(() => { if (mine()) box = null; });
   return promise;
 }
 
 const REASONS = {
   E_BOARD_POW: 'The board asked for more work; try again.',
+  E_BOARD_POW_TOO_HIGH: 'The board asks for far more work than any board needs (a phone would solve for hours): not posted.',
+  E_BOARD_UNREAD: 'The board could not be read yet: posts go to the address it signs.',
   E_BOARD_BUSY: 'The board is busy (or a thread was started moments ago); try again in a minute.',
   E_BOARD_REFUSED: 'Refused: the thread is locked or gone, the same text was just posted, or this key is banned.',
   E_BOARD_PAUSED: 'Posting is paused here, or limited to trips.',
@@ -822,11 +928,17 @@ async function submitPost(e) {
   const body = $('bd-body').value;
   const sub = c.thread ? '' : $('bd-sub').value.trim();
   if (!body.trim() && !sub) return;
+  const trip = signedIn() ? $('bd-trip').value.trim() : '';
+  // A trip removes deniability (G.4): said once per board, before its first trip post (BF-8).
+  if (trip && !tripWarned.has(c.read)) {
+    if (!confirm('Post under a trip? Posts under a trip are signed with a key derived from your identity: anyone holding your key file can prove you wrote them. Without a trip every post has a fresh key.')) return;
+    tripWarned.add(c.read);
+  }
   $('b-bd-post').disabled = true;
   try {
     const { draft, s } = await presolve();
     const b = await app();
-    box = null; // one solution, one post
+    box = null; // one solution, one post (its Workers are done)
     const r = JSON.parse(await b.post_draft(draft, sub, body, $('bd-sage').checked, s.n, s.solution));
     state.textContent = r.no ? `Posted as No. ${r.no}.` : 'Held for the owner\'s approval.';
     $('bd-body').value = '';
@@ -855,23 +967,27 @@ async function submitPost(e) {
 
 function module() {
   powModule ||= (async () => {
-    const sri = $meta('ephem-pow-wasm');
-    const res = await fetch(new URL('./pkg/ephem_pow.wasm', import.meta.url), sri ? { integrity: sri } : {});
+    const integrity = $meta('ephem-pow-wasm');
+    if (!integrity) throw new Error('ephem_pow.wasm: this build carries no integrity for it');
+    const res = await fetch(new URL('./pkg/ephem_pow.wasm', import.meta.url), { integrity });
     return WebAssembly.compile(await res.arrayBuffer());
   })();
   return powModule;
 }
 
-/** Solves `params` (Draft.params()) in up to 4 Workers; the first solution wins. */
-export async function solve(params, onProgress) {
+/** Solves `params` (Draft.params()) in up to 4 Workers; the first solution wins. `job.stop()`
+ *  ends it early (its Workers terminate, the promise rejects). */
+export async function solve(params, onProgress, job = {}) {
   const m = await module();
+  const url = await workerUrl('pow-worker.js', 'ephem-pow-worker');
   const n = Math.min(4, Math.max(1, navigator.hardwareConcurrency || 2));
   const workers = [];
   let attempts = 0;
   try {
     return await new Promise((resolve, reject) => {
+      job.stop = () => reject(new Error('stopped'));
       for (let i = 0; i < n; i++) {
-        const w = new Worker(new URL('./pow-worker.js', import.meta.url));
+        const w = new Worker(url);
         workers.push(w);
         w.onerror = (e) => reject(new Error(e.message || 'proof-of-work worker failed'));
         w.onmessage = (e) => {
@@ -884,6 +1000,7 @@ export async function solve(params, onProgress) {
       }
     });
   } finally {
+    job.stop = null;
     for (const w of workers) w.terminate();
   }
 }
@@ -932,8 +1049,10 @@ function wire() {
   $('bd-search').oninput = () => { const v = views.get(current?.read); if (v) renderBoard(v); };
   $('b-bo-from').onclick = () => {
     const no = Number($('bo-from').value);
-    if (no > 0) act(() => boards.delete_from(current.own, no));
+    if (no > 0 && sure(`Delete every post from No. ${no} on? (5 s to undo)`)) delMany(() => boards.delete_from(current.own, no));
   };
+  $('v-board-own').onpointerenter = () => { ownHover = true; };
+  $('v-board-own').onpointerleave = () => { ownHover = false; };
   $('f-bo-thread').onsubmit = (e) => {
     e.preventDefault();
     act(() => boards.post(current.own, 0, $('bo-sub').value, $('bo-body').value, false));
@@ -947,6 +1066,6 @@ function wire() {
   $('b-bd-mirror').onclick = mirror;
   $('bd-body').onfocus = () => { presolve()?.catch((e) => { $('bd-post-state').textContent = REASONS[String(e?.message).match(/E_BOARD_[A-Z]+/)?.[0]] || String(e?.message || e); }); };
   $('bd-body').oninput = () => { try { sessionStorage.setItem(draftKey(), $('bd-body').value); } catch { /* not kept */ } };
-  $('bd-trip').onchange = () => { box = null; };
+  $('bd-trip').onchange = dropBox;
   $('f-bd-post').onsubmit = submitPost;
 }

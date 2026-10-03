@@ -174,7 +174,8 @@ pub fn thread<B: Blocks + ?Sized>(b: &B, name: &str, root: &Cid, seq: u64, serve
     let h = head(b, root)?;
     let row = h.rows.iter().find(|r| r.no == no)?;
     let t = node(b, &row.thread)?;
-    let mut s = String::with_capacity(4096 + row.r as usize * 400);
+    // Never sized from a block field (BC-9): a mirror serves what a hostile owner signed.
+    let mut s = String::with_capacity(16 * 1024);
     open(&mut s, &format!("{} · {}", h.title, if row.sub.is_empty() { format!("No. {no}") } else { row.sub.clone() }));
     s.push_str("<p><a href=\"/\">← ");
     esc(&mut s, &h.title);

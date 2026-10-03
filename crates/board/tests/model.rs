@@ -16,7 +16,7 @@ const NOW: u64 = 1_790_000_000;
 const SEED: [u8; 32] = [4; 32];
 
 fn board() -> Board {
-    Board::new(&SEED, "/test/", "A test board", "Be nice", NOW).unwrap()
+    Board::new(&SEED, &ephem_board::onion::address(&[0xAA; 32]), "/test/", "A test board", "Be nice", NOW).unwrap()
 }
 
 /// A post by a fresh poster key (IDs off: one key per post).
@@ -137,7 +137,7 @@ fn deleting_an_op_removes_its_thread() {
     put(&mut b, t, "r", 2, NOW);
     b.delete(t, del::OWNER, 0, NOW).unwrap();
     assert!(b.threads.is_empty());
-    assert_eq!(b.dels.len(), 2, "the OP and its reply");
+    assert_eq!(b.dels.len(), 1, "the OP only: readers drop a thread whose OP is listed (BC-4)");
 }
 
 #[test]
@@ -197,12 +197,14 @@ fn forgeries_and_misplaced_posts_fail() {
     assert_eq!(b.accept(s, sig, cap::OWNER, NOW), Err(BoardError::Refused));
     // The owner's own capcode post works.
     let s = Signed { b: b.name().to_text(), t, k: b.manifest.pk, n: [5; 16], sub: String::new(), body: "Rules updated".into(), sage: false, e: 1, trip: false };
-    let sig = s.sign(b.signing_key());
+    // BC-3: the board key's plain-post signature is no capcode post.
+    assert_eq!(b.accept(s.clone(), s.sign(b.signing_key()), cap::OWNER, NOW), Err(BoardError::BadSignature));
+    let sig = s.sign_as(b.signing_key(), true);
     b.accept(s, sig, cap::OWNER, NOW).unwrap();
     let (root, blocks, rec) = publish(&mut b, NOW);
     read(&b, &rec, &blocks, &[]);
     // Another key's record for this name fails; a swapped block breaks the chain.
-    let mut other = Board::new(&[5; 32], "/test/", "", "", NOW).unwrap();
+    let mut other = Board::new(&[5; 32], &ephem_board::onion::address(&[0xAA; 32]), "/test/", "", "", NOW).unwrap();
     let (oroot, oblocks) = other.build(NOW);
     let orec = other.record(&oroot, NOW * 1000);
     assert_eq!(verify::verify(b.name(), &orec, &oblocks, NOW * 1000, 0, &[]).err(), Some(BoardError::Record));

@@ -300,7 +300,9 @@ async function saveFollows() {
   // Only what identifies a channel and what was seen; posts are re-read.
   const list = follows.map(({ n, o, s, t, seen, m, k }) => ({ n, o, s, t, seen, m, k }));
   if (ctx.app.identity_label()) {
+    // A refused section (over 64 KiB) is said, not dropped (BF-3: nothing would be saved).
     if (ctx.app.set_section(TLV_FOLLOWS, JSON.stringify(list)) === 0) await ctx.persist();
+    else ctx.error('The list of channels and boards you follow is too large to save in your key file: unfollow some.');
   } else ramFollows = follows;
   renderFollows();
 }

@@ -6,15 +6,22 @@
 //! ```text
 //! IPNS record ──▶ root {v, kind:"board", manifest⁴², cat:[bucket⁴² ×10], threads⁴², archive⁴²,
 //!                       arch_threads⁴², dels⁴², modlog⁴², own⁴², ev: null, next_no, updated}
-//!   bucket i     {t: [{no, thread (ref), bump, r, sub, ex, st, lk}]}   threads with no mod 10 = i
+//!   manifest     {v, kind, title, about, rules, pk, created, host, mirrors, see_also, ids, sig}
+//!   bucket i     {t: [{no, thread (ref), op, bump, r, sub, ex, st, lk}]}   threads with no mod 10 = i
 //!   thread       {no, sub, chunks: [chunk⁴² …] ≤ 8, r, st, lk}
 //!   chunk        {p: [post …] ≤ 64}
 //!   post         {no, ts, s, sig, cap}  or  tombstone {no, ts, del, by}
 //! ```
 //!
 //! Pin links (⁴²) are followed for pinning and garbage collection; refs (CID bytes) are not.
-//! A full chunk keeps its CID until a post in it is deleted, so a reply re-encodes only the
-//! last chunk, its thread, one catalog bucket, the `threads` index and the root.
+//! A full chunk keeps its CID until a post in it is deleted, and a thread that did not change
+//! keeps its last chunk and thread block (BC-8), so a reply re-encodes only the last chunk, its
+//! thread, the catalog buckets, the `threads` index and the root.
+//!
+//! **Deletion (G.5.1, BC-1, BC-3, BC-4):** a deleted post becomes a tombstone and its hash
+//! (`SHA-256(dag-cbor(s))`) goes on the deletion list, live or archived alike; a deleted OP takes
+//! its thread with it and lists only the OP (readers drop a thread whose OP is listed, and the
+//! catalog's `op` lets them blank its subject). A listed post is never accepted again.
 //!
 //! Setup and publish path (§22): it allocates; the per-request path is `crate::pipeline` (BD-2).
 
@@ -26,6 +33,7 @@ use ephem_channel::cbor::{self, Value};
 use ephem_channel::cid::{Cid, DAG_CBOR, RAW};
 use ephem_channel::ipns::{self, Record};
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 
 /// Who deleted a post (`del` of a tombstone).
 pub mod del {
@@ -48,6 +56,8 @@ pub struct Manifest {
     pub rules: String,
     pub pk: [u8; 32],
     pub created: u64,
+    /// The board's own onion, where posts go (BF-1: a link's `o=` is only a hint to read from).
+    pub host: String,
     /// Mirror onions the owner vouches for (`<56 chars>.onion`).
     pub mirrors: Vec<String>,
     /// Other boards the owner recommends (names or links), shown as plain links (G.17, v1).
@@ -83,6 +93,21 @@ impl Entry {
             Entry::Post(p) => p.no,
             Entry::Tomb { no, .. } => *no,
         }
+    }
+
+    /// The entry as stored (no signature check: the owner's own blocks).
+    pub(crate) fn from_value(v: &Value) -> Option<Self> {
+        let no = v.get("no")?.uint()?;
+        let ts = v.get("ts")?.uint()?;
+        if let Some(d) = v.get("del") {
+            return Some(Entry::Tomb { no, ts, del: u8::try_from(d.uint()?).ok()?, by: u8::try_from(v.get("by")?.uint()?).ok()? });
+        }
+        let s = Signed::from_value(v.get("s")?).ok()?;
+        Some(Entry::Post(Post { no, ts, s, sig: v.get("sig")?.bytes()?.try_into().ok()?, cap: u8::try_from(v.get("cap")?.uint()?).ok()? }))
+    }
+
+    fn len(&self) -> u64 {
+        self.to_value().encode().len() as u64
     }
 
     pub(crate) fn to_value(&self) -> Value {
@@ -121,6 +146,12 @@ pub struct Thread {
     pub locked: bool,
     /// Encoded full chunks, in order; dropped from the first one that changed.
     full: Vec<Block>,
+    /// The encoded last chunk (if not full) and thread block; `None` after a change (BC-8).
+    tail: Option<(Option<Block>, Block)>,
+    /// Encoded bytes of the entries (BC-7).
+    bytes: u64,
+    /// The OP's hash (the catalog's `op`).
+    op: [u8; 32],
 }
 
 impl Thread {
@@ -143,46 +174,77 @@ impl Thread {
         }
     }
 
-    fn invalidate_from(&mut self, idx: usize) {
-        self.full.truncate(idx / limits::CHUNK);
+    fn new(no: u64, sub: String, entries: Vec<Entry>, bump: u64, created: u64, sticky: bool, locked: bool) -> Self {
+        let bytes = entries.iter().map(Entry::len).sum();
+        let op = match entries.first() {
+            Some(Entry::Post(p)) => post_hash(&p.s),
+            _ => [0; 32],
+        };
+        Thread { no, sub, entries, bump, created, sticky, locked, full: Vec::new(), tail: None, bytes, op }
     }
 
-    /// The chunk blocks (cached full ones, a fresh last one) and the thread block. Full chunks
-    /// the caller already `held` are not copied out again; every CID goes to `live`.
+    /// Something in the thread changed from entry `idx` on (`entries.len()`: only its flags).
+    fn changed(&mut self, idx: usize) {
+        self.full.truncate(idx / limits::CHUNK);
+        self.tail = None;
+    }
+
+    /// The chunk blocks and the thread block, encoded only when they changed. Blocks the caller
+    /// already `held` are not copied out again; every CID goes to `live`.
     fn blocks(&mut self, out: &mut Vec<Block>, held: &dyn Fn(&Cid) -> bool, live: &mut Vec<Cid>) -> Cid {
         let n_full = self.entries.len() / limits::CHUNK;
         while self.full.len() < n_full {
             let i = self.full.len();
             self.full.push(chunk_block(&self.entries[i * limits::CHUNK..(i + 1) * limits::CHUNK]));
         }
-        let mut links: Vec<Value> = Vec::with_capacity(n_full + 1);
-        for (c, b) in &self.full {
-            links.push(Value::Link(c.clone()));
+        if self.tail.is_none() {
+            let mut links: Vec<Value> = Vec::with_capacity(n_full + 1);
+            links.extend(self.full.iter().map(|(c, _)| Value::Link(c.clone())));
+            let rest = &self.entries[n_full * limits::CHUNK..];
+            let last = (!rest.is_empty()).then(|| chunk_block(rest));
+            if let Some((c, _)) = &last {
+                links.push(Value::Link(c.clone()));
+            }
+            let t = cbor::map(vec![
+                ("no", Value::Uint(self.no)),
+                ("sub", Value::Text(self.sub.clone())),
+                ("chunks", Value::Array(links)),
+                ("r", Value::Uint(self.replies())),
+                ("st", Value::Bool(self.sticky)),
+                ("lk", Value::Bool(self.locked)),
+            ])
+            .encode();
+            self.tail = Some((last, (Cid::of(DAG_CBOR, &t), t)));
+        }
+        let (last, thread) = self.tail.as_ref().expect("encoded above");
+        for (c, b) in self.full.iter().chain(last.iter()).chain(std::iter::once(thread)) {
             live.push(c.clone());
             if !held(c) {
                 out.push((c.clone(), b.clone()));
             }
         }
-        let rest = &self.entries[n_full * limits::CHUNK..];
-        if !rest.is_empty() {
-            let b = chunk_block(rest);
-            links.push(Value::Link(b.0.clone()));
-            live.push(b.0.clone());
-            out.push(b);
+        thread.0.clone()
+    }
+
+    /// Tombstones the posts of `want` here; their hashes and numbers go to `hashes`, `done`.
+    fn tomb(&mut self, want: &HashSet<u64>, del: u8, by: u8, hashes: &mut Vec<[u8; 32]>, done: &mut Vec<u64>) {
+        let mut first = None;
+        for (i, e) in self.entries.iter_mut().enumerate() {
+            let Entry::Post(p) = e else { continue };
+            if !want.contains(&p.no) {
+                continue;
+            }
+            hashes.push(post_hash(&p.s));
+            let (no, ts) = (p.no, p.ts);
+            done.push(no);
+            let old = e.len();
+            *e = Entry::Tomb { no, ts, del, by };
+            self.bytes = self.bytes + e.len() - old;
+            first.get_or_insert(i);
         }
-        let t = cbor::map(vec![
-            ("no", Value::Uint(self.no)),
-            ("sub", Value::Text(self.sub.clone())),
-            ("chunks", Value::Array(links)),
-            ("r", Value::Uint(self.replies())),
-            ("st", Value::Bool(self.sticky)),
-            ("lk", Value::Bool(self.locked)),
-        ])
-        .encode();
-        let cid = Cid::of(DAG_CBOR, &t);
-        live.push(cid.clone());
-        out.push((cid.clone(), t));
-        cid
+        if let Some(i) = first {
+            self.changed(i);
+        }
     }
 }
 
@@ -199,7 +261,31 @@ pub struct Archived {
     pub ex: String,
     pub pruned: u64,
     pub thread: Cid,
+    /// Its last post's number: a post `no` can only be here if `self.no ≤ no ≤ last`.
+    last: u64,
+    bytes: u64,
     blocks: Vec<Block>,
+}
+
+impl Archived {
+    fn new(no: u64, sub: String, ex: String, pruned: u64, thread: Cid, blocks: Vec<Block>) -> Option<Self> {
+        let mut a = Archived { no, sub, ex, pruned, thread, last: no, bytes: blocks.iter().map(|(_, b)| b.len() as u64).sum(), blocks };
+        a.last = a.decode()?.entries.last()?.no();
+        Some(a)
+    }
+
+    /// The thread back from its blocks (an owner path: moderation of archived posts, BC-1).
+    fn decode(&self) -> Option<Thread> {
+        let by: HashMap<&Cid, &Vec<u8>> = self.blocks.iter().map(|(c, b)| (c, b)).collect();
+        let t = Value::decode(by.get(&self.thread)?)?;
+        let mut entries = Vec::new();
+        for c in t.get("chunks")?.array()? {
+            for e in Value::decode(by.get(c.link()?)?)?.get("p")?.array()? {
+                entries.push(Entry::from_value(e)?);
+            }
+        }
+        Some(Thread::new(self.no, t.get("sub")?.text()?.to_owned(), entries, 0, 0, t.get("st")?.boolean()?, t.get("lk")?.boolean()?))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -217,8 +303,11 @@ pub struct Board {
     pub manifest: Manifest,
     pub threads: Vec<Thread>,
     pub archive: Vec<Archived>,
-    /// `(post hash, deleted at)` (G.5.1).
+    /// `(post hash, deleted at)` (G.5.1), oldest first.
     pub dels: Vec<([u8; 32], u64)>,
+    del_set: HashSet<[u8; 32]>,
+    /// The encoded `dels` block while it is unchanged.
+    dels_block: Option<Block>,
     pub modlog: Vec<ModEntry>,
     /// The encrypted owner-state block (G.5.1 `own`), opaque here.
     pub own: Vec<u8>,
@@ -228,15 +317,19 @@ pub struct Board {
 }
 
 impl Board {
-    /// A new board for the board key `sign_seed` (`HKDF(seed, "p2pchat/board/" ‖ index)`, G.4).
-    pub fn new(sign_seed: &[u8; 32], title: &str, about: &str, rules: &str, created: u64) -> Result<Self, BoardError> {
+    /// A new board for the board key `sign_seed` (`HKDF(seed, "p2pchat/board/" ‖ index)`, G.4),
+    /// hosted at onion `host` (signed into the manifest: where posts go).
+    pub fn new(sign_seed: &[u8; 32], host: &str, title: &str, about: &str, rules: &str, created: u64) -> Result<Self, BoardError> {
         let key = SigningKey::from_bytes(sign_seed);
         if title.len() > limits::TITLE || about.len() > limits::ABOUT || rules.len() > limits::RULES {
             return Err(BoardError::TooLong);
         }
+        if !crate::onion::valid(host) {
+            return Err(BoardError::Invalid);
+        }
         let pk = key.verifying_key().to_bytes();
-        let manifest = Manifest { title: title.into(), about: about.into(), rules: rules.into(), pk, created, mirrors: Vec::new(), see_also: Vec::new(), ids: false };
-        Ok(Self { name: Cid::ipns_name(&pk), key, manifest, threads: Vec::new(), archive: Vec::new(), dels: Vec::new(), modlog: Vec::new(), own: Vec::new(), next_no: 1, seq: 0 })
+        let manifest = Manifest { title: title.into(), about: about.into(), rules: rules.into(), pk, created, host: host.into(), mirrors: Vec::new(), see_also: Vec::new(), ids: false };
+        Ok(Self { name: Cid::ipns_name(&pk), key, manifest, threads: Vec::new(), archive: Vec::new(), dels: Vec::new(), del_set: HashSet::new(), dels_block: None, modlog: Vec::new(), own: Vec::new(), next_no: 1, seq: 0 })
     }
 
     /// The board's IPNS name (`k51…`), what `s.b` must say.
@@ -263,27 +356,40 @@ impl Board {
         if cap == cap::OWNER && s.k != self.manifest.pk || cap > cap::OWNER {
             return Err(BoardError::Refused);
         }
-        s.verify(&sig)?;
+        s.verify_as(&sig, cap == cap::OWNER)?;
+        let h = post_hash(&s);
+        if self.del_set.contains(&h) {
+            return Err(BoardError::Refused); // deleted once: never back (BC-3)
+        }
         let ts = now_s - now_s % 60;
-        if s.t == 0 {
+        let e = Entry::Post(Post { no: self.next_no, ts, s, sig, cap });
+        let len = e.len();
+        let Entry::Post(post) = &e else { unreachable!("a post") };
+        if post.s.t == 0 {
             self.make_room(now_s)?;
+            self.fit(len, 0, now_s)?;
             let no = self.next_no;
             self.next_no += 1;
-            let sub = s.sub.clone();
-            self.threads.push(Thread { no, sub, entries: vec![Entry::Post(Post { no, ts, s, sig, cap })], bump: now_s, created: now_s, sticky: false, locked: false, full: Vec::new() });
+            let sub = post.s.sub.clone();
+            self.threads.push(Thread::new(no, sub, vec![e], now_s, now_s, false, false));
             return Ok(no);
         }
-        let next_no = self.next_no;
-        let t = self.thread_mut(s.t).ok_or(BoardError::NotFound)?;
+        let t = self.thread_mut(post.s.t).ok_or(BoardError::NotFound)?;
         if t.locked {
             return Err(BoardError::Refused);
         }
         let recent = t.entries.len().saturating_sub(limits::CHUNK);
-        if t.entries[recent..].iter().any(|e| matches!(e, Entry::Post(p) if p.s.body == s.body && !s.body.is_empty())) {
+        if t.entries[recent..].iter().any(|x| matches!(x, Entry::Post(p) if p.s.body == post.s.body && !post.s.body.is_empty())) {
             return Err(BoardError::Duplicate);
         }
-        let sage = s.sage;
-        t.entries.push(Entry::Post(Post { no: next_no, ts, s, sig, cap }));
+        let thread = post.s.t;
+        self.fit(len, thread, now_s)?;
+        let no = self.next_no;
+        let t = self.thread_mut(thread).ok_or(BoardError::NotFound)?;
+        let sage = matches!(&e, Entry::Post(p) if p.s.sage);
+        t.entries.push(e);
+        t.bytes += len;
+        t.changed(t.entries.len() - 1);
         if !sage && t.entries.len() <= limits::BUMP_LIMIT + 1 {
             t.bump = now_s;
         }
@@ -291,7 +397,17 @@ impl Board {
             t.locked = true;
         }
         self.next_no += 1;
-        Ok(next_no)
+        Ok(no)
+    }
+
+    /// The oldest-bumped thread that may be pruned now (G.8: never a sticky, young or recently
+    /// bumped one), other than `keep`.
+    fn victim(&self, now_s: u64, keep: u64) -> Option<u64> {
+        self.threads
+            .iter()
+            .filter(|t| t.no != keep && !t.sticky && now_s.saturating_sub(t.created) >= limits::PROTECT_AGE_S && now_s.saturating_sub(t.bump) >= limits::PROTECT_BUMP_S)
+            .min_by_key(|t| t.bump)
+            .map(|t| t.no)
     }
 
     /// Room for one more thread: prunes the oldest-bumped unprotected thread when full (G.8:
@@ -300,14 +416,28 @@ impl Board {
         if self.threads.len() < limits::THREADS {
             return Ok(());
         }
-        let victim = self
-            .threads
-            .iter()
-            .filter(|t| !t.sticky && now_s.saturating_sub(t.created) >= limits::PROTECT_AGE_S && now_s.saturating_sub(t.bump) >= limits::PROTECT_BUMP_S)
-            .min_by_key(|t| t.bump)
-            .map(|t| t.no)
-            .ok_or(BoardError::Busy)?;
+        let victim = self.victim(now_s, 0).ok_or(BoardError::Busy)?;
         self.prune(victim, now_s)
+    }
+
+    /// Encoded bytes of the live threads and the archive (BC-7).
+    pub fn bytes(&self) -> u64 {
+        self.threads.iter().map(|t| t.bytes).sum::<u64>() + self.archive.iter().map(|a| a.bytes).sum::<u64>()
+    }
+
+    /// Room for `need` more bytes (BC-7): the archive's oldest threads go first, then the
+    /// oldest unprotected live thread (not `keep`) is pruned; `Busy` when nothing can go.
+    fn fit(&mut self, need: u64, keep: u64, now_s: u64) -> Result<(), BoardError> {
+        while self.bytes() + need > limits::BYTES {
+            if !self.archive.is_empty() {
+                self.archive.remove(0);
+                continue;
+            }
+            let v = self.victim(now_s, keep).ok_or(BoardError::Busy)?;
+            let i = self.threads.iter().position(|t| t.no == v).expect("a live thread");
+            self.threads.remove(i);
+        }
+        Ok(())
     }
 
     /// Moves a thread to the text archive (G.5.3).
@@ -316,7 +446,9 @@ impl Board {
         let mut t = self.threads.remove(i);
         let mut blocks = Vec::with_capacity(t.entries.len() / limits::CHUNK + 2);
         let cid = t.blocks(&mut blocks, &|_| false, &mut Vec::new());
-        self.archive.push(Archived { no, sub: t.sub.clone(), ex: t.excerpt(), pruned: now_s, thread: cid, blocks });
+        let last = t.entries.last().map_or(no, Entry::no);
+        let bytes = blocks.iter().map(|(_, b)| b.len() as u64).sum();
+        self.archive.push(Archived { no, sub: t.sub.clone(), ex: t.excerpt(), pruned: now_s, thread: cid, last, bytes, blocks });
         self.expire_archive(now_s);
         Ok(())
     }
@@ -327,44 +459,117 @@ impl Board {
         self.archive.drain(..over);
     }
 
-    /// Deletes post `no`: a tombstone keeps its number, its hash goes on the deletion list.
-    /// Deleting an OP prunes its thread out of the archive too (4chan behaviour, G.5.3).
+    /// Deletes post `no` (live or archived): a tombstone keeps its number, its hash goes on the
+    /// deletion list. Deleting an OP takes its thread with it (4chan behaviour, G.5.3).
     pub fn delete(&mut self, no: u64, by_kind: u8, by: u8, now_s: u64) -> Result<(), BoardError> {
-        let ti = self.threads.iter().position(|t| t.entries.iter().any(|e| e.no() == no)).ok_or(BoardError::NotFound)?;
-        let t = &mut self.threads[ti];
-        let ei = t.entries.iter().position(|e| e.no() == no).ok_or(BoardError::NotFound)?;
-        let Entry::Post(p) = &t.entries[ei] else { return Err(BoardError::NotFound) };
-        let h = post_hash(&p.s);
-        let ts = p.ts;
-        t.entries[ei] = Entry::Tomb { no, ts, del: by_kind, by };
-        t.invalidate_from(ei);
-        self.dels.push((h, now_s));
-        if ei == 0 {
-            // The OP is gone: so is the thread, archive included (its other posts go with it).
-            let t = self.threads.remove(ti);
-            for e in &t.entries {
-                if let Entry::Post(p) = e {
-                    self.dels.push((post_hash(&p.s), now_s));
-                }
-            }
-        }
-        self.trim_dels(now_s);
-        Ok(())
+        if self.delete_many(&[no], by_kind, by, now_s).is_empty() { Err(BoardError::NotFound) } else { Ok(()) }
     }
 
+    /// Deletes every post of `nos` in one pass (mass delete, BC-10). Returns the numbers deleted
+    /// (a reply in a thread whose OP is deleted counts as deleted).
+    pub fn delete_many(&mut self, nos: &[u64], by_kind: u8, by: u8, now_s: u64) -> Vec<u64> {
+        let want: HashSet<u64> = nos.iter().copied().collect();
+        let mut done = Vec::new();
+        let mut hashes = Vec::new();
+        let gone = |t: &Thread, done: &mut Vec<u64>| done.extend(t.entries.iter().map(Entry::no).filter(|n| want.contains(n)));
+        let mut i = 0;
+        while i < self.threads.len() {
+            let t = &mut self.threads[i];
+            if !t.entries.iter().any(|e| want.contains(&e.no())) {
+                i += 1;
+            } else if want.contains(&t.no) {
+                hashes.push(t.op);
+                gone(t, &mut done);
+                self.threads.remove(i);
+            } else {
+                t.tomb(&want, by_kind, by, &mut hashes, &mut done);
+                i += 1;
+            }
+        }
+        // Archived threads (BC-1): decoded, changed and re-encoded; their OP drops the entry.
+        let mut i = 0;
+        while i < self.archive.len() {
+            let a = &self.archive[i];
+            let Some(mut t) = want.iter().any(|n| (a.no..=a.last).contains(n)).then(|| a.decode()).flatten() else {
+                i += 1;
+                continue;
+            };
+            if want.contains(&t.no) {
+                hashes.push(t.op);
+                gone(&t, &mut done);
+                self.archive.remove(i);
+                continue;
+            }
+            let before = done.len();
+            t.tomb(&want, by_kind, by, &mut hashes, &mut done);
+            if done.len() > before {
+                let mut blocks = Vec::new();
+                let a = &mut self.archive[i];
+                a.thread = t.blocks(&mut blocks, &|_| false, &mut Vec::new());
+                a.bytes = blocks.iter().map(|(_, b)| b.len() as u64).sum();
+                a.blocks = blocks;
+            }
+            i += 1;
+        }
+        for h in hashes {
+            self.listed(h, now_s);
+        }
+        self.trim_dels(now_s);
+        done
+    }
+
+    fn listed(&mut self, h: [u8; 32], now_s: u64) {
+        if self.del_set.insert(h) {
+            self.dels.push((h, now_s));
+            self.dels_block = None;
+        }
+    }
+
+    /// Post `no`, live or archived (the owner's moderation: ban, delete).
+    pub fn find(&self, no: u64) -> Option<Post> {
+        let hit = |t: &Thread| t.entries.iter().find_map(|e| match e {
+            Entry::Post(p) if p.no == no => Some(p.clone()),
+            _ => None,
+        });
+        self.threads.iter().find_map(hit).or_else(|| self.archive.iter().filter(|a| (a.no..=a.last).contains(&no)).find_map(|a| hit(&a.decode()?)))
+    }
+
+    /// The numbers of every post, live or archived, that `f` selects (mass delete, G.9.1).
+    pub fn select(&self, f: impl Fn(&Post) -> bool) -> Vec<u64> {
+        let mut out = Vec::new();
+        let mut take = |t: &Thread| out.extend(t.entries.iter().filter_map(|e| if let Entry::Post(p) = e && f(p) { Some(p.no) } else { None }));
+        self.threads.iter().for_each(&mut take);
+        self.archive.iter().filter_map(Archived::decode).for_each(|t| take(&t));
+        out
+    }
+
+    /// Entries past 30 days go; past `DELS` the oldest go too, but only those older than any
+    /// record that may still be served (BC-4); `DELS_MAX` is the hard cap.
     fn trim_dels(&mut self, now_s: u64) {
+        let before = self.dels.len();
         self.dels.retain(|(_, at)| now_s.saturating_sub(*at) < limits::DELS_S);
         let over = self.dels.len().saturating_sub(limits::DELS);
+        let old = self.dels.iter().take(over).take_while(|(_, at)| now_s.saturating_sub(*at) > limits::VALIDITY_S + 3600).count();
+        self.dels.drain(..old);
+        let over = self.dels.len().saturating_sub(limits::DELS_MAX);
         self.dels.drain(..over);
+        if self.dels.len() != before {
+            self.del_set = self.dels.iter().map(|(h, _)| *h).collect();
+            self.dels_block = None;
+        }
     }
 
     pub fn set_sticky(&mut self, no: u64, on: bool) -> Result<(), BoardError> {
-        self.thread_mut(no).ok_or(BoardError::NotFound)?.sticky = on;
+        let t = self.thread_mut(no).ok_or(BoardError::NotFound)?;
+        t.sticky = on;
+        t.changed(t.entries.len());
         Ok(())
     }
 
     pub fn set_locked(&mut self, no: u64, on: bool) -> Result<(), BoardError> {
-        self.thread_mut(no).ok_or(BoardError::NotFound)?.locked = on;
+        let t = self.thread_mut(no).ok_or(BoardError::NotFound)?;
+        t.locked = on;
+        t.changed(t.entries.len());
         Ok(())
     }
 
@@ -384,7 +589,7 @@ impl Board {
     }
 
     pub fn set_mirrors(&mut self, mirrors: Vec<String>) -> Result<(), BoardError> {
-        if mirrors.len() > limits::MIRRORS || mirrors.iter().any(|m| m.len() != 62 || !m.ends_with(".onion")) {
+        if mirrors.len() > limits::MIRRORS || !mirrors.iter().all(|m| crate::onion::valid(m)) {
             return Err(BoardError::Invalid);
         }
         self.manifest.mirrors = mirrors;
@@ -393,8 +598,7 @@ impl Board {
 
     /// "See also" (G.12): other boards the owner points to, each `<name>@<onion>` (≤ 16).
     pub fn set_see_also(&mut self, links: Vec<String>) -> Result<(), BoardError> {
-        let ok = |l: &String| l.split_once('@').is_some_and(|(n, o)| n.starts_with("k51") && n.len() <= 70 && n.bytes().all(|b| b.is_ascii_alphanumeric()) && o.len() == 62 && o.ends_with(".onion"));
-        if links.len() > limits::SEE_ALSO || !links.iter().all(ok) {
+        if links.len() > limits::SEE_ALSO || !links.iter().all(|l| crate::onion::see_also_valid(l)) {
             return Err(BoardError::Invalid);
         }
         self.manifest.see_also = links;
@@ -412,6 +616,7 @@ impl Board {
             ("rules", Value::Text(m.rules.clone())),
             ("pk", Value::Bytes(m.pk.to_vec())),
             ("created", Value::Uint(m.created)),
+            ("host", Value::Text(m.host.clone())),
             ("mirrors", texts(&m.mirrors)),
             ("see_also", texts(&m.see_also)),
             ("ids", Value::Bool(m.ids)),
@@ -439,7 +644,9 @@ impl Board {
             let b = v.encode();
             let c = Cid::of(DAG_CBOR, &b);
             live.push(c.clone());
-            out.push((c.clone(), b));
+            if !held(&c) {
+                out.push((c.clone(), b));
+            }
             c
         };
         let manifest = add(&mut out, live, self.manifest_value());
@@ -450,6 +657,7 @@ impl Board {
             buckets[(t.no % limits::BUCKETS as u64) as usize].push(cbor::map(vec![
                 ("no", Value::Uint(t.no)),
                 ("thread", Value::Bytes(cid.to_bytes())),
+                ("op", Value::Bytes(t.op.to_vec())),
                 ("bump", Value::Uint(t.bump)),
                 ("r", Value::Uint(t.replies())),
                 ("sub", Value::Text(t.sub.clone())),
@@ -481,7 +689,15 @@ impl Board {
         }
         let archive = add(&mut out, live, cbor::map(vec![("t", Value::Array(arch))]));
         let arch_threads = add(&mut out, live, cbor::map(vec![("t", Value::Array(arch_pins))]));
-        let dels = add(&mut out, live, cbor::map(vec![("d", Value::Array(self.dels.iter().map(|(h, at)| cbor::map(vec![("h", Value::Bytes(h.to_vec())), ("at", Value::Uint(*at))])).collect()))]));
+        let (dels, b) = self.dels_block.get_or_insert_with(|| {
+            let b = cbor::map(vec![("d", Value::Array(self.dels.iter().map(|(h, at)| cbor::map(vec![("h", Value::Bytes(h.to_vec())), ("at", Value::Uint(*at))])).collect()))]).encode();
+            (Cid::of(DAG_CBOR, &b), b)
+        });
+        live.push(dels.clone());
+        if !held(dels) {
+            out.push((dels.clone(), b.clone()));
+        }
+        let dels = dels.clone();
         let modlog = add(
             &mut out,
             live,
@@ -497,7 +713,9 @@ impl Board {
         );
         let own_cid = Cid::of(RAW, &self.own);
         live.push(own_cid.clone());
-        out.push((own_cid.clone(), self.own.clone()));
+        if !held(&own_cid) {
+            out.push((own_cid.clone(), self.own.clone()));
+        }
         let root = cbor::map(vec![
             ("v", Value::Uint(1)),
             ("kind", Value::Text("board".into())),
@@ -526,6 +744,7 @@ impl Board {
     }
 
     /// Reopens the owner's board from a verified view (its stored blocks), continuing at `seq`.
+    /// Every archived thread must be held whole (a takeover refuses an incomplete source, BW-2).
     pub fn load(sign_seed: &[u8; 32], v: crate::verify::View, archived_blocks: Vec<Block>) -> Result<Self, BoardError> {
         let key = SigningKey::from_bytes(sign_seed);
         if key.verifying_key().to_bytes() != v.manifest.pk {
@@ -534,16 +753,31 @@ impl Board {
         let threads = v
             .threads
             .into_iter()
-            .map(|t| Thread { no: t.no, sub: t.sub, created: t.entries.first().map_or(0, |e| match e { Entry::Post(p) => p.ts, Entry::Tomb { ts, .. } => *ts }), entries: t.entries, bump: t.bump, sticky: t.sticky, locked: t.locked, full: Vec::new() })
-            .collect();
-        let archive = v
-            .archive
-            .into_iter()
-            .map(|a| {
-                let blocks = ephem_channel::gateway::reachable(&a.thread, archived_blocks.clone());
-                Archived { no: a.no, sub: a.sub, ex: a.ex, pruned: a.pruned, thread: a.thread, blocks }
+            .map(|t| {
+                let created = t.entries.first().map_or(0, |e| match e {
+                    Entry::Post(p) => p.ts,
+                    Entry::Tomb { ts, .. } => *ts,
+                });
+                Thread::new(t.no, t.sub, t.entries, t.bump, created, t.sticky, t.locked)
             })
             .collect();
-        Ok(Self { name: v.name, key, manifest: v.manifest, threads, archive, dels: v.dels, modlog: v.modlog, own: v.own, next_no: v.next_no, seq: v.sequence })
+        // One map, each archived thread's blocks moved out of it: O(total), not O(archive ×
+        // total) (BW-5); blocks no archived thread reaches are dropped.
+        let mut held: HashMap<Cid, Vec<u8>> = archived_blocks.into_iter().collect();
+        let mut archive = Vec::with_capacity(v.archive.len());
+        for a in v.archive {
+            let mut blocks = Vec::new();
+            let mut todo = vec![a.thread.clone()];
+            while let Some(c) = todo.pop() {
+                let Some(data) = held.remove(&c) else { continue };
+                if let Some(x) = Value::decode(&data) {
+                    ephem_channel::gateway::links(&x, &mut todo);
+                }
+                blocks.push((c, data));
+            }
+            archive.push(Archived::new(a.no, a.sub, a.ex, a.pruned, a.thread, blocks).ok_or(BoardError::Invalid)?);
+        }
+        let del_set = v.dels.iter().map(|(h, _)| *h).collect();
+        Ok(Self { name: v.name, key, manifest: v.manifest, threads, archive, dels: v.dels, del_set, dels_block: None, modlog: v.modlog, own: v.own, next_no: v.next_no, seq: v.sequence })
     }
 }

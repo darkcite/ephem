@@ -550,7 +550,7 @@ fn contact_err(e: ContactError) -> ErrorCode {
 
 /// The key-file sections the page may read and write (`App::section`).
 fn settings_section(t: u8) -> bool {
-    matches!(t, contacts::TLV_TOR_BRIDGES | contacts::TLV_FOLLOWS)
+    matches!(t, contacts::TLV_TOR_BRIDGES | contacts::TLV_FOLLOWS | contacts::TLV_BOARDS)
 }
 
 #[inline]
@@ -601,6 +601,7 @@ impl App {
         let sf = ephem_tor::web::Snowflake {
             brokers: b.brokers,
             fingerprints: b.fingerprints,
+            routes: b.routes,
             ice: b.ice,
             nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
         };

@@ -50,6 +50,11 @@ done
 # no JS glue; pages fetch it with its SHA-384 and hand the compiled module to their Workers.
 cargo build --release --locked --target wasm32-unknown-unknown -p ephem-pow
 cp target/wasm32-unknown-unknown/release/ephem_pow.wasm app/pkg/ephem_pow.wasm
+# Workers instantiate it with no imports: a dependency that pulls in JS glue breaks every post.
+if grep -q "__wbindgen" app/pkg/ephem_pow.wasm; then
+  echo "app/pkg/ephem_pow.wasm imports JS glue (a dependency of crates/pow needs a feature off)" >&2
+  exit 1
+fi
 if command -v wasm-opt >/dev/null; then
   wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int -o app/pkg/ephem_pow.wasm app/pkg/ephem_pow.wasm
 fi

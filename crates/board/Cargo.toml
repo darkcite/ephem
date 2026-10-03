@@ -16,3 +16,15 @@ blake2 = { version = "0.10", default-features = false }
 equix = { version = "=0.7.0", default-features = false }
 # The owner-state block (G.5.1 `own`), as the channel vault.
 chacha20poly1305 = { version = "0.10", default-features = false }
+# v3 onion addresses (mirrors, see also, the signed host): the checksum is SHA3-256.
+sha3 = { version = "0.10", default-features = false }
+# A random nonce for each sealed `own` block (BC-13): the host only (feature `host`), so the
+# proof-of-work module (crates/pow) keeps no imports.
+getrandom = { version = "0.3", optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
+
+[features]
+default = ["host"]
+host = ["dep:getrandom"]

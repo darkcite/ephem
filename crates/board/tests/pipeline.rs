@@ -87,7 +87,7 @@ fn submit(intake: &mut Intake, board: &mut Board, bytes: &[u8], now: u64) -> Res
 }
 
 fn setup() -> (Board, Intake) {
-    let board = Board::new(&[4; 32], "/t/", "", "", NOW).unwrap();
+    let board = Board::new(&[4; 32], &ephem_board::onion::address(&[0xAA; 32]), "/t/", "", "", NOW).unwrap();
     let intake = Intake::new(board.name(), SECRET, LOW, NOW);
     (board, intake)
 }
@@ -135,12 +135,17 @@ fn every_refusal() {
     i.threads_closed = true;
     assert_eq!(i.check_header(&h, good.len(), NOW), Err(Refusal::Paused));
     i.threads_closed = false;
-    // Body: a changed byte breaks the hash; a valid header is spent at its check.
+    // Body: a changed byte breaks the hash. The header committed to the body's hash, so the same
+    // header may send its body again (a stream that dropped, BC-12); the same solution with
+    // another body hash is a replay.
     let mut body_bad = good.clone();
     *body_bad.last_mut().unwrap() ^= 1;
-    let Next::ReadBody(_) = i.check_header(&header(&body_bad), body_bad.len(), NOW).unwrap() else { panic!() };
+    let Next::ReadBody(slot) = i.check_header(&header(&body_bad), body_bad.len(), NOW).unwrap() else { panic!() };
     assert_eq!(i.check_body(&header(&body_bad), &body_bad[HEADER_LEN..]), Err(Refusal::Refused));
-    assert_eq!(i.check_header(&h, good.len(), NOW), Err(Refusal::Refused), "the same solution again, with another body: a replay");
+    assert_eq!(i.check_header(&h, good.len(), NOW), Ok(Next::ReadBody(slot)), "the body again (BC-12)");
+    let mut other_body = h;
+    other_body.h[0] ^= 1;
+    assert_eq!(i.check_header(&other_body, good.len(), NOW), Err(Refusal::Refused), "the same solution with another body: a replay");
     // A header whose k is not the signer of s.
     let other = Poster::new(3).post(&name, &info, 0, "op2", 1);
     let mut mixed = other.clone();

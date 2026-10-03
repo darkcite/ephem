@@ -17,9 +17,20 @@
 //!
 //! Copies (G.14.2): stream bytes are read into the slot (one copy); blocks cross to JS once,
 //! for the store (`delta`), and once back at a reopen (`open`).
+//!
+//! **Slots (BW-1):** a stream's whole request (head, submit header and body) must arrive within
+//! [`READ_MS`] of its accept, a response must drain at [`DRAIN`] bytes/s, one rendezvous
+//! circuit holds at most [`PER_CIRCUIT`] slots and sends at most one submit per
+//! [`SUBMIT_EVERY_MS`]: taking every slot needs many circuits, which the introduction rate
+//! limits (G.18.4).
+//!
+//! **Copies of a board from elsewhere (BW-2, BW-4):** a takeover and a mirror read every source
+//! at once and keep the newest **complete** version (every catalog and archived thread with all
+//! its chunks, and the `own` block); a takeover refuses anything older than the vault says.
 
 use crate::{ChannelApp, NEWEST_GRACE_MS, PORT, State, err, json, now_s, with_timeout};
 use ephem_board::board::{Board, Entry};
+use std::collections::{HashMap, HashSet};
 use ephem_board::gateway::{self, Answer, Route, SHORT, Served};
 use ephem_board::host::Host;
 use ephem_board::own::Switches;
@@ -42,8 +53,18 @@ pub const MAX_BOARDS: u32 = 4;
 /// Streams served at once per board; each holds one slot.
 const SLOTS: usize = 16;
 const SLOT: usize = gateway::MAX_HEAD + MAX_SUBMIT;
-/// A submit must arrive whole within this (G.6.2 step 1); a read request head likewise.
+/// A request must arrive whole within this of its accept: head, submit header and body together
+/// (G.6.2 step 1, BW-1).
 const READ_MS: u32 = 10_000;
+/// A response must drain at least this fast (bytes/s), after 5 s of grace.
+const DRAIN: u64 = 16 * 1024;
+/// Slots one rendezvous circuit may hold at once, and how often it may submit (G.18.3).
+const PER_CIRCUIT: u8 = 2;
+const SUBMIT_EVERY_MS: f64 = 10_000.0;
+/// One source's answer to a fencing read.
+const FENCE_FETCH_MS: u32 = 20_000;
+/// Bytes one pull may fetch (BW-5): twice the board's own budget.
+const PULL_BYTES: usize = 2 * ephem_board::limits::BYTES as usize;
 /// A submitter waits this long for the publish that answers it.
 const ANSWER_MS: u32 = 20_000;
 /// The whole of one request, write included.
@@ -82,6 +103,12 @@ pub(crate) struct Boards {
 }
 
 impl Boards {
+    /// Another identity takes the tab (BW-9): mirrors go down, the deletions read are forgotten.
+    pub(crate) fn forget(&mut self) {
+        self.mirrors.clear();
+        self.known_dels.borrow_mut().clear();
+    }
+
     /// The vault entries of the boards hosted here, with this device's lease (G.13).
     pub(crate) fn vault_entries(&self, lease: ephem_channel::vault::Lease, now_s: u64) -> Vec<ephem_channel::vault::BoardEntry> {
         self.hosted
@@ -157,7 +184,7 @@ impl BoardApp {
     /// A new board `index` (the page refuses when its store already holds one).
     pub fn create(&self, index: u32, title: &str, about: &str, rules: &str) -> Result<(), JsValue> {
         let mut s = self.seeds(index)?;
-        let board = Board::new(&s[0], title, about, rules, now_s());
+        let board = Board::new(&s[0], &onion_of(&s[1]), title, about, rules, now_s());
         let r = board.map(|b| self.start(index, b, &s[2], s[3]));
         s.iter_mut().for_each(|x| x.fill(0));
         r.map_err(|e| err(format!("{e:?}")))
@@ -472,10 +499,11 @@ impl BoardApp {
 
     /// "Host this board here": board `index` is read in full (index, every thread, the
     /// archive and the encrypted `own` block) from `onions` (its own address, served by the
-    /// other device, then its mirrors), verified, and hosted here. Numbers continue from at
-    /// least `next_no_floor` (G.13.6, computed by the page from the vault). Resolves to its
-    /// onion address.
-    pub fn take_over(&self, index: u32, onions: &str, next_no_floor: f64) -> Result<js_sys::Promise, JsValue> {
+    /// other device, then its mirrors), all at once, verified, and the newest complete version
+    /// is hosted here; nothing older than the vault's `floor_seq` (BW-2), `root` preferred on a
+    /// tie. Numbers continue from at least `next_no_floor` (G.13.6, computed by the page from
+    /// the vault).
+    pub fn take_over(&self, index: u32, onions: &str, next_no_floor: f64, floor_seq: f64, root: &str) -> Result<js_sys::Promise, JsValue> {
         let tor = self.tor()?;
         let mut s = self.seeds(index)?;
         let key = ed25519_dalek::SigningKey::from_bytes(&s[0]);
@@ -490,24 +518,26 @@ impl BoardApp {
         let seeds = s;
         s.iter_mut().for_each(|x| x.fill(0));
         let st = self.st.clone();
+        let generation = st.borrow().generation;
+        let prefer = Cid::parse(root);
         Ok(wasm_bindgen_futures::future_to_promise(async move {
             let mut seeds = seeds;
             let r = async {
                 let mut last = String::from("no source");
                 for round in 0..READ_ROUNDS {
-                    for o in &sources {
-                        match with_timeout(FETCH_MS * 2, pull(&tor, &name, o, None, round > 0)).await {
-                            Ok(Some(p)) => {
-                                let mut view = verify::read(&key.verifying_key(), &name, &p.root, &p.blocks, &[]).map_err(|e| format!("{e:?}"))?;
-                                view.sequence = p.seq;
-                                let mut board = Board::load(&seeds[0], view, p.blocks).map_err(|e| format!("{e:?}"))?;
-                                board.next_no = board.next_no.max(next_no_floor as u64);
-                                start_host(&st, index, board, &seeds[2], seeds[3]);
-                                return Ok(());
+                    match newest(&tor, &name, &sources, floor_seq as u64, prefer.as_ref(), round > 0).await {
+                        Ok(p) => {
+                            if st.borrow().generation != generation {
+                                return Err("the identity changed meanwhile".to_owned());
                             }
-                            Ok(None) => {}
-                            Err(e) => last = format!("{o}: {e}"),
+                            let mut view = verify::read(&key.verifying_key(), &name, &p.root, &p.blocks, &[]).map_err(|e| format!("{e:?}"))?;
+                            view.sequence = p.seq;
+                            let mut board = Board::load(&seeds[0], view, p.blocks).map_err(|e| format!("{e:?}"))?;
+                            board.next_no = board.next_no.max(next_no_floor as u64);
+                            start_host(&st, index, board, &seeds[2], seeds[3]);
+                            return Ok(());
                         }
+                        Err(e) => last = e,
                     }
                     sleep_ms(2_000 << round).await;
                 }
@@ -524,7 +554,7 @@ impl BoardApp {
     /// catalog under the same name and onion, numbers from `next_no` on, records above `seq`.
     pub fn continue_board(&self, index: u32, title: &str, next_no: f64, seq: f64, mirrors: &str) -> Result<(), JsValue> {
         let mut s = self.seeds(index)?;
-        let r = Board::new(&s[0], title, "", "", now_s()).map(|mut b| {
+        let r = Board::new(&s[0], &onion_of(&s[1]), title, "", "", now_s()).map(|mut b| {
             b.next_no = (next_no as u64).max(1);
             b.seq = seq as u64;
             let _ = b.set_mirrors(list(mirrors));
@@ -567,24 +597,22 @@ impl BoardApp {
             return Ok(js_sys::Promise::resolve(&JsValue::from_str(&m.onion)));
         }
         let st = self.st.clone();
+        let generation = st.borrow().generation;
         Ok(wasm_bindgen_futures::future_to_promise(async move {
             let mut first = None;
             let mut last = String::new();
             for round in 0..READ_ROUNDS {
-                for o in &sources {
-                    match with_timeout(FETCH_MS * 2, pull(&tor, &name, o, None, round > 0)).await {
-                        Ok(Some(p)) => {
-                            first = p.into_mirror(&name, None);
-                            break;
-                        }
-                        Ok(None) => {}
-                        Err(e) => last = format!("{o}: {e}"),
+                match newest(&tor, &name, &sources, 0, None, round > 0).await {
+                    Ok(p) => {
+                        first = p.into_mirror(&name, None);
+                        break;
                     }
-                }
-                if first.is_some() {
-                    break;
+                    Err(e) => last = e,
                 }
                 sleep_ms(2_000 << round).await;
+            }
+            if st.borrow().generation != generation {
+                return Err(err("the identity changed meanwhile"));
             }
             let m = Rc::new(RefCell::new(first.ok_or_else(|| err(last))?));
             let nick = {
@@ -599,6 +627,13 @@ impl BoardApp {
             st.borrow_mut().boards.mirrors.push(Mirrored { name, onion: onion.clone(), m, _svc: svc });
             Ok(JsValue::from_str(&onion))
         }))
+    }
+
+    /// The onion seed of this identity's mirror of board `name` (stable across visits, BF-5);
+    /// the page passes it to `mirror`. Needs a signed-in identity.
+    pub fn mirror_seed(&self, name: &str) -> Result<Vec<u8>, JsValue> {
+        let name = Cid::parse(name).filter(|c| c.ed25519_key().is_some()).ok_or_else(|| err("not a board name"))?;
+        Ok(self.st.borrow().id.as_ref().ok_or_else(|| err("sign in first"))?.board_mirror_seed(&name.to_text()).to_vec())
     }
 
     /// The sequence a mirrored board is at (0: not mirrored here).
@@ -806,7 +841,7 @@ fn onion_of(seed: &[u8; 32]) -> String {
 }
 
 fn post_key(h: &Host, no: u64) -> Result<[u8; 32], JsValue> {
-    h.board.threads.iter().flat_map(|t| t.entries.iter()).find_map(|e| if let Entry::Post(p) = e && p.no == no { Some(p.s.k) } else { None }).ok_or_else(|| err("no such post"))
+    h.board.find(no).map(|p| p.s.k).ok_or_else(|| err("no such post"))
 }
 
 fn hex(b: &[u8]) -> String {
@@ -918,7 +953,7 @@ fn remember_dels(all: &mut KnownDels, name: &Cid, dels: &[([u8; 32], u64)]) {
     known.drain(..over);
 }
 
-/// `{"name","root","sequence","stale","mirrors":[…],"see_also":[…],"title","about","rules","next_no","updated","catalog":[{"no",
+/// `{"name","root","sequence","stale","host","mirrors":[…],"see_also":[…],"title","about","rules","next_no","updated","catalog":[{"no",
 /// "sub","ex","r","bump","st","lk"}…],"threads":[{"no","sub","posts":[{"no","ts","sub","body",
 /// "sage","cap","del","trip"}…]}…],"archive":[{"no","sub","ex","pruned"}…],"modlog":[{"ts","act","no",
 /// "why"}…]}` (`del`: 0, or who deleted; `trip`: `!` + 16 characters, or "").
@@ -929,6 +964,9 @@ pub fn view_json(v: &View) -> String {
     o.push_str(",\"root\":");
     json::string(&mut o, &v.root.to_text());
     let _ = write!(o, ",\"sequence\":{},\"next_no\":{},\"updated\":{},\"stale\":{}", v.sequence, v.next_no, v.updated, v.stale);
+    // Where posts go: the onion the board key signed (BF-1), not a link's.
+    o.push_str(",\"host\":");
+    json::string(&mut o, &v.manifest.host);
     o.push_str(",\"mirrors\":[");
     for (i, m) in v.manifest.mirrors.iter().enumerate() {
         if i > 0 {
@@ -1049,8 +1087,16 @@ async fn fence_loop(host: Weak<RefCell<Host>>, st: Weak<RefCell<State>>, index: 
         drop(h);
         drop(state);
         let path = format!("/ipns/{}?format=ipns-record", name.to_text());
-        for o in &sources {
-            let Ok(resp) = with_timeout(FETCH_MS, fetch(&tor, o, &ephem_channel::gateway::get(o, &path), true, gateway::MAX_RECORD)).await else { continue };
+        // Every source at once, each bounded (BW-7: one stalling mirror must not hold the fence).
+        let mut tries: futures::stream::FuturesUnordered<_> = sources
+            .iter()
+            .map(|o| {
+                let (tor, path) = (tor.clone(), path.clone());
+                Box::pin(async move { with_timeout(FENCE_FETCH_MS, fetch(&tor, o, &ephem_channel::gateway::get(o, &path), true, gateway::MAX_RECORD)).await })
+            })
+            .collect();
+        while let Some(r) = futures::StreamExt::next(&mut tries).await {
+            let Ok(resp) = r else { continue };
             let Ok(body) = ephem_channel::gateway::parse_response(&resp) else { continue };
             let Ok(rec) = ipns::verify(&name, body, now_s()) else { continue };
             // This tab's own sequence now, not before the fetch: a publish here meanwhile is
@@ -1089,16 +1135,26 @@ async fn pull(tor: &Tor, name: &Cid, onion: &str, prev: Option<(u64, &std::colle
         Err(e) => return Err(format!("{e:?}")),
     };
     let held = |c: &Cid| prev.is_some_and(|(_, h)| h.contains(c));
-    let wanted: Vec<Cid> = index.catalog.iter().map(|c| c.thread.clone()).chain(index.archive.iter().map(|a| a.thread.clone())).filter(|c| !held(c)).collect();
-    for c in &wanted {
+    let threads: Vec<Cid> = index.catalog.iter().map(|c| c.thread.clone()).chain(index.archive.iter().map(|a| a.thread.clone())).collect();
+    let mut bytes = body.len();
+    for c in threads.iter().filter(|c| !held(c)) {
         let resp = fetch(tor, onion, &ephem_channel::gateway::get(onion, &format!("/ipfs/{}?format=car", c.to_text())), fresh, gateway::MAX_CAR).await?;
         let body = ephem_channel::gateway::parse_response(&resp).map_err(|e| format!("thread: {e:?}"))?;
-        blocks.extend(ephem_channel::car::read(body).ok_or("thread: not a valid CAR")?.1);
+        bytes += body.len();
+        if bytes > PULL_BYTES {
+            return Err("more data than any board holds".into());
+        }
+        let (roots, b) = ephem_channel::car::read(body).ok_or("thread: not a valid CAR")?;
+        if roots.as_slice() != std::slice::from_ref(c) {
+            return Err("thread: a CAR of something else".into());
+        }
+        // Only what the thread reaches (BW-5: no junk rides along).
+        blocks.extend(ephem_channel::gateway::reachable(c, b));
     }
     // The owner-state block (encrypted, opaque here): kept so another device of the owner can
-    // take the board over with its bans and switches (G.13.8). Best effort.
+    // take the board over with its bans and switches (G.13.8). A copy without it is incomplete.
     let own = blocks.iter().find(|(c, _)| *c == root).and_then(|(_, b)| ephem_channel::cbor::Value::decode(b)).and_then(|r| r.get("own").and_then(ephem_channel::cbor::Value::link).cloned());
-    if let Some(own) = own.filter(|c| !held(c))
+    if let Some(own) = own.clone().filter(|c| !held(c))
         && let Ok(resp) = fetch(tor, onion, &ephem_channel::gateway::get(onion, &format!("/ipfs/{}?format=raw", own.to_text())), fresh, ephem_board::limits::OWN + 1024).await
         && let Ok(b) = ephem_channel::gateway::parse_response(&resp)
         && own.verifies(b)
@@ -1107,7 +1163,8 @@ async fn pull(tor: &Tor, name: &Cid, onion: &str, prev: Option<(u64, &std::colle
     }
     // The new threads' posts are checked here; unchanged threads (same CID) were before.
     let v = verify::verify(name, &record, &blocks, now_ms(), min, &[]).map_err(|e| format!("{e:?}"))?;
-    Ok(Some(Pulled { record, root, blocks, seq: v.sequence }))
+    let need = threads.into_iter().chain(own).collect();
+    Ok(Some(Pulled { record, root, blocks, seq: v.sequence, need }))
 }
 
 struct Pulled {
@@ -1115,14 +1172,42 @@ struct Pulled {
     root: Cid,
     blocks: Vec<Block>,
     seq: u64,
+    /// Every thread (live and archived) and the `own` block: a complete copy holds all their DAGs.
+    need: Vec<Cid>,
+}
+
+/// Whether `blocks` hold every DAG of `need` whole (BW-2, BW-4).
+fn complete(blocks: &HashMap<&Cid, &[u8]>, need: &[Cid]) -> bool {
+    let mut todo: Vec<Cid> = need.to_vec();
+    let mut seen: HashSet<Cid> = HashSet::new();
+    while let Some(c) = todo.pop() {
+        let Some(b) = blocks.get(&c) else { return false };
+        if seen.insert(c) && let Some(v) = ephem_channel::cbor::Value::decode(b) {
+            ephem_channel::gateway::links(&v, &mut todo);
+        }
+    }
+    true
 }
 
 impl Pulled {
+    fn whole(&self, also: Option<&Mirror>) -> bool {
+        let mut by: HashMap<&Cid, &[u8]> = self.blocks.iter().map(|(c, b)| (c, b.as_slice())).collect();
+        if let Some(m) = also {
+            for (c, b) in m.served.blocks() {
+                by.entry(c).or_insert(b);
+            }
+        }
+        complete(&by, &self.need)
+    }
+
     /// The mirror's next state: the pulled blocks plus the unchanged ones it held (only what the
-    /// new root reaches is kept, `Served::new`).
+    /// new root reaches is kept, `Served::new`); `None` if the copy is not complete.
     fn into_mirror(mut self, name: &Cid, prev: Option<&Mirror>) -> Option<Mirror> {
+        if !self.whole(prev) {
+            return None;
+        }
         if let Some(p) = prev {
-            let have: std::collections::HashSet<Cid> = self.blocks.iter().map(|(c, _)| c.clone()).collect();
+            let have: HashSet<Cid> = self.blocks.iter().map(|(c, _)| c.clone()).collect();
             let old: Vec<Block> = p.served.blocks().filter(|(c, _)| !have.contains(*c)).map(|(c, b)| (c.clone(), b.to_vec())).collect();
             self.blocks.extend(old);
         }
@@ -1131,12 +1216,42 @@ impl Pulled {
     }
 }
 
-/// Keeps a mirror current while it lives.
+/// Every source at once (BW-2, BW-4): the newest complete version at or above `floor`, `prefer`
+/// winning a tie.
+async fn newest(tor: &Rc<Tor>, name: &Cid, sources: &[String], floor: u64, prefer: Option<&Cid>, fresh: bool) -> Result<Pulled, String> {
+    let mut tries: futures::stream::FuturesUnordered<_> = sources
+        .iter()
+        .map(|o| {
+            let (tor, name) = (tor.clone(), name.clone());
+            Box::pin(async move { (o, with_timeout(FETCH_MS * 2, pull(&tor, &name, o, None, fresh)).await) })
+        })
+        .collect();
+    let mut best: Option<Pulled> = None;
+    let mut last = String::from("no source answered");
+    while let Some((o, r)) = futures::StreamExt::next(&mut tries).await {
+        match r {
+            Ok(Some(p)) if !p.whole(None) => last = format!("{o}: an incomplete copy"),
+            Ok(Some(p)) if p.seq < floor => last = format!("{o}: an older version ({} < {floor})", p.seq),
+            Ok(Some(p)) => {
+                let better = best.as_ref().is_none_or(|b| p.seq > b.seq || (p.seq == b.seq && prefer == Some(&p.root)));
+                if better {
+                    best = Some(p);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => last = format!("{o}: {e}"),
+        }
+    }
+    best.ok_or(last)
+}
+
+/// Keeps a mirror current while it lives: the first source with a newer complete version wins
+/// (one stale or hostile source does not end the round, BW-4).
 async fn pull_loop(m: Weak<RefCell<Mirror>>, tor: Rc<Tor>, name: Cid, sources: Vec<String>) {
     loop {
         sleep_ms(PULL_MS).await;
         let Some(mirror) = m.upgrade() else { return };
-        let (seq, held): (u64, std::collections::HashSet<Cid>) = {
+        let (seq, held): (u64, HashSet<Cid>) = {
             let cur = mirror.borrow();
             (cur.seq, cur.served.blocks().map(|(c, _)| c.clone()).collect())
         };
@@ -1146,10 +1261,11 @@ async fn pull_loop(m: Weak<RefCell<Mirror>>, tor: Rc<Tor>, name: Cid, sources: V
                     let next = p.into_mirror(&name, Some(&mirror.borrow()));
                     if let Some(n) = next {
                         *mirror.borrow_mut() = n;
+                        break;
                     }
-                    break;
+                    tracing::info!("board mirror: {o}: an incomplete copy");
                 }
-                Ok(None) => break,
+                Ok(None) => {}
                 Err(e) => tracing::info!("board mirror: {o}: {e}"),
             }
         }
@@ -1187,35 +1303,71 @@ enum Target {
     Mirror(Weak<RefCell<Mirror>>),
 }
 
+/// Per rendezvous circuit: slots held and the last submit (ms). At most `SLOTS` circuits
+/// hold a slot; entries go when they hold none and their submit window has passed.
+type Circuits = Rc<RefCell<Vec<(u32, u8, f64)>>>;
+
 async fn serve_loop(svc: Weak<Service>, target: Target) {
     let pool: Rc<RefCell<Vec<Box<[u8; SLOT]>>>> = Rc::new(RefCell::new((0..SLOTS).map(|_| Box::new([0u8; SLOT])).collect()));
+    let circuits: Circuits = Rc::new(RefCell::new(Vec::with_capacity(2 * SLOTS)));
     while let Some(s) = svc.upgrade() {
-        let Some(stream) = s.try_accept() else {
+        let Some((circuit, stream)) = s.try_accept_from() else {
             drop(s);
             sleep_ms(50).await;
             continue;
         };
+        {
+            let now = js_sys::Date::now();
+            let mut c = circuits.borrow_mut();
+            c.retain(|(_, slots, at)| *slots > 0 || now - at < SUBMIT_EVERY_MS);
+            let i = match c.iter().position(|x| x.0 == circuit) {
+                Some(i) => i,
+                None => {
+                    c.push((circuit, 0, 0.0));
+                    c.len() - 1
+                }
+            };
+            if c[i].1 >= PER_CIRCUIT {
+                drop(stream); // one circuit may not hold every slot (BW-1)
+                continue;
+            }
+            c[i].1 += 1;
+        }
+        let release = move |circuits: &Circuits| {
+            if let Some(x) = circuits.borrow_mut().iter_mut().find(|x| x.0 == circuit) {
+                x.1 -= 1;
+            }
+        };
         let Some(slot) = pool.borrow_mut().pop() else {
+            release(&circuits);
             drop(stream); // busy: closed at once (G.6.2 step 0)
             continue;
         };
-        let (target, pool) = (target.clone(), pool.clone());
+        let (target, pool, circuits) = (target.clone(), pool.clone(), circuits.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let mut slot = slot;
-            if with_timeout(SERVE_MS, serve_one(stream, &target, &mut slot)).await.is_err() {
+            if with_timeout(SERVE_MS, serve_one(stream, &target, &mut slot, &circuits, circuit)).await.is_err() {
                 tracing::info!("board: a request took too long; dropped");
             }
+            release(&circuits);
             pool.borrow_mut().push(slot);
         });
     }
 }
 
-async fn serve_one(s: DataStream, target: &Target, slot: &mut [u8; SLOT]) -> Result<(), String> {
+/// Milliseconds left until `deadline` (ms since the epoch), at least 1.
+fn left(deadline: f64) -> u32 {
+    (deadline - js_sys::Date::now()).clamp(1.0, f64::from(READ_MS)) as u32
+}
+
+async fn serve_one(s: DataStream, target: &Target, slot: &mut [u8; SLOT], circuits: &Circuits, circuit: u32) -> Result<(), String> {
     let (mut r, mut w) = s.split();
     let mut short = [0u8; SHORT];
+    // One deadline for everything the client sends (BW-1).
+    let deadline = js_sys::Date::now() + f64::from(READ_MS);
     // The head (and, for a submit, the body after it) into the slot.
     let mut have = 0usize;
-    let head_end = with_timeout(READ_MS, async {
+    let head_end = with_timeout(left(deadline), async {
         loop {
             if let Some(p) = slot[..have].windows(4).position(|x| x == b"\r\n\r\n") {
                 return Ok(p + 4);
@@ -1260,7 +1412,19 @@ async fn serve_one(s: DataStream, target: &Target, slot: &mut [u8; SLOT]) -> Res
             }
             Ok(Route::Submit(len)) => {
                 drop(h);
-                Out::Short(match submit_one(&mut r, host, slot, head_end, have, len).await {
+                // One submit per circuit per window (G.18.3): a new one takes a new circuit.
+                let now = js_sys::Date::now();
+                let early = circuits.borrow_mut().iter_mut().find(|x| x.0 == circuit).is_some_and(|x| {
+                    let early = x.2 > 0.0 && now - x.2 < SUBMIT_EVERY_MS;
+                    if !early {
+                        x.2 = now;
+                    }
+                    early
+                });
+                if early {
+                    break 'resp Out::Short(gateway::refusal(Refusal::Busy, &mut short));
+                }
+                Out::Short(match submit_one(&mut r, host, slot, head_end, have, len, deadline).await {
                     Ok(Ok((no, seq))) => gateway::answer(no, seq, &mut short),
                     Ok(Err(refusal)) => gateway::refusal(refusal, &mut short),
                     Err(code) => gateway::status(code, &mut short),
@@ -1273,9 +1437,14 @@ async fn serve_one(s: DataStream, target: &Target, slot: &mut [u8; SLOT]) -> Res
         Out::Short(n) => &short[..*n],
         Out::Shared(b) => &b[..],
     };
-    let _ = w.write_all(bytes).await;
-    let _ = w.flush().await;
-    let _ = w.close().await;
+    // A reader that does not drain does not keep the slot (BW-1): 5 s, then DRAIN bytes/s.
+    let write_ms = (5_000 + bytes.len() as u64 * 1000 / DRAIN).min(u64::from(SERVE_MS)) as u32;
+    let _ = with_timeout(write_ms, async {
+        w.write_all(bytes).await.map_err(|e| e.to_string())?;
+        w.flush().await.map_err(|e| e.to_string())?;
+        w.close().await.map_err(|e| e.to_string())
+    })
+    .await;
     Ok(())
 }
 
@@ -1299,12 +1468,12 @@ async fn read_to<R: futures::AsyncRead + Unpin>(r: &mut R, slot: &mut [u8; SLOT]
 
 /// G.6.2 steps 1–9 for one submit: the header (checked before any body byte is read), the
 /// body, then the wait for the publish. `Err(status)`: the request itself was bad or slow.
-async fn submit_one<R: futures::AsyncRead + Unpin>(r: &mut R, host: &Weak<RefCell<Host>>, slot: &mut [u8; SLOT], body_at: usize, mut have: usize, len: usize) -> Result<Result<(u64, u64), Refusal>, u16> {
+async fn submit_one<R: futures::AsyncRead + Unpin>(r: &mut R, host: &Weak<RefCell<Host>>, slot: &mut [u8; SLOT], body_at: usize, mut have: usize, len: usize, deadline: f64) -> Result<Result<(u64, u64), Refusal>, u16> {
     let end = body_at + len;
     if len < HEADER_LEN || have > end {
         return Err(400);
     }
-    with_timeout(READ_MS, read_to(r, slot, &mut have, body_at + HEADER_LEN)).await.map_err(|_| 408u16)?;
+    with_timeout(left(deadline), read_to(r, slot, &mut have, body_at + HEADER_LEN)).await.map_err(|_| 408u16)?;
     let head: &[u8; HEADER_LEN] = slot[body_at..body_at + HEADER_LEN].try_into().expect("188 bytes");
     let now = now_s();
     let h = host.upgrade().ok_or(503u16)?;
@@ -1317,7 +1486,7 @@ async fn submit_one<R: futures::AsyncRead + Unpin>(r: &mut R, host: &Weak<RefCel
         Next::Done { no, seq } => return Ok(Ok((no, seq))),
         Next::ReadBody(s) => s,
     };
-    with_timeout(READ_MS, read_to(r, slot, &mut have, end)).await.map_err(|_| 408u16)?;
+    with_timeout(left(deadline), read_to(r, slot, &mut have, end)).await.map_err(|_| 408u16)?;
     let h = host.upgrade().ok_or(503u16)?;
     let id = match h.borrow_mut().submit_body(&hd, replay_slot, &slot[body_at + HEADER_LEN..end], now_s()) {
         Ok(id) => id,

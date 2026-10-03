@@ -38,16 +38,16 @@ each path is followed by reading the code (cited). Firefox and Safari: the resul
 
 | ID | Severity | Area | Title | Status |
 |---|---|---|---|---|
-| BF-1 | **medium** | Links / posting | The `o=` onion of a `#B=` link is never checked, but it is where every post goes, and it is stored first in the follow entry; the page still says "Verified" | open (confirmed, harness) |
-| BF-2 | **medium** | PoW | No upper limit on the effort a host asks for, and the PoW Workers are never stopped when the reply box changes: a hostile board burns 4 cores per thread opened, until the tab closes | open (confirmed, harness) |
-| BF-3 | **medium** | Follow list | A followed board's onion list only grows (signed mirror strings, unchecked): past 64 KiB the key-file section is refused and the **whole follow list** silently stops saving; the newest mirrors drop off the 9-onion read cap | open (confirmed, harness + code trace) |
-| BF-4 | **medium** | localStorage | Every board opened is cached in localStorage with no size bound and no eviction; one board can fill the origin's quota, and the app's later writes fail silently | open (confirmed, harness) |
-| BF-5 | low | Storage at rest | Board metadata in plaintext outside the key file: catalog text of every board opened (followed or not, also for temporary identities), mirror onion seeds, mirror and IPFS lists, drafts | open (confirmed, harness) |
-| BF-6 | low | Supply chain / CSP | `pow-worker.js` and `store-worker.js` have no integrity pin, and Workers run without the page's CSP | open (confirmed, csp.mjs) |
-| BF-7 | low | UI / identity | A board's identity is never shown to readers; untitled rows and see-also links show only `k51qzi5uqu5d…`, the prefix every board name has | open (confirmed, trace) |
-| BF-8 | low | Trips / consent | No warning that a trip removes deniability (G.4 promises one), and the trip label stays filled when the reader moves to another board | open (confirmed, trace) |
-| BF-9 | low | Owner UI | Irreversible bulk moderation (delete all of a trip, ban, prune, mass delete) has no confirmation, and the owner view re-renders every 3 s under the pointer | open (unconfirmed: UI race) |
-| BF-10 | info | Same origin | The spike pages share the app's origin and storage and load the Tor build without integrity; they have no injection sink | open (info) |
+| BF-1 | **medium** | Links / posting | The `o=` onion of a `#B=` link is never checked, but it is where every post goes, and it is stored first in the follow entry; the page still says "Verified" | fixed
+| BF-2 | **medium** | PoW | No upper limit on the effort a host asks for, and the PoW Workers are never stopped when the reply box changes: a hostile board burns 4 cores per thread opened, until the tab closes | fixed
+| BF-3 | **medium** | Follow list | A followed board's onion list only grows (signed mirror strings, unchecked): past 64 KiB the key-file section is refused and the **whole follow list** silently stops saving; the newest mirrors drop off the 9-onion read cap | fixed
+| BF-4 | **medium** | localStorage | Every board opened is cached in localStorage with no size bound and no eviction; one board can fill the origin's quota, and the app's later writes fail silently | fixed
+| BF-5 | low | Storage at rest | Board metadata in plaintext outside the key file: catalog text of every board opened (followed or not, also for temporary identities), mirror onion seeds, mirror and IPFS lists, drafts | fixed
+| BF-6 | low | Supply chain / CSP | `pow-worker.js` and `store-worker.js` have no integrity pin, and Workers run without the page's CSP | fixed
+| BF-7 | low | UI / identity | A board's identity is never shown to readers; untitled rows and see-also links show only `k51qzi5uqu5d…`, the prefix every board name has | fixed
+| BF-8 | low | Trips / consent | No warning that a trip removes deniability (G.4 promises one), and the trip label stays filled when the reader moves to another board | fixed
+| BF-9 | low | Owner UI | Irreversible bulk moderation (delete all of a trip, ban, prune, mass delete) has no confirmation, and the owner view re-renders every 3 s under the pointer | fixed
+| BF-10 | info | Same origin | The spike pages share the app's origin and storage and load the Tor build without integrity; they have no injection sink | open (accepted)
 
 Counts: 4 medium, 5 low, 1 info. No critical or high. No DOM injection was found (see "What is solid").
 
@@ -365,3 +365,20 @@ measurements are done (or serve them from another origin), as W-2 advises for `c
 4. The plain HTML page of a board (`crates/board/src/page.rs`). See-also onions are escaped
    (`esc`, `:133-144`, glanced at only), but they reach the page unchecked, as an `http://<text>/`
    href. A mirror serving another board's page is the case to test.
+
+## Fixes (2026-10-03)
+
+Plan: [BOARDS-AUDIT-FIX-PLAN.md](BOARDS-AUDIT-FIX-PLAN.md). Checked in the Tor lab (board, board UI, devices, online-notice E2Es); the reader-side checks natively.
+
+| ID | Change |
+|---|---|
+| BF-1 | The manifest signs the board's own onion (`host`, set at creation from the board's onion key; readers check it is a v3 onion). The reply box posts only to it; a link's `o=`/`m=` are where to read first. The board view says where posts go. Follow entries store the signed host and mirrors, so the online notice probes the signed host too |
+| BF-2 | A reply box refuses more than ×64 the default efforts (`E_BOARD_POW_TOO_HIGH`) and shows the effort it solves at; a solve stops (its Workers terminate) when the box changes, and its progress writes only into its own box |
+| BF-3 | Readers refuse mirror and "see also" strings that are not v3 onions (`verify::manifest`); a follow entry is replaced by the signed host and mirrors on every read (no growth); a read tries the signed addresses first, 9 at most; a refused follow-list section is reported |
+| BF-4 | The catalog cache keeps title, sequence and the first 60 catalog rows, 32 KiB at most, 8 boards (oldest out), in this tab's **sessionStorage**, labelled "the last verified copy, not checked again yet". The next-visit instant catalog (B-UX-3) now comes from the follow list's row text |
+| BF-5 | Nothing of boards in localStorage (older keys are removed at start). Mirror onion keys derive from the identity (`HKDF(seed, "p2pchat/board-mirror/" ‖ name)`, random per tab for a temporary identity); the boards mirrored and published to IPFS live in the key file (section 0x07), in RAM for a temporary identity. Drafts stay in this tab's sessionStorage |
+| BF-6 | `pow-worker.js` and `store-worker.js` are fetched with their SHA-384 (`<meta name="ephem-pow-worker">`, `ephem-store-worker`) and started from `blob:` URLs, so they run under the page's CSP (`worker-src 'self' blob:`); no pin, no Worker; `ephem_pow.wasm` is no longer fetched without its pin. `build.sh` fails if the PoW module ever imports JS glue |
+| BF-7 | Boards are named with the end of their name (`Title · …abcd1234`) in rows, headers, the owner view and "see also" links |
+| BF-8 | The first trip post on a board asks first (the deniability warning of G.4); the trip field is cleared when another board opens |
+| BF-9 | Ban, prune, "delete all of this trip" and "delete from No. N" ask first; mass deletes get the 5 s undo; the owner view does not re-render while the pointer is over it |
+| BF-10 | Accepted until the B-P1b and B-P11 measurements are done; then the spike pages leave the published branch |

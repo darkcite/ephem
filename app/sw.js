@@ -11,7 +11,7 @@
 //   Tor build itself (pkg/ephem_tor*, §28.2, integrity-pinned by the pages) is cached on first
 //   use, so direct users never download it. The build id covers it.
 // VERSION, FILES and TOR_FILES are written by tools/stamp.py (run by ./build.sh).
-const VERSION = '9861f8f0fae4';
+const VERSION = 'c14f76ce7f8e';
 const FILES = ["./", "index.html", "tor.html", "channel.html", "redirect.js", "app.css", "app.js", "slots.js", "bridges.js", "channels.js", "boards.js", "pow-worker.js", "store-worker.js", "ui.js", "perf.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
 const TOR_FILES = ["pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm", "pkg/ephem_pow.wasm"];
 const CACHE = `ephem-${VERSION}`;

@@ -18,7 +18,7 @@ use std::time::Instant;
 const T0: u64 = 1_790_000_000;
 
 fn main() {
-    let board = Board::new(&[1; 32], "Throughput", "", "", T0).unwrap();
+    let board = Board::new(&[1; 32], &ephem_board::onion::address(&[0xAA; 32]), "Throughput", "", "", T0).unwrap();
     let name = board.name().clone();
     let mut h = Host::new(board, Intake::new(&name, [2; 32], Efforts { reply: 1, thread: 1 }, T0), [9; 32], T0 * 1000);
     // 150 threads by the owner (no intake), then replies from posters through the intake.

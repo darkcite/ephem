@@ -97,6 +97,10 @@ impl Problem {
 pub struct Bridges {
     pub brokers: Vec<String>,
     pub fingerprints: Vec<String>,
+    /// Per fingerprint (same order), the brokers its own lines name: a bridge's offers go only
+    /// to these (BW-6: a private bridge is never offered to the Tor Project's broker because
+    /// another line uses it).
+    pub routes: Vec<Vec<String>>,
     pub ice: Vec<String>,
     /// `(line number from 1, problem)`, in order.
     pub problems: Vec<(u32, Problem)>,
@@ -226,11 +230,21 @@ fn parse_line(line: &str, n: u32, out: &mut Bridges) -> Result<(), Problem> {
         stuns.extend_from_slice(&DEFAULT_ICE);
     }
     let fp_upper = fp.to_ascii_uppercase();
-    if !out.fingerprints.contains(&fp_upper) {
-        if out.fingerprints.len() < BRIDGE_ADDRS.len() {
+    let route = match out.fingerprints.iter().position(|f| *f == fp_upper) {
+        Some(i) => Some(i),
+        None if out.fingerprints.len() < BRIDGE_ADDRS.len() => {
             out.fingerprints.push(fp_upper);
-        } else {
+            out.routes.push(Vec::new());
+            Some(out.fingerprints.len() - 1)
+        }
+        None => {
             out.problems.push((n, Problem::TooManyBridges));
+            None
+        }
+    };
+    if let Some(i) = route {
+        for b in brokers {
+            push_unique(&mut out.routes[i], b);
         }
     }
     for b in brokers {
@@ -255,6 +269,18 @@ mod tests {
     // As Tor Browser ships them (13.5+), one per line.
     const TOR_BROWSER: &str = "snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72 fingerprint=2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://1098762253.rsc.cdn77.org/ fronts=www.cdn77.com,www.phpmyadmin.net ice=stun:stun.antisip.com:3478,stun:stun.epygi.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.mixvoip.com:3478,stun:stun.nextcloud.com:3478,stun:stun.bethesda.net:3478,stun:stun.nextcloud.com:443 utls-imitate=hellorandomizedalpn
 snowflake 192.0.2.4:80 8838024498816A039FCBBAB14E6F40A0843051FA fingerprint=8838024498816A039FCBBAB14E6F40A0843051FA url=https://1098762253.rsc.cdn77.org/ fronts=www.cdn77.com,www.phpmyadmin.net ice=stun:stun.antisip.com:3478,stun:stun.epygi.com:3478 utls-imitate=hellorandomizedalpn";
+
+    /// BW-6: a private bridge's offers go to its own broker only, never to the Tor Project's
+    /// because another line has no `url=`.
+    #[test]
+    fn brokers_stay_with_their_lines() {
+        let private = "snowflake 192.0.2.9:1 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA url=https://my-broker.example/";
+        let public = "snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72";
+        let b = parse(&format!("{private}\n{public}"));
+        assert_eq!(b.fingerprints.len(), 2);
+        assert_eq!(b.routes[0], vec!["https://my-broker.example/".to_owned()], "the private bridge: its broker only");
+        assert_eq!(b.routes[1], DEFAULT_BROKERS.to_vec(), "the public line: the Tor Project's");
+    }
 
     #[test]
     fn tor_browser_lines() {

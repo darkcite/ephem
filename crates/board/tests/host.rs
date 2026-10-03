@@ -148,7 +148,7 @@ fn posted(a: Answer) -> (u64, u64) {
 
 #[test]
 fn owner_and_two_posters() {
-    let board = Board::new(&[1; 32], "Lab board", "about", "be nice", T0).unwrap();
+    let board = Board::new(&[1; 32], &ephem_board::onion::address(&[0xAA; 32]), "Lab board", "about", "be nice", T0).unwrap();
     let intake = Intake::new(board.name(), [2; 32], LOW, T0);
     let mut ms = T0 * 1000;
     let mut h = Host::new(board, intake, [9; 32], ms);
@@ -206,7 +206,7 @@ fn owner_and_two_posters() {
 
 #[test]
 fn a_full_board_prunes_its_oldest_thread() {
-    let board = Board::new(&[1; 32], "Full", "", "", T0).unwrap();
+    let board = Board::new(&[1; 32], &ephem_board::onion::address(&[0xAA; 32]), "Full", "", "", T0).unwrap();
     let intake = Intake::new(board.name(), [2; 32], LOW, T0);
     let mut ms = T0 * 1000;
     let mut h = Host::new(board, intake, [9; 32], ms);
@@ -242,7 +242,7 @@ fn settle(h: &mut Host, ms: &mut u64) {
 fn owner_moderation() {
     use ephem_board::board::Entry;
     use ephem_board::own::Switches;
-    let board = Board::new(&[1; 32], "Moderated", "", "", T0).unwrap();
+    let board = Board::new(&[1; 32], &ephem_board::onion::address(&[0xAA; 32]), "Moderated", "", "", T0).unwrap();
     let intake = Intake::new(board.name(), [2; 32], LOW, T0);
     let mut ms = T0 * 1000;
     let mut h = Host::new(board, intake, [9; 32], ms);
@@ -275,7 +275,10 @@ fn owner_moderation() {
     assert_eq!(tripper.post(&mut h, ms, t, "", "again", false), Answer::Refused { status: 409, code: Refusal::Refused.code() });
     h.unban(&tripper.0.verifying_key().to_bytes());
 
-    // Trips-only: an anonymous post is refused, a known trip passes, a new trip is refused.
+    // Trips-only: an anonymous post is refused, a known trip passes (one that posted in two
+    // different hours, BC-5), a new trip is refused.
+    ms += 3_600_000;
+    posted(tripper.post(&mut h, ms, t, "", "an hour later", false));
     h.set_switches(Switches { trips_only: true, ..h.switches() });
     ms += 2_000;
     assert_eq!(anon.post(&mut h, ms, t, "", "anon under trips-only", false), Answer::Refused { status: 423, code: Refusal::Paused.code() });
@@ -323,7 +326,7 @@ fn owner_moderation() {
     assert_eq!(again.own.bans.len(), 1);
     assert!(again.switches().trips_only && again.switches().panic_trips);
     assert_eq!(again.intake.base, LOW, "efforts come back too");
-    assert!(again.own.known.contains(&tripper.0.verifying_key().to_bytes()));
+    assert!(again.own.knows(&tripper.0.verifying_key().to_bytes()));
     let wrong = Host::new(Board::load(&[1; 32], verify::read(&key.verifying_key(), &name, &root, &h.served.blocks().map(|(c, b)| (c.clone(), b.to_vec())).collect::<Vec<_>>(), &[]).unwrap(), Vec::new()).unwrap(), Intake::new(&name, [2; 32], Efforts::DEFAULT, T0), [8; 32], ms + 1_000);
     assert!(wrong.own.bans.is_empty(), "another key opens nothing");
 }
@@ -331,7 +334,7 @@ fn owner_moderation() {
 #[test]
 fn a_stale_root_shows_later_deletions() {
     use ephem_board::board::Entry;
-    let board = Board::new(&[1; 32], "Stale", "", "", T0).unwrap();
+    let board = Board::new(&[1; 32], &ephem_board::onion::address(&[0xAA; 32]), "Stale", "", "", T0).unwrap();
     let intake = Intake::new(board.name(), [2; 32], LOW, T0);
     let mut ms = T0 * 1000;
     let mut h = Host::new(board, intake, [9; 32], ms);
@@ -355,7 +358,7 @@ fn a_stale_root_shows_later_deletions() {
 
 #[test]
 fn plain_pages_for_tor_browser() {
-    let board = Board::new(&[1; 32], "Pages <b>", "about & more", "no <script>", T0).unwrap();
+    let board = Board::new(&[1; 32], &ephem_board::onion::address(&[0xAA; 32]), "Pages <b>", "about & more", "no <script>", T0).unwrap();
     let intake = Intake::new(board.name(), [2; 32], LOW, T0);
     let mut ms = T0 * 1000;
     let mut h = Host::new(board, intake, [9; 32], ms);
@@ -378,7 +381,7 @@ fn plain_pages_for_tor_browser() {
 
 #[test]
 fn stale_mode_after_expiry() {
-    let board = Board::new(&[1; 32], "Stale", "", "", T0).unwrap();
+    let board = Board::new(&[1; 32], &ephem_board::onion::address(&[0xAA; 32]), "Stale", "", "", T0).unwrap();
     let intake = Intake::new(board.name(), [2; 32], LOW, T0);
     let ms = T0 * 1000;
     let mut h = Host::new(board, intake, [9; 32], ms);
@@ -398,9 +401,11 @@ fn stale_mode_after_expiry() {
 
 #[test]
 fn see_also_links() {
-    let mut board = Board::new(&[1; 32], "Linked", "", "", T0).unwrap();
-    let other = format!("k51qzi5uqu5dl{}@{}.onion", "a".repeat(10), "b".repeat(56));
+    let mut board = Board::new(&[1; 32], &ephem_board::onion::address(&[0xAA; 32]), "Linked", "", "", T0).unwrap();
+    let onion = ephem_board::onion::address(&[0xBB; 32]);
+    let other = format!("{}@{onion}", Board::new(&[2; 32], &onion, "Other", "", "", T0).unwrap().name().to_text());
     assert!(board.set_see_also(vec!["javascript:alert(1)".into()]).is_err(), "only <name>@<onion>");
+    assert!(board.set_see_also(vec![format!("k51qzi5uqu5dl{}@{}.onion", "a".repeat(10), "b".repeat(56))]).is_err(), "a real name and a v3 onion (BC-14)");
     board.set_see_also(vec![other.clone()]).unwrap();
     let intake = Intake::new(board.name(), [2; 32], LOW, T0);
     let ms = T0 * 1000;
@@ -408,5 +413,5 @@ fn see_also_links() {
     let v = read(&mut h, ms, &[]);
     assert_eq!(v.manifest.see_also, vec![other], "signed into the manifest, verified by readers");
     let page = String::from_utf8(serve(&mut h, &get("/"), ms)).unwrap();
-    assert!(page.contains(&format!("<a href=\"http://{}.onion/\">", "b".repeat(56))));
+    assert!(page.contains(&format!("<a href=\"http://{onion}/\">")));
 }

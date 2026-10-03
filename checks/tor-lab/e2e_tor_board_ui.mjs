@@ -83,7 +83,7 @@ try {
   const a = await page('reader A');
   await a.goto(link.replace('/tor.html#', '/tor.html?a#'));
   await a.waitForFunction(() => /Verified through Tor/.test(document.querySelector('#bd-source')?.textContent), null, { timeout: T });
-  check('a reader opens the link: the board, verified', (await a.textContent('#bd-title')) === '▦ Lab /b/' && (await a.textContent('#bd-rules')) === 'Be kind.');
+  check('a reader opens the link: the board, verified', (await a.textContent('#bd-title')).startsWith('▦ Lab /b/ · …') && (await a.textContent('#bd-rules')) === 'Be kind.');
   const s1 = await postFromBox(a, 'First thread', 'Hello board\n>be me\n>posting from the lab');
   await a.waitForFunction(() => document.querySelectorAll('#bd-posts li').length >= 1, null, { timeout: T });
   const gt = await a.$$eval('#bd-posts .gt', (g) => g.map((x) => x.textContent));
@@ -139,7 +139,7 @@ try {
   const t0 = Date.now();
   await c.goto(link2.replace('/tor.html#', '/tor.html?c#'));
   await c.waitForFunction(() => /Verified through Tor/.test(document.querySelector('#bd-source')?.textContent), null, { timeout: T });
-  check('owner offline: a new reader reads the board from the mirror', (await c.textContent('#bd-title')) === '▦ Lab /b/' && (await c.textContent('#bd-catalog')).includes('First thread'), `${Date.now() - t0} ms`);
+  check('owner offline: a new reader reads the board from the mirror', (await c.textContent('#bd-title')).startsWith('▦ Lab /b/ · …') && (await c.textContent('#bd-catalog')).includes('First thread'), `${Date.now() - t0} ms`);
   await c.locator('#bd-catalog li').first().click();
   await c.waitForFunction(() => document.querySelectorAll('#bd-posts li').length === 2, null, { timeout: T });
   const said = await postFromBox(c, '', 'written while the host is away');

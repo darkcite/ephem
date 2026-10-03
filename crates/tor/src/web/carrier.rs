@@ -53,6 +53,8 @@ pub struct SnowflakeParams {
     pub brokers: Vec<String>,
     /// The Snowflake bridges (RSA fingerprints): the broker matches a proxy to one of them.
     pub fingerprints: Vec<String>,
+    /// Per fingerprint, the brokers of its own lines (empty: `brokers`).
+    pub routes: Vec<Vec<String>>,
     /// `stun:` URLs for the proxy connections only.
     pub ice: Vec<String>,
     /// NAT type hint for the broker's proxy matching: "unknown" on the real network (the

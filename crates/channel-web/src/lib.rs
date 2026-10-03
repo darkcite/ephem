@@ -91,8 +91,14 @@ struct State {
     vault: Vault,
     vault_seq: u64,
     vault_known: bool,
+    /// A vault written by a newer app was seen (BW-3): this tab never publishes over it, even
+    /// after a later 404 from the routing service.
+    vault_newer: bool,
     /// Boards hosted here (docs/BOARDS.md).
     boards: boards::Boards,
+    /// Bumped at every identity change (BW-8): work started under another identity (a takeover,
+    /// a mirror) checks it after each wait and drops its result.
+    pub(crate) generation: u64,
 }
 
 /// An owned channel's onion service and what it serves.
@@ -114,7 +120,11 @@ impl State {
         self.vault = Vault::default();
         self.vault_seq = 0;
         self.vault_known = false;
+        self.vault_newer = false;
         self.boards.hosted.clear();
+        // Board mirrors and the deletions read here go too (BW-9, as channel mirrors, M-1).
+        self.boards.forget();
+        self.generation += 1;
     }
 
     /// The cell serving channel `name` (updated in place if it is online), holding `h`.
@@ -229,7 +239,7 @@ impl ChannelApp {
         if !b.usable() {
             return Err(err("no usable snowflake bridge line"));
         }
-        let sf = Snowflake { brokers: b.brokers, fingerprints: b.fingerprints, ice: b.ice, nat: if nat.is_empty() { "unknown".into() } else { nat.into() } };
+        let sf = Snowflake { brokers: b.brokers, fingerprints: b.fingerprints, routes: b.routes, ice: b.ice, nat: if nat.is_empty() { "unknown".into() } else { nat.into() } };
         let tor = Rc::new(Tor::new(sf, network_toml, cache).map_err(err)?);
         *self.st.borrow().tor.borrow_mut() = Some(tor.clone());
         Ok(wasm_bindgen_futures::future_to_promise(async move {
@@ -483,9 +493,14 @@ impl ChannelApp {
             // "delegate error: routing: not found".
             let missing = std::str::from_utf8(&body).is_ok_and(|t| t.contains("not found"));
             if status == 404 || (status == 200 && missing) {
-                // Nothing to protect: the record expired from the DHT (13–86 h without a
-                // republish, V-P2) or never existed. This tab may publish from what it holds.
-                st.borrow_mut().vault_known = true;
+                // The record expired from the DHT (13–86 h without a republish, V-P2) or never
+                // existed: this tab may publish from what it holds. Not over a vault a newer
+                // app wrote (BW-3): that one may only be missing for now.
+                let mut st = st.borrow_mut();
+                if st.vault_newer {
+                    return Err(err("E_VAULT_NEWER: your other device runs a newer Ephem; update the app on this device to manage your channels and boards here"));
+                }
+                st.vault_known = true;
                 return Ok(JsValue::from_str(""));
             }
             if status != 200 {
@@ -499,6 +514,7 @@ impl ChannelApp {
                 let mut st = st.borrow_mut();
                 st.vault_seq = st.vault_seq.max(seq);
                 st.vault_known = false;
+                st.vault_newer = true;
                 return Err(err("E_VAULT_NEWER: your other device runs a newer Ephem; update the app on this device to manage your channels and boards here"));
             }
             let (v, seq) = opened.map_err(|e| err(format!("vault: {e:?}")))?;
@@ -739,7 +755,7 @@ fn publish_vault(st_rc: &Rc<RefCell<State>>, host: &str, extra_root: &[u8], devi
     let dev = unhex16(device).ok_or_else(|| err("device id: 32 hex digits"))?;
     let (v, seq, record, name) = {
         let st = st_rc.borrow();
-        if (st.vault_seq > 0 || !channels) && !st.vault_known {
+        if st.vault_newer || ((st.vault_seq > 0 || !channels) && !st.vault_known) {
             return Err(err("the list of your channels could not be read yet; not overwriting it"));
         }
         let (lease, entries) = if channels {
@@ -845,6 +861,8 @@ fn vault_json(v: &Vault, seq: u64) -> String {
         }
         o.push_str("\",\"title\":");
         json::string(&mut o, &b.title);
+        o.push_str(",\"root\":");
+        json::string(&mut o, &b.root.as_ref().map(Cid::to_text).unwrap_or_default());
         o.push_str(",\"mirrors\":[");
         for (j, m) in b.mirrors.iter().enumerate() {
             if j > 0 {

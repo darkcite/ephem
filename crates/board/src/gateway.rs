@@ -16,7 +16,7 @@
 //! **Copies (G.14.2):** the request head is parsed in place; refusals, `/pow` and answers are
 //! written into a caller's fixed buffer (no allocation). Block responses are built once into a
 //! `Vec` (the HTTP head, then the body: one copy of public data); the index is built once per
-//! version and shared (`Rc`).
+//! version and shared (`Rc`), and so are the last [`PAGES`] plain pages asked for (BC-10).
 
 use crate::pipeline::{PowInfo, Refusal};
 use crate::page;
@@ -44,6 +44,8 @@ pub const MAX_CAR: usize = 1536 * 1024;
 pub const ANSWER_LEN: usize = 16;
 /// A buffer for the short responses (refusals, answers, `/pow`).
 pub const SHORT: usize = 256;
+/// Plain pages kept per version (a full thread's page is about 1 MiB).
+pub const PAGES: usize = 16;
 
 
 /// What a request asks for.
@@ -224,6 +226,10 @@ pub struct Served {
     index: Rc<[u8]>,
     /// Who serves it (the plain pages say so).
     pub served: page::Served,
+    /// The record's sequence (checked once, not per page).
+    seq: u64,
+    /// Plain pages of this version, most recent last.
+    pages: std::cell::RefCell<Vec<(Route, Rc<[u8]>)>>,
 }
 
 impl page::Blocks for Served {
@@ -257,7 +263,8 @@ impl Served {
         let blocks: HashMap<Cid, Vec<u8>> = ephem_channel::gateway::reachable(&root, blocks).into_iter().collect();
         let (cids, whole) = index_cids(&root, &blocks)?;
         let index = index_response(&record, &root, &cids, &blocks)?;
-        Some(Self { name_text: name.to_text(), name, root, record, blocks, whole, index, served })
+        let seq = ephem_channel::ipns::verify(&name, &record, 0).map_or(0, |r| r.sequence);
+        Some(Self { name_text: name.to_text(), name, root, record, blocks, whole, index, served, seq, pages: Default::default() })
     }
 
     /// The next version: `added` blocks (those the store does not hold yet) and `live`, every
@@ -273,6 +280,8 @@ impl Served {
         }
         let (cids, whole) = index_cids(&root, &self.blocks)?;
         self.index = index_response(&record, &root, &cids, &self.blocks)?;
+        self.seq = ephem_channel::ipns::verify(&self.name, &record, 0).map_or(0, |r| r.sequence);
+        self.pages.borrow_mut().clear();
         (self.root, self.record, self.whole) = (root, record, whole);
         Some(gone)
     }
@@ -291,16 +300,28 @@ impl Served {
         self.blocks.iter().map(|(c, b)| (c, b.as_slice()))
     }
 
-    /// The sequence of the record served.
-    fn sequence(&self) -> u64 {
-        ephem_channel::ipns::verify(&self.name, &self.record, 0).map_or(0, |r| r.sequence)
+    /// A plain page, from the cache or built now.
+    fn page(&self, r: &Route) -> Rc<[u8]> {
+        if let Some((_, p)) = self.pages.borrow().iter().find(|(x, _)| x == r) {
+            return p.clone();
+        }
+        let p = match r {
+            Route::Page(n) => html(page::catalog(self, &self.name_text, &self.root, self.seq, self.served, *n)),
+            Route::Thread(no) => html(page::thread(self, &self.name_text, &self.root, self.seq, self.served, *no)),
+            _ => unreachable!("a page route"),
+        };
+        let mut pages = self.pages.borrow_mut();
+        if pages.len() == PAGES {
+            pages.remove(0);
+        }
+        pages.push((r.clone(), p.clone()));
+        p
     }
 
     /// The response to a read route (`Pow` and `Submit` belong to the host's intake).
     pub fn respond(&self, r: &Route) -> Rc<[u8]> {
         match r {
-            Route::Page(p) => html(page::catalog(self, &self.name_text, &self.root, self.sequence(), self.served, *p)),
-            Route::Thread(no) => html(page::thread(self, &self.name_text, &self.root, self.sequence(), self.served, *no)),
+            Route::Page(_) | Route::Thread(_) => self.page(r),
             Route::Record => response(200, CT_RECORD, "", &self.record).into(),
             Route::Index => self.index.clone(),
             Route::Raw(c) => match self.blocks.get(c) {

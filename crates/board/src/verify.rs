@@ -17,7 +17,10 @@
 //!   exactly 64 posts; `r` is posts − 1; each post's `s.b` is this board and its signature
 //!   verifies (a capcode post with the board key);
 //! - a post whose hash is on the deletion list (this root's, or a newer one the reader saw) is
-//!   shown as deleted, even from an older root that a stale mirror serves.
+//!   shown as deleted, even from an older root that a stale mirror serves; a thread whose OP is
+//!   listed is deleted whole, and its catalog entry loses its subject and excerpt (BC-3, BC-4);
+//! - the manifest's host, mirrors and "see also" entries are well-formed v3 onions (BF-1, BF-3);
+//!   catalog numbers stay within their limits whether or not the thread is held (BC-9).
 
 use crate::board::{Entry, Manifest, ModEntry, Post, post_hash};
 use crate::post::{self, Signed};
@@ -33,6 +36,8 @@ use std::collections::HashMap;
 pub struct CatalogEntry {
     pub no: u64,
     pub thread: Cid,
+    /// The OP's hash: a listed OP blanks the entry.
+    pub op: [u8; 32],
     pub bump: u64,
     pub replies: u64,
     pub sub: String,
@@ -132,11 +137,15 @@ fn manifest(v: &Value, key: &VerifyingKey) -> Result<Manifest, BoardError> {
         rules: text(v, "rules")?,
         pk: v.get("pk").and_then(Value::bytes).and_then(|b| b.try_into().ok()).ok_or(BoardError::Invalid)?,
         created: uint(v, "created")?,
+        host: text(v, "host")?,
         mirrors: texts(v, "mirrors", limits::MIRRORS)?,
         see_also: texts(v, "see_also", limits::SEE_ALSO)?,
         ids: flag(v, "ids")?,
     };
     if man.pk != key.to_bytes() || man.title.len() > limits::TITLE || man.about.len() > limits::ABOUT || man.rules.len() > limits::RULES {
+        return Err(BoardError::Invalid);
+    }
+    if !crate::onion::valid(&man.host) || !man.mirrors.iter().all(|m| crate::onion::valid(m)) || !man.see_also.iter().all(|l| crate::onion::see_also_valid(l)) {
         return Err(BoardError::Invalid);
     }
     Ok(man)
@@ -156,7 +165,7 @@ fn entry(v: &Value, name: &str, board_pk: &[u8; 32], deleted: &dyn Fn(&[u8; 32])
     if s.b != name || cap > crate::board::cap::OWNER || (cap == crate::board::cap::OWNER && s.k != *board_pk) {
         return Err(BoardError::Invalid);
     }
-    s.verify(&sig)?;
+    s.verify_as(&sig, cap == crate::board::cap::OWNER)?;
     if deleted(&post_hash(&s)) {
         // Deleted since (a newer deletion list): shown as deleted by the owner.
         return Ok(Entry::Tomb { no, ts, del: crate::board::del::OWNER, by: 0 });
@@ -202,6 +211,14 @@ fn thread(by: &Blocks<'_>, cid: &Cid, name: &str, pk: &[u8; 32], next_no: u64, d
     }
     if uint(&t, "r")? != entries.len() as u64 - 1 || entries.len() > limits::THREAD_POSTS {
         return Err(BoardError::Invalid);
+    }
+    // A listed OP (a stale root of a thread deleted since): the whole thread is deleted.
+    if matches!(entries[0], Entry::Tomb { .. }) {
+        for e in entries.iter_mut().skip(1) {
+            if let Entry::Post(p) = e {
+                *e = Entry::Tomb { no: p.no, ts: p.ts, del: crate::board::del::OWNER, by: 0 };
+            }
+        }
     }
     Ok(Some(ThreadView { no, sub: text(&t, "sub")?, entries, bump: 0, sticky: flag(&t, "st")?, locked: flag(&t, "lk")? }))
 }
@@ -251,7 +268,7 @@ pub fn read(key: &VerifyingKey, name: &Cid, root: &Cid, blocks: &[Block], known_
         .iter()
         .map(|d| Ok((d.get("h").and_then(Value::bytes).and_then(|b| b.try_into().ok()).ok_or(BoardError::Invalid)?, uint(d, "at")?)))
         .collect::<Result<_, BoardError>>()?;
-    if dels.len() > limits::DELS {
+    if dels.len() > limits::DELS_MAX {
         return Err(BoardError::Invalid);
     }
     let deleted = |h: &[u8; 32]| dels.iter().any(|(x, _)| x == h) || known_dels.contains(h);
@@ -268,6 +285,7 @@ pub fn read(key: &VerifyingKey, name: &Cid, root: &Cid, blocks: &[Block], known_
             let ce = CatalogEntry {
                 no: uint(e, "no")?,
                 thread: e.get("thread").and_then(Value::bytes).and_then(Cid::from_bytes).ok_or(BoardError::Invalid)?,
+                op: e.get("op").and_then(Value::bytes).and_then(|b| b.try_into().ok()).ok_or(BoardError::Invalid)?,
                 bump: uint(e, "bump")?,
                 replies: uint(e, "r")?,
                 sub: text(e, "sub")?,
@@ -275,7 +293,7 @@ pub fn read(key: &VerifyingKey, name: &Cid, root: &Cid, blocks: &[Block], known_
                 sticky: flag(e, "st")?,
                 locked: flag(e, "lk")?,
             };
-            if ce.no % limits::BUCKETS as u64 != i as u64 || !pinned.contains(&ce.thread) || ce.no >= next_no || ce.ex.len() > limits::EXCERPT || ce.sub.len() > limits::SUBJECT {
+            if ce.no % limits::BUCKETS as u64 != i as u64 || !pinned.contains(&ce.thread) || ce.no >= next_no || ce.ex.len() > limits::EXCERPT || ce.sub.len() > limits::SUBJECT || ce.replies >= limits::THREAD_POSTS as u64 {
                 return Err(BoardError::Invalid);
             }
             catalog.push(ce);
@@ -292,8 +310,15 @@ pub fn read(key: &VerifyingKey, name: &Cid, root: &Cid, blocks: &[Block], known_
                 return Err(BoardError::Invalid);
             }
             t.bump = ce.bump;
+            if deleted(&ce.op) {
+                t.sub.clear();
+            }
             threads.push(t);
         }
+    }
+    for ce in catalog.iter_mut().filter(|ce| deleted(&ce.op)) {
+        ce.sub.clear();
+        ce.ex.clear();
     }
     let archive = list(&node(&by, &link(&r, "archive")?)?, "t")?
         .iter()

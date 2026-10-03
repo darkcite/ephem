@@ -40,7 +40,7 @@ PRECACHE = ["./", "index.html", "tor.html", "channel.html", "redirect.js"] + HAS
     "icons/apple-touch-icon.png",
 ]
 CSP = ("default-src 'none'; script-src 'self' 'wasm-unsafe-eval' '{importmap}'; style-src 'self'; "
-       "img-src 'self' data: blob:; connect-src 'self'{connect}; worker-src 'self'; manifest-src 'self'; "
+       "img-src 'self' data: blob:; connect-src 'self'{connect}; worker-src 'self' blob:; manifest-src 'self'; "
        "media-src 'self' blob:; base-uri 'none'; form-action 'none'")
 # Pages reach only a Snowflake broker with fetch (§28.6; the direct page for its channel tabs);
 # everything else goes through Tor or WebRTC. The broker may be the user's own (bridge lines,
@@ -84,6 +84,10 @@ def stamp_block(hashes, modules, wasm, connect):
         f'<meta name="ephem-wasm" content="{hashes[wasm]}">',
         f'<meta name="ephem-tor-wasm" content="{hashes["pkg/ephem_tor_bg.wasm"]}">',
         f'<meta name="ephem-pow-wasm" content="{hashes["pkg/ephem_pow.wasm"]}">',
+        # Board Workers are fetched with these and started from blob: URLs, so they run under
+        # this page's CSP (BF-6).
+        f'<meta name="ephem-pow-worker" content="{hashes["pow-worker.js"]}">',
+        f'<meta name="ephem-store-worker" content="{hashes["store-worker.js"]}">',
         f'<link rel="stylesheet" href="app.css" integrity="{hashes["app.css"]}">',
         f'<script type="importmap">{importmap}</script>',
         f'<script type="module" src="app.js" integrity="{hashes["app.js"]}"></script>',

@@ -27,20 +27,20 @@ the live Tor/Snowflake lab; `cargo audit` and `cargo deny` (not installed); `car
 
 | ID | Severity | Area | Title | Status |
 |---|---|---|---|---|
-| BC-1 | high | moderation (`board.rs`, `host.rs`) | Posts in archived threads cannot be deleted, and a poster can force any thread into the archive within minutes | open (confirmed) |
-| BC-2 | high | PoW / intake (`pipeline.rs`) | One refused new thread a minute raises every effort ×64 while the attacker pays only the grace minimum; R8 then closes new threads | open (confirmed) |
-| BC-3 | medium | moderation / submit (`board.rs:258`, `host.rs:110`) | Anyone can resubmit a deleted post with its published `s`+`sig` (an owner capcode post included); it is published again | open (confirmed) |
-| BC-4 | medium | deletion list (`board.rs:355`) | The 4 096-entry count cap evicts deletions long before 30 days; a stale mirror's pre-deletion root shows the post again | open (confirmed) |
-| BC-5 | medium | switches (`own.rs:87-99`, `host.rs:127`) | Trips-only can be preloaded with an attacker's own "trips", which push the real regulars out of the 512-entry list | open (confirmed) |
-| BC-6 | medium | pre-moderation (`host.rs:348-356`, `own.rs:30`) | 8 posts fill the held queue; with pre-moderation on, everyone else is refused | open (confirmed) |
-| BC-7 | medium | host memory (G.5.2/B-M11) | The RAM budget (64 MiB/board, 128 MiB/tab) is not implemented: 936 MiB live and 1.26 GiB peak for one board | open (confirmed) |
-| BC-8 | medium | publish (`board.rs:152-186`) | Each publish re-encodes and re-copies every thread's last chunk (19.4 MiB and 180 ms native for one reply) | open (confirmed) |
-| BC-9 | medium | `page.rs:177`, `verify.rs:278` | A board owner can abort a mirror's tab: the catalog `r` is unchecked for a thread whose chunks are withheld, and it sizes an allocation | open (confirmed) |
-| BC-10 | low | owner-tab CPU | Mass delete and reopen are quadratic; plain pages are rebuilt (with a record verify) on every request | open (confirmed, timings) |
-| BC-11 | low | `pipeline.rs:335` | `h.epoch + 1` overflows on attacker input (panics in debug builds; wraps in release) | open (confirmed in debug) |
-| BC-12 | low | `pipeline.rs:342-354` | A solution is spent when the header is checked: a stream that drops before the body, or a ticket that is evicted, makes the retry `409`, not idempotent | open (unconfirmed by test; traced) |
-| BC-13 | info | `own.rs`, `host.rs:86-87,391-393` | The `own` AEAD nonce is deterministic (time ‖ sequence); no reuse found, but nothing random backs it | open |
-| BC-14 | info | `board.rs:386-401` | `set_mirrors`/`set_see_also` check only length and the `.onion` suffix, not base32 v3 onions | open |
+| BC-1 | high | moderation (`board.rs`, `host.rs`) | Posts in archived threads cannot be deleted, and a poster can force any thread into the archive within minutes | fixed
+| BC-2 | high | PoW / intake (`pipeline.rs`) | One refused new thread a minute raises every effort ×64 while the attacker pays only the grace minimum; R8 then closes new threads | fixed
+| BC-3 | medium | moderation / submit (`board.rs:258`, `host.rs:110`) | Anyone can resubmit a deleted post with its published `s`+`sig` (an owner capcode post included); it is published again | fixed
+| BC-4 | medium | deletion list (`board.rs:355`) | The 4 096-entry count cap evicts deletions long before 30 days; a stale mirror's pre-deletion root shows the post again | fixed
+| BC-5 | medium | switches (`own.rs:87-99`, `host.rs:127`) | Trips-only can be preloaded with an attacker's own "trips", which push the real regulars out of the 512-entry list | fixed (mitigated)
+| BC-6 | medium | pre-moderation (`host.rs:348-356`, `own.rs:30`) | 8 posts fill the held queue; with pre-moderation on, everyone else is refused | fixed
+| BC-7 | medium | host memory (G.5.2/B-M11) | The RAM budget (64 MiB/board, 128 MiB/tab) is not implemented: 936 MiB live and 1.26 GiB peak for one board | fixed (budget; copies remain)
+| BC-8 | medium | publish (`board.rs:152-186`) | Each publish re-encodes and re-copies every thread's last chunk (19.4 MiB and 180 ms native for one reply) | fixed
+| BC-9 | medium | `page.rs:177`, `verify.rs:278` | A board owner can abort a mirror's tab: the catalog `r` is unchecked for a thread whose chunks are withheld, and it sizes an allocation | fixed
+| BC-10 | low | owner-tab CPU | Mass delete and reopen are quadratic; plain pages are rebuilt (with a record verify) on every request | fixed
+| BC-11 | low | `pipeline.rs:335` | `h.epoch + 1` overflows on attacker input (panics in debug builds; wraps in release) | fixed
+| BC-12 | low | `pipeline.rs:342-354` | A solution is spent when the header is checked: a stream that drops before the body, or a ticket that is evicted, makes the retry `409`, not idempotent | fixed
+| BC-13 | info | `own.rs`, `host.rs:86-87,391-393` | The `own` AEAD nonce is deterministic (time ‖ sequence); no reuse found, but nothing random backs it | fixed
+| BC-14 | info | `board.rs:386-401` | `set_mirrors`/`set_see_also` check only length and the `.onion` suffix, not base32 v3 onions | fixed
 
 ## Findings
 
@@ -371,3 +371,24 @@ the v3 version byte and checksum.
    publish time).
 4. The app's poster side: the effort choice (BC-2, fix b) and how it handles `409` after a drop
    (BC-12).
+
+## Fixes (2026-10-03)
+
+Plan: [BOARDS-AUDIT-FIX-PLAN.md](BOARDS-AUDIT-FIX-PLAN.md). Tests: `crates/board/tests/audit.rs` (16, each a finding), plus the existing suites updated where the behaviour changed on purpose.
+
+| ID | Change | Test |
+|---|---|---|
+| BC-1 | `Board::delete`/`delete_many` find posts in archived threads (decoded from their blocks, tombstoned, re-encoded; an archived OP drops the entry); `Board::find` and `Board::select` (ban, mass delete) reach the archive. Each archived thread keeps its number range, so only candidates are decoded | `bc1_a_post_in_an_archived_thread_can_be_deleted`, `bc1_the_owner_finds_and_mass_deletes_archived_posts` |
+| BC-2 | Two multipliers: posts-cap pressure raises both efforts, a **thread flood** (at least `THREAD_FLOOD` = 3 refused new threads in a minute) raises the thread effort only; one or two refused threads a minute are no pressure and never reach R8. The grace accepts the efforts advertised before a raise for `GRACE_S` = 120 s, not the lowest of a whole epoch | `bc2_refused_threads_raise_only_the_thread_effort_and_only_in_a_flood`, `bc2_a_raise_is_enforced_after_the_grace` |
+| BC-3 | `accept` refuses a post whose hash is listed (a hash set beside the list); capcode posts sign with their own prefix (`ephem-board-cap-v1:`); readers blank the subject and excerpt of a catalog entry whose OP is listed (the catalog carries `op`, the OP's hash) and delete a thread whose OP is listed whole | `bc3_a_deleted_post_is_refused_when_resubmitted`, `bc3_bc4_a_stale_root_with_a_deleted_op_shows_nothing_of_it`, `forgeries_and_misplaced_posts_fail` |
+| BC-4 | A deleted thread lists its OP only (not 500 entries); past `DELS` (4 096) only entries older than a record's validity + 1 h go; `DELS_MAX` = 16 384 is the hard cap readers accept | `bc4_deletions_younger_than_a_record_stay_past_the_soft_cap` |
+| BC-5 | Known trips record first/last hour and hours seen; one qualifies for trips-only after posting in 2 different hours; a full list evicts unqualified keys first, then young ones, regulars (≥ 24 h) last. A burst cannot qualify; an attacker preparing keys a day ahead still can (mitigated, not closed) | `own::tests::trips_qualify_slowly_and_regulars_stay`, `owner_moderation` |
+| BC-6 | The held queue keeps the highest efforts (a newcomer that paid more evicts the lowest), and the same text is held once. The cap stays 8 (the `own` block's 64 KiB) | `bc6_a_full_held_queue_keeps_the_highest_efforts` |
+| BC-7 | A byte budget, `BYTES` = 24 MiB of encoded posts (live threads and archive): past it the archive's oldest go, then unprotected threads, then posts are refused (`Busy`). A full board of short posts fits; one of 2 000-byte posts holds about 11 000. The tab still holds about 3 copies (decoded posts, blocks, the served map): deduplicating them is left for later | `bc7_the_board_stays_within_its_byte_budget` |
+| BC-8 | Each thread caches its encoded last chunk and thread block until it changes; every block already served (`held`) is skipped, root-level blocks included, and the `dels` block is cached | `bc8_one_reply_copies_a_few_blocks_not_every_thread` |
+| BC-9 | `page::thread` no longer sizes from `r`; `verify::read` refuses a catalog `r ≥ THREAD_POSTS` whether or not the thread is held | `bc9_a_huge_reply_count_is_refused_and_never_sizes_a_page` |
+| BC-10 | Mass delete selects in one pass and applies with `delete_many` (one pass per thread, one trim); `load` moves each archived thread's blocks out of one map; plain pages are cached per version (16), the record's sequence checked once | `bc10_mass_delete_is_linear` (20 000 posts deleted in one pass; before: 39 s for 75 000 natively) |
+| BC-11 | `checked_add`/`saturating_add` on header epochs | `bc11_an_epoch_at_the_maximum_is_refused_without_overflow` (debug build) |
+| BC-12 | Replay slots keep a state: header seen (a retry reads the body again), admitted (`Busy`: wait), published (the number), refused (`Refused`); a `Busy` at the caps or an eviction returns the slot to "header seen" | `bc12_a_submission_refused_busy_may_be_sent_again`, `every_refusal` |
+| BC-13 | Every seal draws a random 24-byte nonce (`getrandom`, host feature only) | `bc13_every_sealed_own_block_has_its_own_nonce` |
+| BC-14 | Mirrors, "see also" onions and the new signed `host` are checked as v3 onions (base32, checksum, version) by the owner **and** by every reader (`crates/board/src/onion.rs`) | `bc14_bf1_bf3_manifest_onions_are_checked_by_readers`, `onion::tests::known_address` |

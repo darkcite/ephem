@@ -17,6 +17,8 @@
 
 pub mod board;
 pub mod gateway;
+pub mod onion;
+#[cfg(feature = "host")]
 pub mod host;
 pub mod own;
 pub mod page;
@@ -47,8 +49,11 @@ pub mod limits {
     /// Archived (text-only) threads and how long they stay.
     pub const ARCHIVE: usize = 256;
     pub const ARCHIVE_S: u64 = 7 * 24 * 3600;
-    /// Deletion-list entries and how long they stay (longer than any record's validity).
+    /// Deletion-list entries and how long they stay (longer than any record's validity). Past
+    /// `DELS` the oldest go, but only those older than a record's validity (BC-4: a stale root
+    /// must still show them deleted); `DELS_MAX` is the hard cap readers accept.
     pub const DELS: usize = 4_096;
+    pub const DELS_MAX: usize = 16_384;
     pub const DELS_S: u64 = 30 * 24 * 3600;
     /// Moderation log entries.
     pub const MODLOG: usize = 1_024;
@@ -58,6 +63,11 @@ pub mod limits {
     pub const PROTECT_BUMP_S: u64 = 10 * 60;
     /// The encrypted owner-state block (bans, filters, efforts, held posts), padded by the caller.
     pub const OWN: usize = 64 * 1024;
+    /// Encoded bytes of the live threads and the archive (BC-7): past this the archive's oldest
+    /// threads go, then unprotected threads are pruned, then posts are refused (`Busy`). The
+    /// tab holds about three times this (decoded posts, blocks, the served copy): a full board
+    /// of short posts (75 000 × ≈ 250 B) fits, one of long posts holds fewer.
+    pub const BYTES: u64 = 24 * 1024 * 1024;
     /// Record validity (R1) and TTL.
     pub const VALIDITY_S: u64 = 72 * 3600;
     pub const TTL_NS: u64 = 60_000_000_000;

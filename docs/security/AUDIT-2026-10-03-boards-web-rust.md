@@ -28,15 +28,15 @@ All five pass: each asserts the vulnerable behaviour. The baseline `cargo test -
 
 | ID | Severity | Area | Title | Status | Proof |
 |---|---|---|---|---|---|
-| BW-1 | **high** | host / mirror serve loop | 16 slots held for 20 s each by two circuits sending no PoW (slow-loris): the board takes no posts and serves no reads. The code is weaker than G.6.2 and G.18.3 | open | confirmed by trace |
-| BW-2 | **medium** | takeover (G.13) | `take_over` adopts the first source that verifies, whether stale or with thread and `own` blocks left out. Deleted threads come back, threads vanish, bans and switches reset, and the result is republished with a winning sequence | open | confirmed (native test) |
-| BW-3 | **medium** | vault v2 | A 404 from the routing service sets `vault_known = true` even after `E_VAULT_NEWER` or a remembered floor, so this app overwrites a newer-format vault, or publishes one with an empty channel lease and list | open | confirmed by trace |
-| BW-4 | low | mirrors | `pull` accepts thread CARs that lack the thread, and the mirror serves holes. One stale or hostile source stops a pull round (`Ok(None) => break`). `mirror()` adopts the first source, not the newest | open | confirmed (native test) + trace |
-| BW-5 | low | takeover / reopen | `Board::load` clones the whole block set once per archived thread, so cost is O(archive × bytes). Junk in CARs inflates it (+64 MiB → 3 s natively). A pull has no total byte budget | open | confirmed (measured) |
-| BW-6 | low | bridges (F.2) | A custom Snowflake line without `url=` adds the Tor Project brokers to one flat broker list. A private bridge's fingerprint and the client's SDP then go to the Tor Project broker whenever the private broker fails | open | confirmed (native test) + trace |
-| BW-7 | low | fencing | `fence_loop` checks its sources one after another, each with a 90 s timeout. One listed mirror that accepts and stalls delays every fencing round. G.13.5 says "at most every 30 s" | open | confirmed by trace |
-| BW-8 | low | identity switch | Switching identity while a `take_over` is in flight hosts the previous identity's board in the new identity's state. `serve` then puts it on the new identity's board onion, and the new identity's vault lists it | open | confirmed by trace |
-| BW-9 | info | identity switch | `forget_identity` leaves board mirrors and `known_dels` in place (M-1 took channel mirrors down) | open | trace |
+| BW-1 | **high** | host / mirror serve loop | 16 slots held for 20 s each by two circuits sending no PoW (slow-loris): the board takes no posts and serves no reads. The code is weaker than G.6.2 and G.18.3 | fixed (mitigated) | confirmed by trace |
+| BW-2 | **medium** | takeover (G.13) | `take_over` adopts the first source that verifies, whether stale or with thread and `own` blocks left out. Deleted threads come back, threads vanish, bans and switches reset, and the result is republished with a winning sequence | fixed | confirmed (native test) |
+| BW-3 | **medium** | vault v2 | A 404 from the routing service sets `vault_known = true` even after `E_VAULT_NEWER` or a remembered floor, so this app overwrites a newer-format vault, or publishes one with an empty channel lease and list | partly fixed | confirmed by trace |
+| BW-4 | low | mirrors | `pull` accepts thread CARs that lack the thread, and the mirror serves holes. One stale or hostile source stops a pull round (`Ok(None) => break`). `mirror()` adopts the first source, not the newest | fixed | confirmed (native test) + trace |
+| BW-5 | low | takeover / reopen | `Board::load` clones the whole block set once per archived thread, so cost is O(archive × bytes). Junk in CARs inflates it (+64 MiB → 3 s natively). A pull has no total byte budget | fixed | confirmed (measured) |
+| BW-6 | low | bridges (F.2) | A custom Snowflake line without `url=` adds the Tor Project brokers to one flat broker list. A private bridge's fingerprint and the client's SDP then go to the Tor Project broker whenever the private broker fails | fixed | confirmed (native test) + trace |
+| BW-7 | low | fencing | `fence_loop` checks its sources one after another, each with a 90 s timeout. One listed mirror that accepts and stalls delays every fencing round. G.13.5 says "at most every 30 s" | fixed | confirmed by trace |
+| BW-8 | low | identity switch | Switching identity while a `take_over` is in flight hosts the previous identity's board in the new identity's state. `serve` then puts it on the new identity's board onion, and the new identity's vault lists it | fixed | confirmed by trace |
+| BW-9 | info | identity switch | `forget_identity` leaves board mirrors and `known_dels` in place (M-1 took channel mirrors down) | fixed | trace |
 
 Counts: 1 high, 2 medium, 5 low, 1 info.
 
@@ -256,3 +256,19 @@ These are controls this audit tried to break and could not:
 2. A fuzz target for `verify::verify` + `Board::load` + `Host::new` with mutated block sets (adding withholding to the existing `fuzz_verify`).
 3. `app/boards.js`: the takeover and lease logic and its interaction with BW-3. The web side (XSS in board views, `#B=` links) was outside this scope.
 4. The `own` block nonce (`ms ‖ seq`, deterministic, one key shared by all devices): consider a random 24-byte nonce. No collision was shown here.
+
+## Fixes (2026-10-03)
+
+Plan: [BOARDS-AUDIT-FIX-PLAN.md](BOARDS-AUDIT-FIX-PLAN.md). The wasm paths are checked in the Tor lab (board, board UI, devices E2Es); the native parts by tests.
+
+| ID | Change | Check |
+|---|---|---|
+| BW-1 | One deadline per stream from its accept (`READ_MS` = 10 s for head, submit header and body together); a response must drain at 16 KiB/s after 5 s; streams carry their rendezvous circuit (`Service::try_accept_from`), and one circuit holds at most `PER_CIRCUIT` = 2 slots and sends at most one submit per 10 s (G.18.3). Taking all 16 slots now needs 8 circuits renewed every 10 s, which the introduction rate limits (G.18.4, accepted). Separate submit/read pools are not built | lab board E2Es (posting and reading unchanged) |
+| BW-2 | `take_over(index, onions, next_no_floor, floor_seq, root)`: every source at once, the newest **complete** copy (every catalog and archived thread with its chunks, and the `own` block) at or above the vault's sequence, its root preferred on a tie; `Board::load` refuses an archived thread it cannot decode | lab devices E2E |
+| BW-3 | A vault from a newer app sets a sticky `vault_newer`: no publish, and a later 404 is an error, not "no vault". **Kept as designed:** a 404 while this device only remembers a floor still lets it publish (an expired vault, 13–86 h without a republish, looks the same; refusing would leave channels unable to publish after three days offline). The cost: list entries this device never read must be re-taken (keys are derived, nothing is lost) | `publish_vault` guard |
+| BW-4 | A thread CAR must be rooted at the thread and only what it reaches is kept; a mirror's next state is taken only when complete (with what it held); one stale or hostile source no longer ends a pull round; `mirror()` reads every source at once and keeps the newest complete copy | lab board UI E2E (mirror) |
+| BW-5 | `Board::load` is O(total) (one map, blocks moved out per archived thread); a pull keeps only reachable blocks and stops at `PULL_BYTES` (twice the board budget) | `bc10_mass_delete_is_linear`, model tests |
+| BW-6 | Bridge lines keep their brokers per fingerprint (`Bridges::routes`, `SnowflakeParams::routes`): a bridge's offers go only to its own lines' brokers | `bridge::tests::brokers_stay_with_their_lines` |
+| BW-7 | Fencing reads every source at once, 20 s each | lab devices E2E |
+| BW-8 | `State::generation`, bumped at every identity change; `take_over` and `mirror` drop their result when it changed | trace |
+| BW-9 | `forget_identity` stops board mirrors and forgets the deletions read | trace |

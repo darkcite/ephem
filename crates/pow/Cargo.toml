@@ -11,5 +11,5 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-ephem-board = { path = "../board" }
+ephem-board = { path = "../board", default-features = false }
 equix = { version = "=0.7.0", default-features = false }

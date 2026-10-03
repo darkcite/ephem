@@ -17,7 +17,7 @@
 //! known trips, held posts, switches and efforts live in the encrypted `own` block
 //! ([`crate::own`]), so a reopen keeps them.
 
-use crate::board::{Board, Entry, cap, del};
+use crate::board::{Board, cap, del};
 use crate::gateway::Served;
 use crate::own::{self, Held, Own, Switches};
 use crate::pipeline::{HELD, Intake, Next, Refusal, Ticket, caps};
@@ -72,8 +72,16 @@ pub struct Host {
     pub own: Own,
     own_key: [u8; 32],
     own_dirty: bool,
-    /// Owner deletes waiting for their undo window: `(no, publish at, ms)`.
+    /// Owner deletes waiting for their undo window: `(no, publish at, ms)`, and their numbers.
     deletes: Vec<(u64, u64)>,
+    queued: std::collections::HashSet<u64>,
+}
+
+/// A fresh nonce for the sealed `own` block (BC-13: random, so no two seals can share one).
+fn nonce() -> [u8; own::NONCE] {
+    let mut n = [0u8; own::NONCE];
+    getrandom::fill(&mut n).expect("CSPRNG unavailable");
+    n
 }
 
 impl Host {
@@ -83,9 +91,7 @@ impl Host {
     pub fn new(mut board: Board, mut intake: Intake, own_key: [u8; 32], now_ms: u64) -> Self {
         let own = if board.own.is_empty() { Own { efforts: intake.base, ..Own::default() } } else { Own::open(&own_key, &board.manifest.pk, &board.own).unwrap_or_default() };
         apply_switches(&mut intake, &own);
-        let mut nonce = [0u8; own::NONCE];
-        nonce[..8].copy_from_slice(&now_ms.to_le_bytes());
-        if let Some(b) = own.seal(&own_key, &board.manifest.pk, &nonce) {
+        if let Some(b) = own.seal(&own_key, &board.manifest.pk, &nonce()) {
             let _ = board.set_own(b);
         }
         let mut live = Vec::new();
@@ -93,7 +99,7 @@ impl Host {
         let record = board.record(&root, now_ms);
         let delta = Delta { record: record.clone(), added: blocks.clone(), removed: Vec::new() };
         let served = Served::new(board.name().clone(), root, record, blocks, crate::page::Served::Owner).expect("the owner's own board");
-        Self { board, intake, served, pending: Vec::with_capacity(caps::RING), answers: std::collections::VecDeque::with_capacity(ANSWERS), batch: [None; caps::RING], last_ms: now_ms, dirty: false, delta, own, own_key, own_dirty: false, deletes: Vec::new() }
+        Self { board, intake, served, pending: Vec::with_capacity(caps::RING), answers: std::collections::VecDeque::with_capacity(ANSWERS), batch: [None; caps::RING], last_ms: now_ms, dirty: false, delta, own, own_key, own_dirty: false, deletes: Vec::new(), queued: std::collections::HashSet::new() }
     }
 
     /// G.6.2 steps 2–4 from the 188 header bytes: `(header, Next)` or the refusal.
@@ -156,29 +162,26 @@ impl Host {
         n[..8].copy_from_slice(&now_s.to_le_bytes());
         n[8..].copy_from_slice(&self.board.next_no.to_le_bytes());
         let s = Signed { b: self.board.name().to_text(), t: thread, k: self.board.manifest.pk, n, sub: sub.into(), body: body.into(), sage, e: crate::pow::epoch(now_s), trip: false };
-        let sig = s.sign(self.board.signing_key());
+        let sig = s.sign_as(self.board.signing_key(), true);
         let no = self.board.accept(s, sig, cap::OWNER, now_s)?;
         self.dirty = true;
         Ok(no)
     }
 
-    fn post_of(&self, no: u64) -> Option<(&crate::board::Thread, &crate::board::Post)> {
-        self.board.threads.iter().find_map(|t| {
-            t.entries.iter().find_map(|e| match e {
-                Entry::Post(p) if p.no == no => Some((t, p)),
-                _ => None,
-            })
-        })
+    /// The owner deletes post `no`, live or archived (an OP takes its thread with it),
+    /// published after [`UNDO_MS`] unless undone.
+    pub fn delete(&mut self, no: u64, now_ms: u64) -> Result<(), BoardError> {
+        self.board.find(no).ok_or(BoardError::NotFound)?;
+        self.queue(no, now_ms);
+        Ok(())
     }
 
-    /// The owner deletes post `no` (an OP takes its thread with it), published after
-    /// [`UNDO_MS`] unless undone.
-    pub fn delete(&mut self, no: u64, now_ms: u64) -> Result<(), BoardError> {
-        self.post_of(no).ok_or(BoardError::NotFound)?;
-        if !self.deletes.iter().any(|(n, _)| *n == no) {
+    fn queue(&mut self, no: u64, now_ms: u64) -> bool {
+        let new = self.queued.insert(no);
+        if new {
             self.deletes.push((no, now_ms + UNDO_MS));
         }
-        Ok(())
+        new
     }
 
     /// Mass delete (G.9.1): every live post with `ts ≥ since_s` (minute-rounded times), or every
@@ -196,15 +199,17 @@ impl Host {
         self.delete_where(|p| p.s.k == *key, now_ms)
     }
 
+    /// One pass over the board, archive included (BC-1, BC-10).
     fn delete_where(&mut self, f: impl Fn(&crate::board::Post) -> bool, now_ms: u64) -> usize {
-        let nos: Vec<u64> = self.board.threads.iter().flat_map(|t| t.entries.iter()).filter_map(|e| if let Entry::Post(p) = e && f(p) { Some(p.no) } else { None }).collect();
-        nos.iter().filter(|no| self.delete(**no, now_ms).is_ok()).count()
+        let nos = self.board.select(f);
+        nos.into_iter().filter(|no| self.queue(*no, now_ms)).count()
     }
 
     /// Undoes pending deletes (`no` = 0: all of them). Returns how many.
     pub fn undo(&mut self, no: u64) -> usize {
         let before = self.deletes.len();
         self.deletes.retain(|(n, _)| no != 0 && *n != no);
+        self.queued.retain(|n| no != 0 && *n != no);
         before - self.deletes.len()
     }
 
@@ -240,7 +245,7 @@ impl Host {
     /// Bans the key of post `no` (G.9.1: meaningful for trips; with IDs off every post has a
     /// fresh key, which the UI says).
     pub fn ban(&mut self, no: u64, why: &str, now_s: u64) -> Result<[u8; 32], BoardError> {
-        let k = self.post_of(no).ok_or(BoardError::NotFound)?.1.s.k;
+        let k = self.board.find(no).ok_or(BoardError::NotFound)?.s.k;
         if k == self.board.manifest.pk {
             return Err(BoardError::Refused);
         }
@@ -304,7 +309,7 @@ impl Host {
         let no = self.board.accept(h.s, h.sig, h.cap, now_s)?;
         self.own.held.remove(i);
         if let Some(k) = trip {
-            self.own.saw_trip(&k);
+            self.own.saw_trip(&k, now_s);
         }
         self.own_dirty = true;
         self.logged(now_s, "approve", no, "");
@@ -346,14 +351,27 @@ impl Host {
             let Some(j) = self.pending.iter().position(|p| p.id == t.id) else { continue };
             let p = self.pending.swap_remove(j);
             if self.intake.premod && p.cap == cap::ANON {
-                // Held for the owner (pre-moderation): no number yet.
-                let r = if self.own.held.len() < own::HELD {
-                    self.own.held.push(Held { s: p.s, sig: p.sig, cap: p.cap, at: now_s });
-                    self.own_dirty = true;
-                    Ok((HELD, 0))
+                // Held for the owner (pre-moderation): no number yet. A full queue keeps the
+                // highest efforts, as the publish ring (BC-6); the same text is held once.
+                let effort = p.ticket.effort;
+                let r = if self.own.held.iter().any(|x| x.s.body == p.s.body && x.s.t == p.s.t && x.s.sub == p.s.sub) {
+                    Err(Refusal::Refused)
+                } else if self.own.held.len() < own::HELD {
+                    Ok(None)
                 } else {
-                    Err(Refusal::Busy)
+                    match self.own.held.iter().enumerate().min_by_key(|(_, x)| x.effort) {
+                        Some((i, low)) if low.effort < effort => Ok(Some(i)),
+                        _ => Err(Refusal::Busy),
+                    }
                 };
+                let r = r.map(|evict| {
+                    if let Some(i) = evict {
+                        self.own.held.remove(i);
+                    }
+                    self.own.held.push(Held { s: p.s, sig: p.sig, cap: p.cap, at: now_s, effort });
+                    self.own_dirty = true;
+                    (HELD, 0)
+                });
                 done.push((p.ticket, r));
                 continue;
             }
@@ -363,21 +381,19 @@ impl Host {
                 _ => Refusal::Refused,
             });
             if let (Ok(_), Some(k)) = (&r, trip) {
-                self.own.saw_trip(&k);
+                self.own.saw_trip(&k, now_s);
                 self.own_dirty = true;
             }
             done.push((p.ticket, r.map(|no| (no, 0))));
         }
-        // Owner deletes whose undo window has passed.
-        let mut i = 0;
-        while i < self.deletes.len() {
-            let (no, at) = self.deletes[i];
-            if at > now_ms {
-                i += 1;
-                continue;
+        // Owner deletes whose undo window has passed, in one pass (BC-10).
+        let due: Vec<u64> = self.deletes.iter().filter(|(_, at)| *at <= now_ms).map(|(n, _)| *n).collect();
+        if !due.is_empty() {
+            self.deletes.retain(|(_, at)| *at > now_ms);
+            for n in &due {
+                self.queued.remove(n);
             }
-            self.deletes.swap_remove(i);
-            if self.board.delete(no, del::OWNER, 0, now_s).is_ok() {
+            for no in self.board.delete_many(&due, del::OWNER, 0, now_s) {
                 self.board.log(now_s, "delete", no, "");
             }
         }
@@ -388,10 +404,7 @@ impl Host {
             self.own_dirty = true;
         }
         if self.own_dirty {
-            let mut nonce = [0u8; own::NONCE];
-            nonce[..8].copy_from_slice(&now_ms.to_le_bytes());
-            nonce[8..16].copy_from_slice(&self.board.seq.to_le_bytes());
-            if let Some(b) = self.own.seal(&self.own_key, &self.board.manifest.pk, &nonce) {
+            if let Some(b) = self.own.seal(&self.own_key, &self.board.manifest.pk, &nonce()) {
                 let _ = self.board.set_own(b);
             }
             self.own_dirty = false;
@@ -413,8 +426,9 @@ impl Host {
         self.delta.record = record;
         for (t, r) in done {
             let r = r.map(|(no, _)| (no, seq));
-            if let Ok((no, seq)) = r {
-                self.intake.published(&t, no, seq);
+            match r {
+                Ok((no, seq)) => self.intake.published(&t, no, seq),
+                Err(e) => self.intake.refused(&t, e),
             }
             // A held post is answered with number 0.
             self.answered(t.id, r.map(|(no, seq)| (if no == HELD { 0 } else { no }, seq)));

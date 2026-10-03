@@ -9,6 +9,9 @@ use ephem_channel::cbor::{self, Value};
 
 /// A poster's post or thread.
 pub const POST: &[u8] = b"ephem-board-post-v1:";
+/// A post shown under the owner's capcode (BC-3: an owner post signed as a plain post never
+/// verifies as a capcode post, and the reverse).
+pub const CAP: &[u8] = b"ephem-board-cap-v1:";
 /// An owner (or, later, janitor) action.
 pub const ACT: &[u8] = b"ephem-board-act-v1:";
 /// A poster deleting their own post.
@@ -90,21 +93,30 @@ impl Signed {
         Ok(())
     }
 
-    /// The bytes the poster signs: `POST ‖ dag-cbor(s)`.
-    pub fn signed_bytes(&self) -> Vec<u8> {
-        domain(POST, &self.to_value())
+    /// The bytes the poster signs: `POST ‖ dag-cbor(s)` (`CAP ‖ …` for a capcode post).
+    pub fn signed_bytes(&self, capcode: bool) -> Vec<u8> {
+        domain(if capcode { CAP } else { POST }, &self.to_value())
     }
 
     /// Signs as the poster (the app does this in the poster's tab).
     pub fn sign(&self, key: &SigningKey) -> [u8; 64] {
+        self.sign_as(key, false)
+    }
+
+    /// Signs as a plain post, or (`capcode`, the board key) as a capcode post.
+    pub fn sign_as(&self, key: &SigningKey, capcode: bool) -> [u8; 64] {
         debug_assert_eq!(key.verifying_key().to_bytes(), self.k);
-        key.sign(&self.signed_bytes()).to_bytes()
+        key.sign(&self.signed_bytes(capcode)).to_bytes()
     }
 
     /// Verifies the poster's signature with `k`.
     pub fn verify(&self, sig: &[u8; 64]) -> Result<(), BoardError> {
+        self.verify_as(sig, false)
+    }
+
+    pub fn verify_as(&self, sig: &[u8; 64], capcode: bool) -> Result<(), BoardError> {
         let key = VerifyingKey::from_bytes(&self.k).map_err(|_| BoardError::BadSignature)?;
-        key.verify(&self.signed_bytes(), &Signature::from_bytes(sig)).map_err(|_| BoardError::BadSignature)
+        key.verify(&self.signed_bytes(capcode), &Signature::from_bytes(sig)).map_err(|_| BoardError::BadSignature)
     }
 }
 
@@ -153,6 +165,11 @@ mod tests {
         // The same bytes under another kind's prefix do not verify as a post.
         let act = key.sign(&domain(ACT, &s.to_value())).to_bytes();
         assert_eq!(s.verify(&act), Err(BoardError::BadSignature));
+        // BC-3: a plain post's signature is no capcode post's, and the reverse.
+        assert_eq!(s.verify_as(&sig, true), Err(BoardError::BadSignature));
+        let cap = s.sign_as(&key, true);
+        assert_eq!(s.verify_as(&cap, true), Ok(()));
+        assert_eq!(s.verify(&cap), Err(BoardError::BadSignature));
     }
 
     #[test]

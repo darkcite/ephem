@@ -26,7 +26,7 @@ impl Rng {
 #[test]
 fn mutated_boards_never_panic() {
     const NOW: u64 = 1_790_000_000;
-    let mut b = Board::new(&[4; 32], "/f/", "fuzz", "", NOW).unwrap();
+    let mut b = Board::new(&[4; 32], &ephem_board::onion::address(&[0xAA; 32]), "/f/", "fuzz", "", NOW).unwrap();
     for i in 0..3u64 {
         let key = SigningKey::from_bytes(&[i as u8 + 1; 32]);
         let s = Signed { b: b.name().to_text(), t: 0, k: key.verifying_key().to_bytes(), n: [0; 16], sub: format!("t{i}"), body: "op".into(), sage: false, e: 0, trip: false };

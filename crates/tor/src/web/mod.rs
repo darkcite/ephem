@@ -90,7 +90,18 @@ impl Tor {
             tracing::info!("tor: directory snapshot unreadable, starting cold");
         }
         let fps = sf.fingerprints.clone();
-        let pools: Vec<WarmPool> = fps.iter().map(|fp| WarmPool::start(sf.clone(), fp.clone())).collect();
+        // Each bridge's offers go to its own lines' brokers only (BW-6).
+        let pools: Vec<WarmPool> = fps
+            .iter()
+            .enumerate()
+            .map(|(i, fp)| {
+                let mut p = sf.clone();
+                if let Some(r) = sf.routes.get(i).filter(|r| !r.is_empty()) {
+                    p.brokers = r.clone();
+                }
+                WarmPool::start(p, fp.clone())
+            })
+            .collect();
         let net = BridgeNet::new(pools.iter().map(|p| Arc::new(WebDialer { pool: p.clone() }) as Arc<dyn Dialer>).collect());
         let rt: Runtime = CompoundRuntime::new(WebTask::default(), WebTask::default(), RealCoarseTimeProvider::new(), net.clone(), net.clone(), TorTls::default(), net);
         let cfg = config::build(&fps, network_toml, "/ephem")?;
@@ -183,7 +194,7 @@ impl Tor {
             .launch_onion_service_with_hsid(cfg, HsIdKeypair::from(ed25519::ExpandedKeypair::from(&kp)))
             .map_err(|e| e.to_string())?
             .ok_or("onion services are disabled")?;
-        let incoming: Rc<RefCell<VecDeque<DataStream>>> = Rc::new(RefCell::new(VecDeque::with_capacity(QUEUE)));
+        let incoming: Rc<RefCell<VecDeque<(u32, DataStream)>>> = Rc::new(RefCell::new(VecDeque::with_capacity(QUEUE)));
         wasm_bindgen_futures::spawn_local(accept_loop(rend, incoming.clone()));
         Ok(Service { onion: safelog::DisplayRedacted::display_unredacted(&hsid).to_string(), incoming, _running: svc })
     }
@@ -238,9 +249,12 @@ pub const INTRO_BURST: u32 = 50;
 
 /// The bounded replacement for `tor_hsservice::handle_rend_requests` (which builds every
 /// rendezvous circuit at once and accepts every stream): see [`Tor::launch`].
-async fn accept_loop(mut rend: impl futures::Stream<Item = tor_hsservice::RendRequest> + Unpin, queue: Rc<RefCell<VecDeque<DataStream>>>) {
+async fn accept_loop(mut rend: impl futures::Stream<Item = tor_hsservice::RendRequest> + Unpin, queue: Rc<RefCell<VecDeque<(u32, DataStream)>>>) {
     let building = Rc::new(std::cell::Cell::new(0u32));
     let live = Rc::new(std::cell::Cell::new(0u32));
+    // Each rendezvous circuit gets a number its streams carry (a board limits slots per
+    // circuit, BW-1).
+    let mut circuits = 0u32;
     while let Some(req) = rend.next().await {
         if building.get() >= REND_IN_FLIGHT || live.get() >= LIVE_CIRCUITS {
             let _ = req.reject().await;
@@ -248,6 +262,8 @@ async fn accept_loop(mut rend: impl futures::Stream<Item = tor_hsservice::RendRe
             continue;
         }
         building.set(building.get() + 1);
+        circuits = circuits.wrapping_add(1);
+        let circuit = circuits;
         let (building, live, queue) = (building.clone(), live.clone(), queue.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let streams = req.accept().await;
@@ -274,7 +290,7 @@ async fn accept_loop(mut rend: impl futures::Stream<Item = tor_hsservice::RendRe
                     continue;
                 }
                 match sr.accept(tor_cell::relaycell::msg::Connected::new_empty()).await {
-                    Ok(s) => queue.borrow_mut().push_back(s),
+                    Ok(s) => queue.borrow_mut().push_back((circuit, s)),
                     Err(e) => tracing::info!("onion: stream not accepted: {e}"),
                 }
             }
@@ -285,7 +301,7 @@ async fn accept_loop(mut rend: impl futures::Stream<Item = tor_hsservice::RendRe
 
 pub struct Service {
     onion: String,
-    incoming: Rc<RefCell<VecDeque<DataStream>>>,
+    incoming: Rc<RefCell<VecDeque<(u32, DataStream)>>>,
     _running: Arc<RunningOnionService>,
 }
 
@@ -307,6 +323,12 @@ impl Service {
 
     /// An incoming stream, if one is waiting.
     pub fn try_accept(&self) -> Option<DataStream> {
+        self.try_accept_from().map(|(_, s)| s)
+    }
+
+    /// An incoming stream and the number of the rendezvous circuit it came on (the same number
+    /// for every stream of one circuit, while the service lives).
+    pub fn try_accept_from(&self) -> Option<(u32, DataStream)> {
         self.incoming.borrow_mut().pop_front()
     }
 
@@ -354,6 +376,7 @@ mod js {
             let sf = SnowflakeParams {
                 brokers: list(broker),
                 fingerprints: list(bridge_fp),
+                routes: Vec::new(),
                 ice: list(ice),
                 nat: if nat.is_empty() { "unknown".to_owned() } else { nat.to_owned() },
             };

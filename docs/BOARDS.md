@@ -624,3 +624,26 @@ The single writer and the rejection of multi-writer; reuse of the verified IPFS 
 ### G.19.6 Corrections to the reviews
 
 - **Catalog split by page** (A-B2 fix c, B's round 2) would not keep a bump to ≤ 2 blocks: a bump moves a thread to page 1 and shifts every page above its old position. Revision 2 uses 10 buckets by `no mod 10`, sorted by readers (G.5.1).
+
+## G.20 After the boards security audit (as built, 2026-10-03)
+
+Three audits ([core](security/AUDIT-2026-10-03-boards-core.md), [browser Rust](security/AUDIT-2026-10-03-boards-web-rust.md), [front end](security/AUDIT-2026-10-03-boards-front.md); plan: [fix plan](security/BOARDS-AUDIT-FIX-PLAN.md)) found 33 issues; all but one are fixed (BF-10, the spike pages, waits for the B-P1b/B-P11 runs). What changed in this design:
+
+| Topic | As built now |
+|---|---|
+| Manifest (G.5.1) | Signs **`host`**, the board's own onion (from its onion key, G.4). Readers check that it and every mirror and "see also" onion is a v3 onion (checksum, version). The app posts only to `host`; a link's `o=`/`m=` only say where to read first (BF-1) |
+| Catalog entry | Carries **`op`**, the OP's hash: a reader that knows it is deleted blanks the entry's subject and excerpt (BC-3) |
+| Capcode posts | Signed with their own prefix, `ephem-board-cap-v1:` (a plain post of the board key never verifies as a capcode post, BC-3) |
+| Deletion list | A deleted post is never accepted again. A deleted thread lists its OP only; readers delete a thread whose OP is listed whole. Past 4 096 entries only those older than a record's validity + 1 h go; 16 384 is the hard cap (BC-3, BC-4) |
+| Archive | The owner deletes, bans and mass-deletes archived posts too (BC-1) |
+| Memory (G.5.2) | A budget of **24 MiB of encoded posts** per board (live and archive; the tab holds about three times that): past it the archive's oldest threads go, then unprotected threads, then posts are refused (BC-7). Publishing re-encodes only threads that changed (BC-8) |
+| Efforts (G.8) | Posts-cap pressure raises both efforts; a **flood of new threads** (≥ 3 refused in a minute) raises the thread effort only; a refused thread or two a minute is no pressure and never closes new threads (R8). After a raise, the previous efforts stay accepted for 2 minutes, not a whole epoch (BC-2). The app refuses to solve above ×64 the default efforts (BF-2) |
+| Retries (G.6.1) | A submit whose stream dropped, or that got `Busy`, may be sent again with the same solution: the host reads the body again (BC-12) |
+| Trips-only (G.9.1) | A trip counts as known after posting in **two different hours**; when the list is full, keys that never qualified go first and regulars (≥ 24 h) last (BC-5) |
+| Pre-moderation | A full held queue keeps the highest efforts; the same text is held once (BC-6) |
+| Serving (G.6.2, G.18.3) | One deadline per stream (10 s for the whole request), responses drain at ≥ 16 KiB/s after 5 s, ≤ 2 slots per rendezvous circuit and ≤ 1 submit per circuit per 10 s (BW-1) |
+| Takeover (G.13) | Every source at once; the newest **complete** copy (all threads with their chunks, the archive and the `own` block), never below the vault's sequence, its root preferred (BW-2). Fencing reads all sources at once, 20 s each (BW-7). An identity switch meanwhile drops the result (BW-8) |
+| Mirrors (G.10) | Only complete copies are served; one stale source does not end a pull round; a pull keeps only what each thread reaches and stops at twice the board budget (BW-4, BW-5) |
+| Storage (G.11.1) | Nothing of boards in localStorage. Mirror onion keys derive from the identity; mirrors and IPFS opt-ins live in the key file (section 0x07); the last catalogs of up to 8 boards stay in the tab's sessionStorage, 32 KiB each, shown as "the last verified copy" (BF-4, BF-5) |
+| Workers | Fetched with their SHA-384 and started from `blob:` URLs: they run under the page's CSP (BF-6) |
+| UI | Boards are named with the end of their name (`Title · …abcd1234`, BF-7); the first trip post on a board warns (BF-8); bulk moderation asks first and can be undone for 5 s (BF-9) |

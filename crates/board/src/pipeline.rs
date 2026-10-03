@@ -8,15 +8,21 @@
 //! Order (each step refuses before the next costs anything):
 //! 1. the 188-byte header: kind, lengths, epoch (current or previous), effort ≥ the grace minimum
 //!    for the kind, board not paused, new threads open;
-//! 2. the replay table: a solution seen before is refused, or, for the same body already
-//!    published, answered with its number (a retried submit is idempotent, G.6.1);
+//! 2. the replay table: a solution seen before is refused, or, for the same body, answered as
+//!    its state says: published → its number, admitted → `Busy` (wait), not admitted (a stream
+//!    that dropped before its body, a `Busy` at the caps or an eviction) → the body is read again
+//!    (a retried submit is idempotent, G.6.1, BC-12);
 //! 3. the proof of work, from the header alone; the solution enters the replay table now;
 //! 4. the body: its hash, then `s` decoded and matched to the header, then the signature;
 //! 5. the caps: posts per minute, the thread budget; under contention the publish ring keeps the
 //!    highest efforts (G.8, as Tor's prop 327).
 //!
 //! Every minute [`Intake::tick`] adapts the efforts and, when the board stays flooded, closes new
-//! threads (R8) until the owner reopens them.
+//! threads (R8) until the owner reopens them. Pressure on the posts cap raises both efforts; a
+//! flood of new threads (at least [`caps::THREAD_FLOOD`] refused in a minute) raises the thread
+//! effort only (BC-2: one refused thread a minute raised every effort ×64). A raised effort is
+//! enforced after [`caps::GRACE_S`]: until then the value advertised before it is accepted too
+//! (posters who fetched `/pow` just before), never the lowest of a whole epoch.
 
 use crate::BoardError;
 use crate::post::Signed;
@@ -90,10 +96,26 @@ pub mod caps {
     pub const REPLAY: usize = 16_384;
     /// Adaptive effort: ×2 per step, at most ×64.
     pub const MAX_SHIFT: u32 = 6;
+    /// Refused new threads in one minute that count as a thread flood.
+    pub const THREAD_FLOOD: u32 = 3;
+    /// How long the efforts advertised before a raise stay accepted.
+    pub const GRACE_S: u64 = 120;
     /// R8: new threads close when the thread budget stays exhausted this long, or the posts cap
     /// stays saturated this long.
     pub const PANIC_THREADS_S: u64 = 30 * 60;
     pub const PANIC_POSTS_S: u64 = 10 * 60;
+}
+
+/// Where a solution's submission is (BC-12).
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum State {
+    /// The header passed; the body is not admitted (yet, or any more): a retry reads it again.
+    Header,
+    /// In the publish ring.
+    Admitted,
+    Published,
+    /// The board refused it at publish (a locked thread, a duplicate, a deleted post).
+    Refused,
 }
 
 #[derive(Copy, Clone)]
@@ -102,12 +124,13 @@ struct Slot {
     epoch: u32,
     /// The body hash, for an idempotent answer.
     h: [u8; 32],
-    /// The published number and record sequence; 0 while in flight.
+    state: State,
+    /// The published number and record sequence.
     no: u64,
     seq: u64,
 }
 
-const EMPTY: Slot = Slot { key: [0; 16], epoch: 0, h: [0; 32], no: 0, seq: 0 };
+const EMPTY: Slot = Slot { key: [0; 16], epoch: 0, h: [0; 32], state: State::Header, no: 0, seq: 0 };
 
 /// The number a held post is answered with (pre-moderation): no number yet. The gateway sends 0.
 pub const HELD: u64 = u64::MAX;
@@ -180,11 +203,13 @@ pub struct Intake {
     name_text: String,
     secret: [u8; 32],
     pub base: Efforts,
-    /// Adaptive multiplier: efforts are `base << shift`.
-    shift: u32,
-    /// The lowest efforts advertised in the current and the previous epoch (the grace, G.8):
-    /// `(epoch, thread, reply)`.
-    adv: [(u32, u32, u32); 2],
+    /// Adaptive multipliers: efforts are `base << shift` (BC-2: one per kind).
+    shift_reply: u32,
+    shift_thread: u32,
+    /// The efforts advertised now, and those before the last raise with when they stop being
+    /// accepted (the grace, G.8).
+    adv: Efforts,
+    before: (Efforts, u64),
     pub paused: bool,
     /// R8: closed automatically when flooded, reopened by the owner.
     pub threads_closed: bool,
@@ -206,9 +231,10 @@ pub struct Intake {
     thread_every: u64,
     saturated_posts_since: Option<u64>,
     saturated_threads_since: Option<u64>,
-    /// A refusal for each cap during the current minute: saturation means one every minute.
+    /// Refusals for each cap during the current minute: saturation means one every minute
+    /// (posts), or a flood of new threads every minute (threads).
     refused_posts: bool,
-    refused_threads: bool,
+    refused_threads: u32,
     calm_since: u64,
 }
 
@@ -218,15 +244,16 @@ impl Intake {
         let bytes = name.to_bytes();
         let mut n = [0u8; pow::MAX_NAME];
         n[..bytes.len()].copy_from_slice(&bytes);
-        let e = pow::epoch(now_s);
         Intake {
             name: n,
             name_len: bytes.len(),
             name_text: name.to_text(),
             secret,
             base,
-            shift: 0,
-            adv: [(e, base.thread, base.reply); 2],
+            shift_reply: 0,
+            shift_thread: 0,
+            adv: base,
+            before: (base, 0),
             paused: false,
             threads_closed: false,
             closed_notice: false,
@@ -244,40 +271,44 @@ impl Intake {
             saturated_posts_since: None,
             saturated_threads_since: None,
             refused_posts: false,
-            refused_threads: false,
+            refused_threads: 0,
             calm_since: now_s,
         }
     }
 
     fn effort_now(&self, k: u8) -> u32 {
-        let base = if k == kind::THREAD { self.base.thread } else { self.base.reply };
-        base.saturating_mul(1 << self.shift)
+        if k == kind::THREAD { self.base.thread.saturating_mul(1 << self.shift_thread) } else { self.base.reply.saturating_mul(1 << self.shift_reply) }
     }
 
+    /// Notes a change of the efforts (the ramp, or the owner's base): what was advertised before
+    /// stays accepted for [`caps::GRACE_S`].
     fn advertise(&mut self, now_s: u64) {
-        let e = pow::epoch(now_s);
-        let (t, r) = (self.effort_now(kind::THREAD), self.effort_now(kind::REPLY));
-        if self.adv[0].0 != e {
-            self.adv[1] = self.adv[0];
-            self.adv[0] = (e, t, r);
-        } else {
-            self.adv[0].1 = self.adv[0].1.min(t);
-            self.adv[0].2 = self.adv[0].2.min(r);
+        let now = Efforts { thread: self.effort_now(kind::THREAD), reply: self.effort_now(kind::REPLY) };
+        if now != self.adv {
+            let floor = self.grace(now_s);
+            self.before = (floor, now_s + caps::GRACE_S);
+            self.adv = now;
         }
+    }
+
+    /// The lowest efforts accepted now.
+    fn grace(&self, now_s: u64) -> Efforts {
+        let (b, until) = self.before;
+        if now_s < until { Efforts { thread: self.adv.thread.min(b.thread), reply: self.adv.reply.min(b.reply) } } else { self.adv }
     }
 
     /// The `/pow` answer at `now_s`.
     pub fn pow_info(&mut self, now_s: u64) -> PowInfo {
         self.advertise(now_s);
         let e = pow::epoch(now_s);
-        let prev = if self.adv[1].0 + 1 == e { self.adv[1] } else { self.adv[0] };
+        let min = self.grace(now_s);
         PowInfo {
             epoch: e,
             seed: pow::seed(&self.secret, e),
-            effort_thread: self.effort_now(kind::THREAD),
-            effort_reply: self.effort_now(kind::REPLY),
-            min_thread: self.adv[0].1.min(prev.1),
-            min_reply: self.adv[0].2.min(prev.2),
+            effort_thread: self.adv.thread,
+            effort_reply: self.adv.reply,
+            min_thread: min.thread,
+            min_reply: min.reply,
             paused: self.paused,
             threads_open: !self.threads_closed,
             trips_only: self.trips_only,
@@ -286,11 +317,6 @@ impl Intake {
         }
     }
 
-    /// The lowest effort accepted for `k` in `epoch`: what was advertised then (grace, G.8).
-    fn grace_min(&self, k: u8, epoch: u32) -> Option<u32> {
-        let a = self.adv.iter().find(|a| a.0 == epoch)?;
-        Some(if k == kind::THREAD { a.1 } else { a.2 })
-    }
 
     fn replay_key(h: &Header) -> [u8; 16] {
         let mut b = blake2::Blake2bVar::new(16).expect("16-byte output");
@@ -311,7 +337,7 @@ impl Intake {
         for i in 0..n.min(64) {
             let j = (start + i) % n;
             let s = &self.replay[j];
-            let live = s.epoch + 1 >= cur && s.key != [0; 16];
+            let live = s.epoch.saturating_add(1) >= cur && s.key != [0; 16];
             if live && s.key == *key {
                 return Ok(j);
             }
@@ -332,17 +358,27 @@ impl Intake {
             return Err(Refusal::Paused);
         }
         let cur = pow::epoch(now_s);
-        if h.epoch != cur && h.epoch + 1 != cur {
+        if h.epoch != cur && h.epoch.checked_add(1) != Some(cur) {
             return Err(Refusal::Pow);
         }
-        if h.effort < self.grace_min(h.kind, h.epoch).unwrap_or(u32::MAX) {
+        self.advertise(now_s);
+        let min = self.grace(now_s);
+        if h.effort < if h.kind == kind::THREAD { min.thread } else { min.reply } {
             return Err(Refusal::Pow);
         }
         let key = Self::replay_key(h);
         let free = match self.replay_find(&key, cur) {
             Ok(j) => {
                 let s = self.replay[j];
-                return if s.h == h.h && s.no != 0 { Ok(Next::Done { no: s.no, seq: s.seq }) } else { Err(Refusal::Refused) };
+                if s.h != h.h {
+                    return Err(Refusal::Refused);
+                }
+                return match s.state {
+                    State::Published => Ok(Next::Done { no: s.no, seq: s.seq }),
+                    State::Admitted => Err(Refusal::Busy),
+                    State::Refused => Err(Refusal::Refused),
+                    State::Header => Ok(Next::ReadBody(j as u32)),
+                };
             }
             Err(free) => free.ok_or(Refusal::Busy)?,
         };
@@ -351,7 +387,7 @@ impl Intake {
             return Err(Refusal::Pow);
         }
         // Spent now, before the body is read: one valid header serves one upload.
-        self.replay[free] = Slot { key, epoch: h.epoch, h: h.h, no: 0, seq: 0 };
+        self.replay[free] = Slot { key, epoch: h.epoch, h: h.h, state: State::Header, no: 0, seq: 0 };
         Ok(Next::ReadBody(free as u32))
     }
 
@@ -366,12 +402,12 @@ impl Intake {
         if s.k != h.k || s.n != h.n || s.t != h.thread || s.e != h.epoch || s.sage != sage || s.b != self.name_text {
             return Err(Refusal::Refused);
         }
-        s.verify(&h.sig).map_err(|_| Refusal::Refused)?;
+        s.verify_as(&h.sig, h.kind == kind::CAPCODE).map_err(|_| Refusal::Refused)?;
         Ok(s)
     }
 
     /// Step 5: caps and the publish ring. Returns the ticket, and a ticket evicted to make room
-    /// (its submitter gets `Busy`).
+    /// (its submitter gets `Busy`, and may send the same submission again).
     pub fn admit(&mut self, h: &Header, replay_slot: u32, now_s: u64) -> Result<(Ticket, Option<Ticket>), Refusal> {
         self.roll(now_s);
         if self.posts_this_minute >= caps::POSTS_PER_MIN {
@@ -380,9 +416,15 @@ impl Intake {
             return Err(Refusal::Busy);
         }
         if h.kind == kind::THREAD && now_s < self.next_thread_at {
-            self.saturated_threads_since.get_or_insert(now_s);
-            self.refused_threads = true;
+            self.refused_threads += 1;
+            if self.refused_threads >= caps::THREAD_FLOOD {
+                self.saturated_threads_since.get_or_insert(now_s);
+            }
             return Err(Refusal::Busy);
+        }
+        match self.replay.get(replay_slot as usize) {
+            Some(s) if s.state == State::Header && s.h == h.h => {}
+            _ => return Err(Refusal::Refused), // the same submission twice at once
         }
         let t = Ticket { effort: h.effort, replay_slot, id: self.next_id };
         let evicted = match self.ring.iter().position(Option::is_none) {
@@ -397,9 +439,11 @@ impl Intake {
                     return Err(Refusal::Busy);
                 }
                 self.ring[i] = Some(t);
+                self.replay[low.replay_slot as usize].state = State::Header;
                 Some(low)
             }
         };
+        self.replay[replay_slot as usize].state = State::Admitted;
         self.next_id += 1;
         self.posts_this_minute += 1;
         if h.kind == kind::THREAD {
@@ -425,8 +469,15 @@ impl Intake {
     /// moderation) is recorded as [`HELD`].
     pub fn published(&mut self, t: &Ticket, no: u64, seq: u64) {
         if let Some(s) = self.replay.get_mut(t.replay_slot as usize) {
-            s.no = no;
-            s.seq = seq;
+            (s.state, s.no, s.seq) = (State::Published, no, seq);
+        }
+    }
+
+    /// A ticket the publish refused: `Busy` (no room) lets the same submission come again,
+    /// anything else answers it with `Refused`.
+    pub fn refused(&mut self, t: &Ticket, r: Refusal) {
+        if let Some(s) = self.replay.get_mut(t.replay_slot as usize) {
+            s.state = if r == Refusal::Busy { State::Header } else { State::Refused };
         }
     }
 
@@ -437,10 +488,10 @@ impl Intake {
             if !self.refused_posts {
                 self.saturated_posts_since = None;
             }
-            if !self.refused_threads {
+            if self.refused_threads < caps::THREAD_FLOOD {
                 self.saturated_threads_since = None;
             }
-            (self.refused_posts, self.refused_threads) = (false, false);
+            (self.refused_posts, self.refused_threads) = (false, 0);
             self.minute = m;
             self.posts_this_minute = 0;
         }
@@ -450,15 +501,20 @@ impl Intake {
     /// budget tightening, and R8's automatic close of new threads.
     pub fn tick(&mut self, now_s: u64) {
         self.roll(now_s);
-        let pressed = self.saturated_posts_since.is_some() || self.saturated_threads_since.is_some() || self.posts_this_minute * 2 > caps::POSTS_PER_MIN;
-        if pressed {
-            self.shift = (self.shift + 1).min(caps::MAX_SHIFT);
+        let posts = self.saturated_posts_since.is_some() || self.posts_this_minute * 2 > caps::POSTS_PER_MIN;
+        let threads = self.saturated_threads_since.is_some();
+        if posts || threads {
+            self.shift_thread = (self.shift_thread + 1).min(caps::MAX_SHIFT);
+            if posts {
+                self.shift_reply = (self.shift_reply + 1).min(caps::MAX_SHIFT);
+            }
             self.calm_since = now_s;
-            if self.saturated_threads_since.is_some() {
+            if threads {
                 self.thread_every = (self.thread_every * 2).min(caps::THREAD_EVERY_MAX_S);
             }
         } else if now_s.saturating_sub(self.calm_since) >= 600 {
-            self.shift = self.shift.saturating_sub(1);
+            self.shift_reply = self.shift_reply.saturating_sub(1);
+            self.shift_thread = self.shift_thread.saturating_sub(1);
             self.thread_every = caps::THREAD_EVERY_S.max(self.thread_every / 2);
             self.calm_since = now_s;
         }

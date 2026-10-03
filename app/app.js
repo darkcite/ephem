@@ -2082,7 +2082,7 @@ async function main() {
     })),
   });
   channels.init({ TOR, phone, app, mod: TOR ? mod : null, showPane, setTab, setStatus, error, persist, scan, download, notify, notice, ramSections: () => !app.identity_label() });
-  boards.init({ TOR, app, mod: TOR ? mod : null, ch: channels.channelApp(), showPane, setTab, error });
+  boards.init({ TOR, app, mod: TOR ? mod : null, ch: channels.channelApp(), showPane, setTab, error, persist });
   renderIdentity();
   if (TOR) beginTor();
 

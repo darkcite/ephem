@@ -177,6 +177,16 @@ impl Identity {
         derive(&self.seed, &info)
     }
 
+    /// A board mirror's onion key (BF-5): `HKDF(seed, "p2pchat/board-mirror/" ‖ board name)`, so
+    /// the mirror keeps its address on every visit and nothing secret sits in browser storage.
+    /// The caller wipes it.
+    pub fn board_mirror_seed(&self, board: &str) -> [u8; 32] {
+        let mut info = Vec::with_capacity(22 + board.len());
+        info.extend_from_slice(b"p2pchat/board-mirror/");
+        info.extend_from_slice(board.as_bytes());
+        derive(&self.seed, &info)
+    }
+
     /// The onion service public key (the `.onion` address is its base32 form).
     pub fn onion_pk(&self) -> [u8; 32] {
         let mut s = self.onion_secret();
