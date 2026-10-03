@@ -7,12 +7,17 @@
 //! - [`post`]: what a poster signs (`s`), with one signing prefix per kind (G.4).
 //! - [`board`]: the owner's model and its blocks (G.5).
 //! - [`verify`]: a reader checks a record and its blocks (G.5.1 reader rules, G.5.3).
+//! - [`pow`], [`submit`], [`pipeline`]: the proof of work, the submit format and the host's
+//!   intake (G.6, G.8), sans-IO.
 //!
 //! Text only (v1); images are v2 (G.7). The channel crate's encoders (`cbor`, `cid`, `car`,
 //! `ipns`) are reused unchanged; `ephem_channel::channel` is not touched.
 
 pub mod board;
+pub mod pipeline;
 pub mod post;
+pub mod pow;
+pub mod submit;
 pub mod verify;
 
 /// Limits (G.5.2): defaults equal the maxima unless noted.

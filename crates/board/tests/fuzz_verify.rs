@@ -71,6 +71,7 @@ fn mutated_boards_never_panic() {
             }
             bl[j].0 = fresh.clone();
             let new = fresh.to_bytes();
+            #[allow(clippy::needless_range_loop)] // the index is compared to `j` and the slot is rewritten
             for k in 0..bl.len() {
                 if k != j && let Some(pos) = bl[k].1.windows(old.len()).position(|w| w == old.as_slice()) {
                     let before = bl[k].0.to_bytes();

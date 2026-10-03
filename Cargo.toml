@@ -29,6 +29,10 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.sha2]
 opt-level = 3
+[profile.dev.package.equix]
+opt-level = 3
+[profile.dev.package.hashx]
+opt-level = 3
 
 # Small browser patches of arti 0.46 (vendor/README.md): in-memory state (arti-client,
 # tor-persist), directory store (tor-dirmgr) and replay logs (tor-hsservice) on wasm32,

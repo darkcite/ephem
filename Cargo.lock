@@ -1182,8 +1182,10 @@ dependencies = [
 name = "ephem-board"
 version = "0.1.0"
 dependencies = [
+ "blake2",
  "ed25519-dalek",
  "ephem-channel",
+ "equix",
  "sha2",
 ]
 
@@ -1313,6 +1315,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "equix"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "207dd01b4071086d80c21d3b39f029b5ebb658f9910c0348c465ca1dd5346d90"
+dependencies = [
+ "arrayvec",
+ "hashx",
+ "num-traits",
+ "thiserror 2.0.21",
+ "visibility",
+]
+
+[[package]]
 name = "errno"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1405,6 +1420,12 @@ name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
+
+[[package]]
+name = "fixed-capacity-vec"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b31a14f5ee08ed1a40e1252b35af18bed062e3f39b69aab34decde36bc43e40"
 
 [[package]]
 name = "flate2"
@@ -1742,6 +1763,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "824e001ac4f3012dd16a264bec811403a67ca9deb6c102fc5049b32c4574b35f"
 dependencies = [
  "hashbrown 0.16.1",
+]
+
+[[package]]
+name = "hashx"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e1a862d146b32838e984850a27e3f6c5551fba240c141b2e342da1f36963048"
+dependencies = [
+ "arrayvec",
+ "blake2",
+ "fixed-capacity-vec",
+ "rand_core 0.10.1",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
