@@ -52,6 +52,8 @@ const READ_ROUNDS: u32 = 4;
 const NEWEST_GRACE_MS: u32 = 4_000;
 /// The owner re-signs the record when it is older than this (§D.5.3).
 const RESIGN_AFTER_S: u64 = 7 * 24 * 3600;
+/// A probe's try (each of its two) that takes longer counts as no answer.
+const PROBE_MS: u32 = 45_000;
 
 fn now_s() -> u64 {
     (js_sys::Date::now() / 1000.0) as u64
@@ -586,6 +588,26 @@ impl ChannelApp {
     }
 
     // ---- readers and mirrors ----
+
+    /// Whether the onion service at `onion` (a followed channel's or board's owner) accepts a
+    /// stream, i.e. its host is online. Nothing is sent: the stream is dropped once open. The
+    /// second try runs on a fresh circuit (a host that restarted has new introduction points).
+    /// Resolves to a bool; only a malformed address rejects.
+    pub fn probe(&self, onion: &str) -> Result<js_sys::Promise, JsValue> {
+        if !ephem_tor::web::is_onion(onion) {
+            return Err(err("not an onion address"));
+        }
+        let tor = self.tor()?;
+        let onion = onion.to_owned();
+        Ok(wasm_bindgen_futures::future_to_promise(async move {
+            for fresh in [false, true] {
+                if with_timeout(PROBE_MS, tor.connect(&onion, PORT, fresh)).await.is_ok() {
+                    return Ok(JsValue::TRUE);
+                }
+            }
+            Ok(JsValue::FALSE)
+        }))
+    }
 
     /// Reads channel `name` over Tor from the first onion (comma-separated: owner, mirrors) that
     /// serves a valid state; `min_seq` is the reader's high-water mark (§D.8). Resolves to the

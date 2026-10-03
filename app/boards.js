@@ -504,7 +504,7 @@ function renderFollows() {
   if (!ul) return;
   ul.replaceChildren();
   for (const f of follows()) {
-    const li = row(f.t || short(f.n), f.err ? 'unreachable right now' : f.stale ? 'host offline (stale)' : f.last || '', current?.read === f.n);
+    const li = row(f.t || short(f.n), f.err ? 'unreachable right now' : f.stale ? 'host offline (stale)' : `${f.up === false ? 'host offline · ' : ''}${f.last || ''}`, current?.read === f.n);
     li.onclick = () => { ctx.setTab('follow'); showBoard(f.n, f.o); };
     ul.append(li);
   }

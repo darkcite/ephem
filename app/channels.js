@@ -18,6 +18,9 @@ const GATEWAY = 'https://trustless-gateway.link';
 const ROUTING_HOST = 'delegated-ipfs.dev';
 const REFRESH_MS = 10 * 60 * 1000;   // followed channels and mirrors
 const PARALLEL = 4;                  // channels read at once (Tor circuits are not free)
+const PROBE_MS = 2 * 60 * 1000;      // an offline owner, probed for the online notice (F.6.1)
+const MISSES = 2;                    // probes in a row an online owner must miss to be offline
+const ONLINE_KEY = 'ephem-notify-online';
 const MAX_OWNED = 16;                // channel indices looked for in the store
 const TLV_FOLLOWS = 0x06;            // the follow list in the key file (decision D2)
 
@@ -50,7 +53,7 @@ export function init(c) {
     engine = Promise.resolve(ch);
     if (globalThis.ephemTorLab) globalThis.ephemChannel = ch; // lab test hook (C-P3)
   }
-  if (globalThis.ephemTorLab) globalThis.ephemChannelsRefresh = refreshAll; // lab: refresh now
+  if (globalThis.ephemTorLab) Object.assign(globalThis, { ephemChannelsRefresh: refreshAll, ephemProbeAll: probeAll }); // lab: now
 }
 
 /** The page's ChannelApp and the Tor build's module, once loaded (direct mode: on first use).
@@ -233,6 +236,8 @@ async function startAll() {
   for (const f of follows) if (f.m) resumeMirror(f);
   refreshAll();
   setInterval(refreshAll, REFRESH_MS);
+  probeAll();
+  setInterval(probeAll, PROBE_MS);
 }
 
 // ---- storage: <kind>/<name>/{channel.car, record.bin}; kind = channels (own) | mirrors --------
@@ -314,7 +319,7 @@ function renderFollows() {
     li.innerHTML = '<span class="dot"></span><span class="grow"><b></b><span class="sub"></span></span>';
     li.querySelector('b').textContent = f.t || `${f.n.slice(0, 12)}…`;
     avatar(li, f.t || f.n);
-    li.querySelector('.sub').textContent = f.err ? 'unreachable right now' : f.m ? 'mirroring' : f.last || '';
+    li.querySelector('.sub').textContent = f.err ? 'unreachable right now' : `${f.up === false ? 'owner offline · ' : ''}${f.m ? 'mirroring' : f.last || ''}`;
     if (f.fresh) {
       const b = document.createElement('span');
       b.className = 'badge';
@@ -351,6 +356,50 @@ async function refreshAll() {
   await Promise.all(Array.from({ length: PARALLEL }, worker));
   refreshing = false;
   saveFollows();
+}
+
+// ---- the online notice (optional, docs/P2P-CHAT.md F.6.1) --------------------------------------
+// With the setting on, the owner's address of every followed channel and board (the first one:
+// the link's `o=`) is probed: every PROBE_MS while it is offline or has just missed a probe,
+// every REFRESH_MS while online. A notice when an owner comes back: never at start (unknown →
+// online is no news), and online → offline takes MISSES misses in a row (a reload, a lost
+// circuit). The state is RAM only.
+const onlineOn = () => { try { return localStorage.getItem(ONLINE_KEY) === '1'; } catch { return false; } };
+let probing = false;
+async function probeAll() {
+  if (probing || !ch || torResolve || !onlineOn()) return;
+  probing = true;
+  const now = Date.now();
+  const queue = follows.filter((f) => f.o?.[0] && (f.up !== true || f.miss || now - (f.pt || 0) >= REFRESH_MS));
+  const worker = async () => {
+    for (let f = queue.shift(); f; f = queue.shift()) {
+      f.pt = Date.now();
+      sawOwner(f, await ch.probe(f.o[0]).catch(() => false));
+    }
+  };
+  await Promise.all(Array.from({ length: PARALLEL }, worker));
+  probing = false;
+  renderFollows();
+}
+
+function sawOwner(f, up) {
+  if (!up) {
+    f.miss = (f.miss || 0) + 1;
+    if (f.up === undefined || f.miss >= MISSES) f.up = false;
+    return;
+  }
+  const back = f.up === false;
+  f.up = true;
+  f.miss = 0;
+  if (!back || !follows.includes(f)) return;
+  const board = !isChannel(f);
+  // The system notification names no channel (the OS keeps it): which ones are followed is private.
+  ctx.notify(`A ${board ? 'board' : 'channel'} you follow is online`);
+  ctx.notice(`online:${f.n}`, `${board ? '▦ ' : ''}${f.t || `${f.n.slice(0, 12)}…`}`, 'Online again', () => {
+    if (board) return boardsLink?.(`#B=${f.n}&o=${f.o[0]}&m=${f.o.slice(1).join(',')}`);
+    ctx.setTab('follow');
+    showReader(f.n, f.o);
+  });
 }
 
 /** A verified reading of followed channel `f`: its title, sequence and new posts. */
@@ -1134,6 +1183,15 @@ function renderPosts(ol, view, owner) {
 // ---- controls ---------------------------------------------------------------------------------
 function wire() {
   const own = () => owned.find((o) => o.i === current?.own);
+  $('c-online').checked = onlineOn();
+  $('c-online').onchange = () => {
+    const on = $('c-online').checked;
+    try { on ? localStorage.setItem(ONLINE_KEY, '1') : localStorage.removeItem(ONLINE_KEY); } catch { /* private mode */ }
+    // Old states would announce owners that never went away: start from unknown.
+    for (const f of follows) f.up = f.miss = f.pt = undefined;
+    renderFollows();
+    if (on) probeAll();
+  };
   $('b-follow-new').onclick = async () => { ctx.setTab('follow'); if (await ready()) { current = null; ctx.showPane('v-follow-new'); renderFollows(); } };
   $('b-channel-open').onclick = () => openLink($('t-channel').value.trim());
   $('b-channel-scan').onclick = () => ctx.scan((t) => openLink(t));

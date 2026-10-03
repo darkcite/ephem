@@ -2098,3 +2098,17 @@ A counter on each tab shows the unread total, from this tab's RAM and the follow
 | Debug info: latency, memory, CPU | Settings → About → **Performance (debug)**, refreshed every second, and an optional one-line overlay (`app/perf.js`): per open chat the time from send to its delivery receipt (last and median of 20; a round trip through the real path, Tor or direct) and, direct, WebRTC's RTT; main-thread load over the last minute from a 100 ms timer's lateness (no CPU API in browsers) and, in Chromium, long tasks; the WebAssembly memories (app, and the Tor part in direct mode) and, in Chromium, the JS heap; cores. Nothing leaves the device |
 | Is channel history kept on IPFS when a channel moves between devices with downtime? | **No** (answered to the owner, 2026-09-30): the public network holds only the vault (metadata, D.11) and the optional IPNS record, never the posts. With no device, mirror or backup online the new device continues without the older posts, which join when one comes back; lost for good only if the old storage is gone and no mirror or backup exists. The fix is the optional storage provider (V-4, not built), a follower's Kubo mirror, or an exported backup |
 | License | PolyForm Noncommercial 1.0.0 (LICENSE, NOTICE); SPDX headers on every source file, stamped before each commit (`tools/spdx.py`, `.githooks/pre-commit`, a Claude Code hook) |
+
+### F.7 Online notice for followed channels and boards (owner's request, 2026-10-03)
+
+An optional notice when the owner of a followed channel or board comes back online after being offline. Settings → Connection: **Tell me when a channel or board I follow comes back online**, off by default (the choice is in localStorage; the state below is RAM only).
+
+| Topic | As built |
+|---|---|
+| What "online" means | The **owner's** onion (the link's `o=`, the first address in the follow entry) accepts a Tor stream. A mirror answering does not count: the channel was readable all along, the news is that its owner is back. `ChannelApp.probe(onion)` opens a stream and drops it at once (nothing is sent, the host's accept loop sees an empty request); a second try runs on a fresh circuit. Each try is bounded at 45 s |
+| How often | Every 2 min for an owner that is offline or has just missed a probe, every 10 min (the follow refresh) for one that is online; at most 4 probes at once, as reads. Nothing is probed while the setting is off |
+| No false alarms | No notice at start (unknown → online is not news). Online → offline takes **2 missed probes in a row** (a reload, a lost circuit, a busy accept queue). Turning the setting off forgets every state |
+| What it shows | In the follow list: "owner offline · …" (channels), "host offline · …" (boards). The notice: an in-app notice with the title ("Online again"; a tap opens the channel or board), and the system notification while Ephem is in the background **without the title** ("A channel you follow is online"), if system notifications are on: the OS keeps notifications, and which channels someone follows is private |
+| Privacy | A probe is a Tor connection to an onion the reader already reads every 10 min: the owner can tell that someone connects, not who. More frequent probes of an offline owner reach nothing (no descriptor) or its introduction points only |
+| Limit | After the owner moves to another device (takeover, G.13), a reader's arti keeps the old descriptor until it expires (the known `tor-hsclient` limit, BOARDS.md G.13): probes miss until then |
+| Lab | `checks/tor-lab/e2e_tor_online.mjs` |
