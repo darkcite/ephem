@@ -1794,7 +1794,7 @@ https://<owner>.github.io/ephem/channel.html#c=<ipns-name>&o=<channel-onion>[&m=
 | Where | Holds | Survives with everything off | Cost |
 |---|---|---|---|
 | **The key file** (a TLV section, like the follow list) | A snapshot as of the last save/export | For ever (it is the user's file) | Stale: only as fresh as the last export |
-| **An IPNS record on the public DHT** (the vault record, V.2) | ≤ ~6 KiB, encrypted: the channel list, heads, mirrors, the writer lease | **~36–48 h** after the last republish (DHT nodes drop records older than their record age; to be measured, spike V-P2) | Free, anonymous (published through a Tor exit, as D.5.2) |
+| **An IPNS record on the public DHT** (the vault record, V.2) | ≤ ~6 KiB, encrypted: the channel list, heads, mirrors, the writer lease | **13–86 h** after the last republish (measured, spike V-P2: alive at +13 h, gone at +86 h) | Free, anonymous (published through a Tor exit, as D.5.2) |
 | **An IPFS storage provider** the user chooses (optional, V.4) | The whole channel (CARs), plain: the channel is public anyway | For as long as the account lasts | An account with a third party; the upload goes through a Tor exit |
 
 Everything else follows from this table: the vault makes the *state* follow the identity for free; the *content* follows it for free only while some holder is online (another device, a mirror, a provider), and otherwise the new device **continues the channel without its history** and back-fills it later.
