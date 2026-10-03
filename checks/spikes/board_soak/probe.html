@@ -1,0 +1,23 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- Copyright 2026 Anton (darkcite) -->
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' https:; style-src 'unsafe-inline'">
+<meta name="referrer" content="no-referrer">
+<title>Ephem · board soak probe (B-P11)</title>
+<style>
+  body { font: 15px/1.45 system-ui, sans-serif; background: #0f1216; color: #e6e9ee; margin: 0; padding: 16px; max-width: 720px; }
+  h1 { font-size: 20px; } input, button { font: inherit; } input { width: 100%; box-sizing: border-box; padding: 8px; margin: 6px 0; }
+  button { padding: 10px 16px; border-radius: 8px; border: 1px solid #4b78c8; background: #2b4f8f; color: #fff; }
+  pre { white-space: pre-wrap; background: #171b21; padding: 12px; border-radius: 8px; font-size: 13px; }
+  .note { color: #9aa3ad; font-size: 14px; }
+</style>
+<h1>Board hosting soak (spike B-P11)</h1>
+<p class="note">Measures how much of the time a board hosted from a laptop tab is reachable, from a <b>second device on another network</b> (a phone on mobile data is ideal). Host a board in Ephem on the laptop (desktop Chrome, Tor mode, the tab left open), paste its link here, press Start and leave this page open (plugged in) for 8–24 hours. Every 5 minutes it reads the board through Tor (its own Tor client, here) and records whether it answered. Nothing is sent anywhere else: copy the result and send it to whoever asked.</p>
+<input id="link" placeholder="https://…/app/tor.html#B=k51…&amp;o=….onion" spellcheck="false" autocomplete="off">
+<button id="start">Start</button> <button id="copy" hidden>Copy the result</button>
+<pre id="out">Not started.</pre>
+<script type="module" src="probe.js"></script>
+</html>
