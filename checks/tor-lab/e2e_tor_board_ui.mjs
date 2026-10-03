@@ -67,14 +67,16 @@ try {
   await o.check('#bn-understood');
   await o.click('#b-board-create');
   await o.waitForSelector('#v-board-own:not([hidden])', { timeout: 30_000 });
-  await o.waitForFunction(() => /Online through Tor/.test(document.querySelector('#bo-state')?.textContent), null, { timeout: T });
+  // The link is there at once; the reader below proves the onion answers (arti's own status can
+  // lag behind its published descriptor in the lab).
+  await o.waitForFunction(() => /#B=k51/.test(document.querySelector('#bo-link')?.value), null, { timeout: 30_000 });
   // Lab efforts: the defaults are calibrated for phones.
   await o.fill('#bo-eff-reply', '40');
   await o.fill('#bo-eff-thread', '80');
   await o.click('#b-bo-efforts');
   const link = await o.inputValue('#bo-link');
   const onion = link.match(/&o=([a-z2-7]{56}\.onion)/)?.[1];
-  check('the owner creates a board in My channels: online, a #B= link, listed with ▦',
+  check('the owner creates a board in My channels: a #B= link, listed with ▦',
     /\/tor\.html#B=k51[a-z0-9]+&o=[a-z2-7]{56}\.onion$/.test(link) && /▦ Lab \/b\//.test(await o.textContent('#board-owns')), link.slice(-90));
 
   // ---- reader A: the link, the catalog, a thread from the reply box ----

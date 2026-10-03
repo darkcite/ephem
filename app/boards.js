@@ -253,7 +253,8 @@ function renderOwn() {
   if (o) o.title = v.title;
   $('bo-title').textContent = `▦ ${v.title}`;
   const reach = boards.reach(i);
-  $('bo-state').textContent = `${reach === 'reachable' || reach === 'degraded' ? 'Online through Tor' : 'Publishing its onion…'} · ${st.threads} threads · next No. ${st.next_no} · version ${st.seq}`
+  const online = { reachable: 'Online through Tor', degraded: 'Online through Tor (degraded)', publishing: 'Publishing its onion…', unreachable: 'Tor is still setting up its onion' }[reach] || 'Offline';
+  $('bo-state').textContent = `${online} · ${st.threads} threads · next No. ${st.next_no} · version ${st.seq}`
     + (st.closed_notice ? ' · the board closed itself under a flood (switches below)' : '');
   $('bo-link').value = linkFor(v.name, st.onion, v.mirrors);
   $('bo-plain').textContent = `http://${st.onion}/`;
