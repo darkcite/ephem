@@ -53,7 +53,7 @@ export function init(c) {
 
 /** The page's ChannelApp and the Tor build's module, once loaded (direct mode: on first use).
  *  Boards share its identity and Tor client. */
-export async function engine() {
+export async function torEngine() {
   if (!(await ready())) throw new Error('the Tor part did not start');
   return { ch, mod: torMod || ctx.mod };
 }

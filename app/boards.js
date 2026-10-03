@@ -53,7 +53,7 @@ function adopt(b) {
 /** The BoardApp, loading the Tor part first in direct mode. */
 function app() {
   if (boards) return Promise.resolve(boards);
-  starting ||= channels.engine().then(({ ch, mod }) => adopt(new mod.BoardApp(ch)));
+  starting ||= channels.torEngine().then(({ ch, mod }) => adopt(new mod.BoardApp(ch)));
   return starting;
 }
 
