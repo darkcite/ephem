@@ -149,6 +149,22 @@ try {
   check('no unexpected page errors', unexpected(problems).length === 0, unexpected(problems).join(' | '));
 } catch (e) {
   check(`flow: ${e.message.split('\n')[0]}`, false);
+  for (const b of browsers) {
+    for (const ctx of b.contexts()) {
+      for (const p of ctx.pages()) {
+        const s = await p.evaluate(() => ({
+          url: location.hash.slice(0, 20),
+          views: [...document.querySelectorAll('#pane > .view')].filter((v) => !v.hidden).map((v) => v.id),
+          source: document.querySelector('#bd-source')?.textContent,
+          state: document.querySelector('#bo-state')?.textContent,
+          post: document.querySelector('#bd-post-state')?.textContent,
+          error: document.querySelector('#error')?.textContent,
+          tor: document.querySelector('#tor-state')?.textContent,
+        })).catch((x) => String(x));
+        console.log('  state:', JSON.stringify(s));
+      }
+    }
+  }
   dumpLogs();
 } finally {
   for (const b of browsers) await b.close();
