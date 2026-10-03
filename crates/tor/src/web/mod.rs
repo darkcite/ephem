@@ -150,14 +150,25 @@ impl Tor {
     }
 
     /// Launches an onion service whose identity is the Ed25519 key `secret` (Ephem derives it
-    /// from the identity seed, §7.1, or a channel's, §D.3). Every stream to any port is
-    /// accepted and queued on the returned [`Service`]; the service stays up while that value
-    /// lives. Several services can run side by side (C-P2); nicknames must differ.
+    /// from the identity seed, §7.1, or a channel's, §D.3). Incoming streams are queued on the
+    /// returned [`Service`]; the service stays up while that value lives. Several services can
+    /// run side by side (C-P2); nicknames must differ.
+    ///
+    /// Every stage is bounded (security audit H-2; the onion addresses of channels are public and
+    /// the chat onion is known to every contact): at most [`REND_IN_FLIGHT`] rendezvous circuits
+    /// being built and [`LIVE_CIRCUITS`] open at once (the rest are dropped unanswered), at most
+    /// [`CIRCUIT_STREAMS`] new streams per circuit in [`CIRCUIT_WINDOW_MS`] (more closes the
+    /// circuit), at most [`MAX_CIRCUIT_STREAMS`] open per circuit (arti closes it), and a queue of
+    /// [`QUEUE`] accepted streams (more are refused with END DONE). The introduction points are
+    /// asked to pass at most [`INTRO_RATE`]/s (burst [`INTRO_BURST`]); that protects the tab, not
+    /// availability, under a flood.
     pub fn launch(&self, nickname: &str, secret: &[u8; 32]) -> Result<Service, String> {
         let kp = ed25519::Keypair::from_bytes(secret);
         let hsid: HsId = tor_hscrypto::pk::HsIdKey::from(*ed25519::ExpandedKeypair::from(&kp).public()).id();
         let cfg = OnionServiceConfigBuilder::default()
             .nickname(nickname.parse().map_err(|e: tor_hsservice::InvalidNickname| e.to_string())?)
+            .max_concurrent_streams_per_circuit(MAX_CIRCUIT_STREAMS)
+            .rate_limit_at_intro(Some(tor_hsservice::config::TokenBucketConfig::new(INTRO_RATE, INTRO_BURST)))
             .build()
             .map_err(|e| e.to_string())?;
         let (svc, rend) = self
@@ -165,17 +176,8 @@ impl Tor {
             .launch_onion_service_with_hsid(cfg, HsIdKeypair::from(ed25519::ExpandedKeypair::from(&kp)))
             .map_err(|e| e.to_string())?
             .ok_or("onion services are disabled")?;
-        let incoming: Rc<RefCell<VecDeque<DataStream>>> = Rc::default();
-        let queue = incoming.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let mut streams = tor_hsservice::handle_rend_requests(rend);
-            while let Some(req) = streams.next().await {
-                match req.accept(tor_cell::relaycell::msg::Connected::new_empty()).await {
-                    Ok(s) => queue.borrow_mut().push_back(s),
-                    Err(e) => tracing::info!("onion: stream not accepted: {e}"),
-                }
-            }
-        });
+        let incoming: Rc<RefCell<VecDeque<DataStream>>> = Rc::new(RefCell::new(VecDeque::with_capacity(QUEUE)));
+        wasm_bindgen_futures::spawn_local(accept_loop(rend, incoming.clone()));
         Ok(Service { onion: safelog::DisplayRedacted::display_unredacted(&hsid).to_string(), incoming, _running: svc })
     }
 
@@ -211,6 +213,69 @@ impl Tor {
 }
 
 /// A running onion service and its accepted, not yet taken, streams.
+/// Rendezvous circuits being built at once, per service; more requests are dropped (the client
+/// sees a timeout and may retry).
+pub const REND_IN_FLIGHT: u32 = 8;
+/// Open rendezvous circuits per service (a reader holds one per refresh, a chat one).
+pub const LIVE_CIRCUITS: u32 = 32;
+/// New streams one circuit may open per window before it is closed (a channel refresh needs 2–3).
+pub const CIRCUIT_STREAMS: u32 = 8;
+pub const CIRCUIT_WINDOW_MS: f64 = 10_000.0;
+/// Streams open at once on one circuit (arti's `max_concurrent_streams_per_circuit`).
+pub const MAX_CIRCUIT_STREAMS: u32 = 8;
+/// Accepted streams waiting for the app.
+pub const QUEUE: usize = 32;
+/// Introductions per second (and burst) the introduction points pass on (`DOS_PARAMS`).
+pub const INTRO_RATE: u32 = 10;
+pub const INTRO_BURST: u32 = 50;
+
+/// The bounded replacement for `tor_hsservice::handle_rend_requests` (which builds every
+/// rendezvous circuit at once and accepts every stream): see [`Tor::launch`].
+async fn accept_loop(mut rend: impl futures::Stream<Item = tor_hsservice::RendRequest> + Unpin, queue: Rc<RefCell<VecDeque<DataStream>>>) {
+    let building = Rc::new(std::cell::Cell::new(0u32));
+    let live = Rc::new(std::cell::Cell::new(0u32));
+    while let Some(req) = rend.next().await {
+        if building.get() >= REND_IN_FLIGHT || live.get() >= LIVE_CIRCUITS {
+            let _ = req.reject().await;
+            tracing::info!("onion: a rendezvous was dropped (busy)");
+            continue;
+        }
+        building.set(building.get() + 1);
+        let (building, live, queue) = (building.clone(), live.clone(), queue.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let streams = req.accept().await;
+            building.set(building.get() - 1);
+            let mut streams = match streams {
+                Ok(s) => s,
+                Err(e) => return tracing::info!("onion: rendezvous failed: {e}"),
+            };
+            live.set(live.get() + 1);
+            let (mut window_at, mut opened) = (js_sys::Date::now(), 0u32);
+            while let Some(sr) = streams.next().await {
+                let now = js_sys::Date::now();
+                if now - window_at >= CIRCUIT_WINDOW_MS {
+                    (window_at, opened) = (now, 0);
+                }
+                opened += 1;
+                if opened > CIRCUIT_STREAMS {
+                    tracing::info!("onion: a circuit opened too many streams; closed");
+                    let _ = sr.shutdown_circuit();
+                    break;
+                }
+                if queue.borrow().len() >= QUEUE {
+                    let _ = sr.reject(tor_cell::relaycell::msg::End::new_with_reason(tor_cell::relaycell::msg::EndReason::DONE)).await;
+                    continue;
+                }
+                match sr.accept(tor_cell::relaycell::msg::Connected::new_empty()).await {
+                    Ok(s) => queue.borrow_mut().push_back(s),
+                    Err(e) => tracing::info!("onion: stream not accepted: {e}"),
+                }
+            }
+            live.set(live.get() - 1);
+        });
+    }
+}
+
 pub struct Service {
     onion: String,
     incoming: Rc<RefCell<VecDeque<DataStream>>>,

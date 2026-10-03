@@ -440,25 +440,39 @@ pub(crate) fn tick(inner: &Shared) {
     }
 }
 
+/// How long an incoming stream may take to deliver its first frame (security audit H-2: a
+/// stream that never sends one held its buffer for good).
+const FIRST_FRAME_MS: u32 = 30_000;
+
 /// An incoming stream: its first frame decides which chat it belongs to.
 async fn incoming(inner: Shared, s: DataStream) {
     let (mut r, w) = s.split();
-    let mut buf = Vec::with_capacity(RX_CAP);
-    let mut chunk = [0u8; 2048];
-    let n = loop {
-        if buf.len() >= 2 {
-            let n = u16::from_le_bytes([buf[0], buf[1]]) as usize;
-            if n == 0 || n > MAX_FRAME {
-                return;
+    // Grows to the first frame only (a handshake is small); the link's own buffer is RX_CAP.
+    let mut buf = Vec::with_capacity(2048);
+    let first = async {
+        let mut chunk = [0u8; 2048];
+        loop {
+            if buf.len() >= 2 {
+                let n = u16::from_le_bytes([buf[0], buf[1]]) as usize;
+                if n == 0 || n > MAX_FRAME {
+                    return None;
+                }
+                if buf.len() >= 2 + n {
+                    return Some(n);
+                }
             }
-            if buf.len() >= 2 + n {
-                break n;
+            match r.read(&mut chunk).await {
+                Ok(0) | Err(_) => return None,
+                Ok(m) if buf.len() + m <= RX_CAP => buf.extend_from_slice(&chunk[..m]),
+                Ok(_) => return None,
             }
         }
-        match r.read(&mut chunk).await {
-            Ok(0) | Err(_) => return,
-            Ok(m) => buf.extend_from_slice(&chunk[..m]),
-        }
+    };
+    let deadline = sleep_ms(FIRST_FRAME_MS);
+    futures::pin_mut!(first, deadline);
+    let n = match futures::future::select(first, deadline).await {
+        futures::future::Either::Left((Some(n), _)) => n,
+        _ => return,
     };
     let wire = writer(w);
     let mut card_event = false;
@@ -516,6 +530,7 @@ async fn incoming(inner: Shared, s: DataStream) {
     // A stream for none of our chats is dropped unanswered (§28.4).
     if let Some(lid) = taken {
         buf.drain(..2 + n);
+        buf.reserve(RX_CAP - buf.len()); // the link's full buffer, only once it belongs to a chat
         reader(inner.clone(), lid, r, buf);
         room::drain(&inner);
     }

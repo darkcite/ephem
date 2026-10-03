@@ -60,33 +60,5 @@ pub async fn request(tor: &Tor, method: &str, host: &str, path: &str, content_ty
             Err(e) => return Err(e.to_string()),
         }
     }
-    parse(&resp)
-}
-
-/// The status and the body of a whole HTTP/1.1 response (`Content-Length`, chunked, or up to
-/// the end of the stream).
-fn parse(resp: &[u8]) -> Result<(u16, Vec<u8>), String> {
-    let end = resp.windows(4).position(|w| w == b"\r\n\r\n").ok_or("no HTTP response")?;
-    let head = std::str::from_utf8(&resp[..end]).map_err(|_| "HTTP head")?;
-    let status = head.split(' ').nth(1).and_then(|s| s.parse().ok()).ok_or("no HTTP status")?;
-    let rest = &resp[end + 4..];
-    let header = |k: &str| head.lines().find_map(|l| l.split_once(':').filter(|(n, _)| n.trim().eq_ignore_ascii_case(k)).map(|(_, v)| v.trim().to_ascii_lowercase()));
-    if header("transfer-encoding").is_some_and(|v| v.contains("chunked")) {
-        let mut out = Vec::new();
-        let mut pos = 0;
-        loop {
-            let line_end = rest[pos..].windows(2).position(|w| w == b"\r\n").ok_or("chunk")? + pos;
-            let size = std::str::from_utf8(&rest[pos..line_end]).ok().and_then(|l| usize::from_str_radix(l.split(';').next()?.trim(), 16).ok()).ok_or("chunk size")?;
-            pos = line_end + 2;
-            if size == 0 {
-                return Ok((status, out));
-            }
-            out.extend_from_slice(rest.get(pos..pos + size).ok_or("chunk cut short")?);
-            pos += size + 2;
-        }
-    }
-    match header("content-length").and_then(|v| v.parse::<usize>().ok()) {
-        Some(n) => Ok((status, rest.get(..n).ok_or("body cut short")?.to_vec())),
-        None => Ok((status, rest.to_vec())),
-    }
+    ephem_channel::gateway::parse_any_response(&resp).map_err(str::to_owned)
 }

@@ -94,7 +94,7 @@ impl Contact {
     }
 
     fn set_nick(&mut self, nick: &[u8]) -> bool {
-        if nick.len() > MAX_NICK || core::str::from_utf8(nick).is_err() {
+        if nick.len() > MAX_NICK || !ephem_proto::card::valid_nick(nick) {
             return false;
         }
         self.nick = [0; MAX_NICK];
@@ -132,7 +132,13 @@ impl Contact {
         let added_at = r.u32()?;
         let n = r.u8()? as usize;
         let mut c = Contact { peer_id, flags, onion_pk, sign_pk, card_secret, added_at, nick_len: 0, nick: [0; MAX_NICK] };
-        c.set_nick(r.take(n)?).then_some(c)
+        let nick = r.take(n)?;
+        // A name saved by an older version may break today's rules (F-04): keep the contact and
+        // drop the name (the handle is shown instead) rather than refuse the whole key file.
+        if !c.set_nick(nick) && core::str::from_utf8(nick).is_err() {
+            return None;
+        }
+        Some(c)
     }
 }
 

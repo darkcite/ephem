@@ -143,7 +143,7 @@ Application backend, WebSocket or HTTP signalling, TURN, chat relay, message dat
 | Party | What we trust it for | Mitigation |
 |---|---|---|
 | Out-of-band channel (in person, messenger, …) | Integrity of the invite and answer: they carry the DTLS fingerprints and static keys | SAS comparison (§10.4). In-person QR scanning is strongest. |
-| Static host / repository owner | Serving honest code | CSP, SRI, a service worker that pins the version and asks before updating (§17), reproducible builds with published hashes |
+| Static host / repository owner | Serving honest code | CSP, SRI, a service worker that pins the accepted version and asks before updating (§17; it cannot stop a hostile `sw.js` from the host, §17.1), reproducible builds with published hashes |
 | Browser and OS | Everything | Out of scope (§21) |
 | STUN operator | Nothing about security. It learns metadata only | Configurable list, and a LAN-only mode |
 | Embedded Tor client (Tor mode only, §28) | Correct Tor protocol behaviour, built from upstream arti with a small patch set | Our code; reviewed and fuzzed like the rest of the WASM (§28.9) |
@@ -867,9 +867,10 @@ Wallet authentication is not in any current phase (§7.4). Identity comes only f
 - It caches **only** the static assets listed in §4.1.
 - It never handles, stores or forwards messages or codes.
 - Updates:
-  1. A new `sw.js` installs and **waits**.
-  2. The UI shows the new build hash and asks the user before activating it.
-  3. It activates only on user consent.
+  1. A new `sw.js` installs and precaches its files into its own cache.
+  2. The UI shows the new build id and asks the user before switching to it.
+  3. Until the user taps Update, every request is answered from the cache of the **accepted** build (a pointer the worker keeps in its own cache), even after the new worker has become active because the app was closed and reopened. Before the 2026-10-03 security audit (W-1) closing the app was enough to switch builds; `checks/e2e_sw_update.mjs` now covers it.
+  4. **What no service worker can stop:** the browser fetches `sw.js` from the host on every update check, so a host (or a compromised repository or Pages deploy) that serves a hostile `sw.js` runs its code on the next visit. The pinning protects against silent honest updates, not against a malicious host; verify the build id against the published release hash when it matters.
 
 ### 17.2 Integrity
 
@@ -1023,7 +1024,7 @@ Members     4 / 8  (links 5 / 6)
 | Malicious peer | Fake identity, injection, replay, joining, abuse of membership, relay candidates | Keys pinned by the invite, AEAD with strict nonces, owner-only admission and signed room state, relay filtering |
 | Thief of a key file | Offline passphrase guessing; this also exposes the contacts list | Argon2id. The UI enforces a minimum passphrase strength |
 | Snowflake proxy / broker (Tor mode) | Sees your IP and that you use Snowflake; a malicious proxy can drop traffic | Tor's own encryption and circuit verification inside WASM; proxy rotation (Turbotunnel keeps the session across proxies) |
-| Static host | Serves altered code | SRI, a service worker that pins the version and asks before updating, reproducible builds |
+| Static host | Serves altered code | SRI, a service worker that pins the accepted version and asks before updating, reproducible builds. **Limit:** a hostile `sw.js` from the host runs on the next visit (§17.1); only checking the build id against the published hash detects it |
 | STUN operator | Learns IPs and timing | Configurable list, LAN-only mode |
 | Browser extension or device | Full access | Out of scope |
 

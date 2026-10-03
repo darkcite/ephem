@@ -177,8 +177,9 @@ E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_room.mjs" 2>&1 | tee "$OUT/
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_cards.mjs" 2>&1 | tee "$OUT/app-e2e-cards.log"
 E2E_BROWSER="${E2E_BROWSER:-chrome}" node "$ROOT/e2e_multi.mjs" 2>&1 | tee "$OUT/app-e2e-multi.log"
 node "$ROOT/e2e_keyboard.mjs" 2>&1 | tee "$OUT/app-e2e-keyboard.log"
+node "$ROOT/e2e_sw_update.mjs" 2>&1 | tee "$OUT/app-e2e-sw-update.log"
 node "$ROOT/channel_interop.mjs" 2>&1 | tee "$OUT/channel-interop.log"
-{ echo "## App"; echo; echo "Native tests: $NT"; echo; echo "License headers: $SPDX"; echo; echo "### MVP-1"; echo '```'; cat "$OUT/app-e2e.log"; echo '```'; echo; echo "### MVP-2"; echo '```'; cat "$OUT/app-e2e-mvp2.log"; echo '```'; echo; echo "### MVP-3 rooms"; echo '```'; cat "$OUT/app-e2e-room.log"; echo '```'; echo; echo "### Contact cards"; echo '```'; cat "$OUT/app-e2e-cards.log"; echo '```'; echo; echo "### Several chats in one tab"; echo '```'; cat "$OUT/app-e2e-multi.log"; echo '```'; echo; echo "### Phone keyboard layout"; echo '```'; cat "$OUT/app-e2e-keyboard.log"; echo '```'; echo; echo "### Channel formats vs the JS IPFS libraries"; echo '```'; cat "$OUT/channel-interop.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
+{ echo "## App"; echo; echo "Native tests: $NT"; echo; echo "License headers: $SPDX"; echo; echo "### MVP-1"; echo '```'; cat "$OUT/app-e2e.log"; echo '```'; echo; echo "### MVP-2"; echo '```'; cat "$OUT/app-e2e-mvp2.log"; echo '```'; echo; echo "### MVP-3 rooms"; echo '```'; cat "$OUT/app-e2e-room.log"; echo '```'; echo; echo "### Contact cards"; echo '```'; cat "$OUT/app-e2e-cards.log"; echo '```'; echo; echo "### Several chats in one tab"; echo '```'; cat "$OUT/app-e2e-multi.log"; echo '```'; echo; echo "### Phone keyboard layout"; echo '```'; cat "$OUT/app-e2e-keyboard.log"; echo '```'; echo; echo "### Updates only with consent (service worker)"; echo '```'; cat "$OUT/app-e2e-sw-update.log"; echo '```'; echo; echo "### Channel formats vs the JS IPFS libraries"; echo '```'; cat "$OUT/channel-interop.log"; echo '```'; echo; } >> "$OUT/REPORT.md"
 fi
 
 if want tor; then

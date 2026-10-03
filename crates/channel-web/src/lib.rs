@@ -785,11 +785,28 @@ async fn fetch_channel(tor: &Tor, name: &Cid, onion: &str, min_seq: u64, fresh: 
     .await
 }
 
+/// Requests one hosted onion answers at once; more streams are closed at once (security audit
+/// H-2: one task per stream, unbounded, with responses of the whole channel).
+const MAX_SERVING: u32 = 16;
+/// The whole of one request, write included: a client that stops reading cannot hold a response.
+const SERVE_TIMEOUT_MS: u32 = 60_000;
+
 /// Serves until the service is dropped (its owner stopped writing here, §D.11.3 step 5).
 async fn serve_loop(svc: std::rc::Weak<Service>, hosted: Rc<RefCell<Hosted>>) {
+    let serving = Rc::new(std::cell::Cell::new(0u32));
     while let Some(s) = svc.upgrade() {
         match s.try_accept() {
-            Some(stream) => wasm_bindgen_futures::spawn_local(serve_one(stream, hosted.clone())),
+            Some(stream) if serving.get() < MAX_SERVING => {
+                serving.set(serving.get() + 1);
+                let (hosted, serving) = (hosted.clone(), serving.clone());
+                wasm_bindgen_futures::spawn_local(async move {
+                    if with_timeout(SERVE_TIMEOUT_MS, serve_one(stream, hosted)).await.is_err() {
+                        tracing::info!("channel: a request took too long; dropped");
+                    }
+                    serving.set(serving.get() - 1);
+                });
+            }
+            Some(stream) => drop(stream), // busy: the stream closes at once
             None => {
                 drop(s);
                 sleep_ms(50).await;
@@ -799,7 +816,7 @@ async fn serve_loop(svc: std::rc::Weak<Service>, hosted: Rc<RefCell<Hosted>>) {
 }
 
 /// One request per stream (`Connection: close`).
-async fn serve_one(s: DataStream, hosted: Rc<RefCell<Hosted>>) {
+async fn serve_one(s: DataStream, hosted: Rc<RefCell<Hosted>>) -> Result<(), String> {
     let (mut r, mut w) = s.split();
     let head = with_timeout(REQUEST_TIMEOUT_MS, async {
         let mut head = Vec::with_capacity(512);
@@ -818,12 +835,14 @@ async fn serve_one(s: DataStream, hosted: Rc<RefCell<Hosted>>) {
         Ok(h) => h,
         Err(e) => {
             tracing::info!("channel: a request was not read: {e}");
-            return;
+            return Ok(());
         }
     };
+    // The borrow ends here: the response is shared, so the channel may change while it is written.
     let resp = gateway::respond(&head, &hosted.borrow());
     tracing::debug!("channel: served {} bytes", resp.len());
     let _ = w.write_all(&resp).await;
     let _ = w.flush().await;
     let _ = w.close().await;
+    Ok(())
 }

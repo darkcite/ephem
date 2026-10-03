@@ -16,7 +16,9 @@ use crate::cbor::Value;
 use crate::channel::{self, View};
 use crate::cid::Cid;
 use crate::page::{self, Served};
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 /// Largest request head read before answering 431.
 pub const MAX_HEAD: usize = 8 * 1024;
@@ -35,6 +37,10 @@ pub struct Hosted {
     blocks: HashMap<Cid, Vec<u8>>,
     /// The web page at `/` (built once per version).
     page: Vec<u8>,
+    /// The whole response to `GET /ipfs/<root>?format=car`, what every reader asks for: built on
+    /// the first request of this version, then shared (security audit H-2: rebuilding it per
+    /// request turned 140 bytes in into ~3 copies of the channel in memory).
+    root_car: OnceCell<Rc<[u8]>>,
 }
 
 impl Hosted {
@@ -46,13 +52,13 @@ impl Hosted {
             Ok(view) => page::html(&view, served),
             Err(_) => b"<!doctype html><title>Channel</title><p>This channel cannot be shown right now.</p>".to_vec(),
         };
-        Self { name, root, record, blocks: blocks.into_iter().collect(), page }
+        Self { name, root, record, blocks: blocks.into_iter().collect(), page, root_car: OnceCell::new() }
     }
 
     /// As [`Self::new`], for the owner's own channel: its page comes from `view` (the state it
     /// just built and signed), so a post costs no re-verification of the whole channel.
     pub fn owned(root: Cid, record: Vec<u8>, blocks: Vec<Block>, view: &View) -> Self {
-        Self { name: view.name.clone(), root, record, blocks: blocks.into_iter().collect(), page: page::html(view, Served::Owner) }
+        Self { name: view.name.clone(), root, record, blocks: blocks.into_iter().collect(), page: page::html(view, Served::Owner), root_car: OnceCell::new() }
     }
 
     /// The blocks reachable from `cid` (itself first), or `None` if it is not held.
@@ -112,8 +118,19 @@ pub fn head_complete(buf: &[u8]) -> bool {
     buf.windows(4).any(|w| w == b"\r\n\r\n")
 }
 
-/// The whole HTTP response to one request head.
-pub fn respond(head: &[u8], h: &Hosted) -> Vec<u8> {
+/// The whole HTTP response to one request head. Shared (`Rc`) so a response outlives any borrow
+/// of `h` while it is written; small responses are copied into one once (a documented copy:
+/// ≤ one block, 1 MiB), the root CAR is built once per version.
+pub fn respond(head: &[u8], h: &Hosted) -> Rc<[u8]> {
+    let r = respond_inner(head, h);
+    if r.is_empty() {
+        return h.root_car.get_or_init(|| response("200 OK", CT_CAR, &h.car()).into()).clone();
+    }
+    Rc::from(r)
+}
+
+/// The response, or empty for the root CAR (no real response is empty).
+fn respond_inner(head: &[u8], h: &Hosted) -> Vec<u8> {
     if head.len() > MAX_HEAD {
         return error("431 Request Header Fields Too Large");
     }
@@ -145,6 +162,9 @@ pub fn respond(head: &[u8], h: &Hosted) -> Vec<u8> {
     if let Some(cid) = path.strip_prefix("/ipfs/") {
         let Some(cid) = Cid::parse(cid.trim_end_matches('/')) else { return error("400 Bad Request") };
         if wants("car", CT_CAR) {
+            if cid == h.root {
+                return Vec::new();
+            }
             return match h.dag(&cid) {
                 Some(blocks) => response("200 OK", CT_CAR, &car::write(std::slice::from_ref(&cid), &blocks)),
                 None => error("404 Not Found"),
@@ -210,10 +230,72 @@ pub fn parse_response(resp: &[u8]) -> Result<&[u8], HttpError> {
     }
 }
 
+/// The status and body of a whole HTTP/1.1 response from a public HTTPS service (the IPNS routing
+/// API): `Content-Length`, chunked, or up to the end of the stream. Any status is returned; the
+/// caller decides. Never panics on hostile or cut input (security audit M-6: the chunked loop used
+/// to slice past the end when a response stopped inside a chunk's trailing CRLF).
+pub fn parse_any_response(resp: &[u8]) -> Result<(u16, Vec<u8>), &'static str> {
+    let end = resp.windows(4).position(|w| w == b"\r\n\r\n").ok_or("no HTTP response")?;
+    let head = std::str::from_utf8(&resp[..end]).map_err(|_| "HTTP head")?;
+    let status = head.split(' ').nth(1).and_then(|s| s.parse().ok()).ok_or("no HTTP status")?;
+    let rest = &resp[end + 4..];
+    let header = |k: &str| head.split("\r\n").find_map(|l| l.split_once(':').filter(|(n, _)| n.trim().eq_ignore_ascii_case(k)).map(|(_, v)| v.trim().to_ascii_lowercase()));
+    if header("transfer-encoding").is_some_and(|v| v.contains("chunked")) {
+        let mut out = Vec::new();
+        let mut pos = 0usize;
+        loop {
+            let tail = rest.get(pos..).ok_or("chunk")?;
+            let line_end = tail.windows(2).position(|w| w == b"\r\n").ok_or("chunk")?;
+            let size = std::str::from_utf8(&tail[..line_end]).ok().and_then(|l| usize::from_str_radix(l.split(';').next()?.trim(), 16).ok()).ok_or("chunk size")?;
+            pos += line_end + 2;
+            if size == 0 {
+                return Ok((status, out));
+            }
+            let data_end = pos.checked_add(size).ok_or("chunk size")?;
+            out.extend_from_slice(rest.get(pos..data_end).ok_or("chunk cut short")?);
+            if rest.get(data_end..data_end + 2) != Some(b"\r\n".as_slice()) {
+                return Err("chunk cut short");
+            }
+            pos = data_end + 2;
+        }
+    }
+    match header("content-length").and_then(|v| v.parse::<usize>().ok()) {
+        Some(n) => Ok((status, rest.get(..n).ok_or("body cut short")?.to_vec())),
+        None => Ok((status, rest.to_vec())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::channel::{self, Channel};
+
+    #[test]
+    fn root_car_built_once_per_version() {
+        let mut c = Channel::new(&[3; 32], "t", "", 1_790_000_000).unwrap();
+        c.post("one", 0, 1_790_000_001).unwrap();
+        let (root, blocks) = c.build(1_790_000_002);
+        let record = c.record(&root, 1_790_000_002);
+        let h = Hosted::new(c.name(), root.clone(), record, blocks, Served::Owner);
+        let req = get("x.onion", &format!("/ipfs/{}?format=car", root.to_text()));
+        let (a, b) = (respond(&req, &h), respond(&req, &h));
+        assert!(Rc::ptr_eq(&a, &b), "the second reader gets the same bytes, not a rebuild");
+        assert!(car::read(parse_response(&a).unwrap()).is_some());
+    }
+
+    #[test]
+    fn any_response_never_panics() {
+        let ok = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n3\r\nabc\r\n0\r\n\r\n";
+        assert_eq!(parse_any_response(ok), Ok((200, b"helloabc".to_vec())));
+        assert_eq!(parse_any_response(b"HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\n\r\nno"), Ok((404, b"no".to_vec())));
+        // The audit's case: the response ends inside the CRLF after a chunk.
+        assert!(parse_any_response(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello").is_err());
+        for cut in 0..ok.len() {
+            let _ = parse_any_response(&ok[..cut]);
+        }
+        assert!(parse_any_response(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\nx").is_err());
+        assert!(parse_any_response(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhelloXY0\r\n\r\n").is_err());
+    }
 
     #[test]
     fn serve_and_read() {
@@ -254,7 +336,7 @@ mod tests {
         let record = c.record(&root, 1_790_000_004);
         let owner = Hosted::new(c.name(), root.clone(), record.clone(), blocks.clone(), Served::Owner);
         let resp = respond(b"GET / HTTP/1.1\r\nHost: x.onion\r\n\r\n", &owner);
-        let text = String::from_utf8(resp.clone()).unwrap();
+        let text = String::from_utf8(resp.to_vec()).unwrap();
         let head = text.split("\r\n\r\n").next().unwrap();
         assert!(head.contains("Content-Type: text/html; charset=utf-8") && head.contains("Content-Security-Policy: default-src 'none'") && head.contains("Referrer-Policy: no-referrer"));
         let body = String::from_utf8(parse_response(&resp).unwrap().to_vec()).unwrap();
@@ -264,7 +346,7 @@ mod tests {
         assert!(body.find("a reply").unwrap() < body.find("hello").unwrap(), "newest first");
         assert!(body.contains("the channel's own onion address") && body.contains(&c.name().to_text()));
         let mirror = Hosted::new(c.name(), root, record, blocks, Served::Mirror);
-        let m = String::from_utf8(respond(b"GET /index.html HTTP/1.1\r\n\r\n", &mirror)).unwrap();
+        let m = String::from_utf8(respond(b"GET /index.html HTTP/1.1\r\n\r\n", &mirror).to_vec()).unwrap();
         assert!(m.contains("Served by a mirror") && m.contains("vouches for the mirror, not for the owner"));
     }
 }

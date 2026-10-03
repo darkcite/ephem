@@ -162,6 +162,12 @@ struct Reader<'a> {
 /// Nesting limit: channel blocks are at most three levels deep.
 const MAX_DEPTH: u8 = 16;
 
+/// Items reserved up front for an array or map. A declared length is attacker-controlled: an
+/// array of `n` reserves `n × 32` bytes, and every nesting level can claim the whole rest of the
+/// block, so trusting it turned a 1 MiB block into an 839 MiB peak (security audit H-1). Past
+/// this many items the vector grows as items are actually parsed (each takes ≥ 1 input byte).
+const PREALLOC: usize = 16;
+
 impl Reader<'_> {
     fn take(&mut self, n: usize) -> Option<&[u8]> {
         let s = self.src.get(self.pos..self.pos.checked_add(n)?)?;
@@ -232,7 +238,7 @@ impl Reader<'_> {
             }
             4 => {
                 let n = self.len(arg)?;
-                let mut a = Vec::with_capacity(n);
+                let mut a = Vec::with_capacity(n.min(PREALLOC));
                 for _ in 0..n {
                     a.push(self.value()?);
                 }
@@ -240,7 +246,7 @@ impl Reader<'_> {
             }
             5 => {
                 let n = self.len(arg)?;
-                let mut m: Vec<(String, Value)> = Vec::with_capacity(n);
+                let mut m: Vec<(String, Value)> = Vec::with_capacity(n.min(PREALLOC));
                 for _ in 0..n {
                     let Value::Text(k) = self.value()? else { return None };
                     if m.last().is_some_and(|(prev, _)| !key_order(prev, &k)) {

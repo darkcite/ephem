@@ -66,6 +66,20 @@ pub struct CandidateBin {
 impl CandidateBin {
     pub const ZERO: Self = Self { tag: Tag::HostV4, addr: [0; 16], port: 0 };
 
+    /// A raw host address that only reaches the local network: IPv4 private (RFC 1918) or
+    /// link-local, IPv6 unique-local (fc00::/7) or link-local (fe80::/10). False for mDNS names
+    /// and server-reflexive candidates.
+    pub fn is_private(&self) -> bool {
+        match self.tag {
+            Tag::HostV4 => {
+                let a = Ipv4Addr::new(self.addr[0], self.addr[1], self.addr[2], self.addr[3]);
+                a.is_private() || a.is_link_local()
+            }
+            Tag::HostV6 => (self.addr[0] & 0xfe) == 0xfc || (self.addr[0] == 0xfe && (self.addr[1] & 0xc0) == 0x80),
+            _ => false,
+        }
+    }
+
     #[inline(always)]
     pub const fn wire_len(&self) -> usize {
         1 + self.tag.addr_len() + 2

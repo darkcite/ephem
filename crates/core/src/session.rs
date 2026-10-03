@@ -108,6 +108,33 @@ impl Privacy {
             Self::MaxConnectivity => true,
         }
     }
+
+    /// Whether to hand one of the **peer's** candidates to the browser. The browser sends
+    /// connectivity checks from our own sockets to every remote candidate, so a mode that hides
+    /// our address must also drop the peer's candidates it would reach from that address
+    /// (security audit F-02): LAN only keeps mDNS names and private or link-local raw hosts; Drop
+    /// IPv6 drops every IPv6 candidate.
+    #[inline]
+    pub fn keeps_remote(self, c: &CandidateBin, drop_ipv6: bool) -> bool {
+        if drop_ipv6 && c.tag.is_v6() {
+            return false;
+        }
+        match self {
+            Self::LanOnly => !c.tag.is_srflx() && (!c.tag.is_raw_host() || c.is_private()),
+            Self::Default | Self::MaxConnectivity => true,
+        }
+    }
+
+    /// `ice` with only the remote candidates this mode keeps.
+    fn filter_remote(self, ice: &IceParams, drop_ipv6: bool) -> IceParams {
+        let mut out = IceParams { n_cand: 0, cands: [CandidateBin::ZERO; ephem_proto::code::MAX_CANDIDATES], ..*ice };
+        for c in ice.candidates() {
+            if self.keeps_remote(c, drop_ipv6) {
+                out.push(*c);
+            }
+        }
+        out
+    }
 }
 
 /// Per-chat settings. Read receipts and typing are reciprocal (§11.7): off = neither sent nor
@@ -128,7 +155,7 @@ impl Settings {
 
     /// Sets the nickname; longer than 32 bytes or not UTF-8 is refused.
     pub fn set_nick(&mut self, nick: &[u8]) -> bool {
-        if nick.len() > MAX_NICK || core::str::from_utf8(nick).is_err() {
+        if nick.len() > MAX_NICK || !ephem_proto::card::valid_nick(nick) {
             return false;
         }
         self.nick = [0; MAX_NICK];
@@ -428,7 +455,7 @@ impl Session {
         self.invite_id = c.invite_id;
         self.expires_at = c.expires_at;
         self.code_flags = c.flags;
-        self.remote_ice = c.ice;
+        self.remote_ice = self.privacy.filter_remote(&c.ice, self.drop_ipv6);
         self.invite[..raw.len()].copy_from_slice(raw);
         self.invite_len = raw.len() as u16;
         self.answer_len = 0;
@@ -756,7 +783,8 @@ impl Session {
             (false, Role::Answerer) => sdp::Role::AnswerPassive,
         };
         self.sdp_version += 1;
-        let n = sdp::render_remote(ice, role, session_id(&self.invite_id), self.sdp_version, out).map_err(|_| ErrorCode::InvalidInvite)?;
+        let ice = self.privacy.filter_remote(ice, self.drop_ipv6);
+        let n = sdp::render_remote(&ice, role, session_id(&self.invite_id), self.sdp_version, out).map_err(|_| ErrorCode::InvalidInvite)?;
         core::str::from_utf8(&out[..n]).map_err(|_| ErrorCode::InvalidInvite)
     }
 
@@ -838,7 +866,7 @@ impl Session {
             return Err(ErrorCode::AnswerMismatch);
         }
         self.remote = PeerId(c.static_pk);
-        self.remote_ice = c.ice;
+        self.remote_ice = self.privacy.filter_remote(&c.ice, self.drop_ipv6);
         self.answer[..answer.len()].copy_from_slice(answer);
         self.answer_len = answer.len() as u16;
         if !self.ever_connected {
@@ -1093,7 +1121,7 @@ impl Session {
                     let sign_pk = r.arr::<32>().ok_or(Bad)?;
                     self.peer_sign_pk = sign_pk;
                     let nl = r.u8().ok_or(Bad)? as usize;
-                    let nick = r.take(nl).filter(|n| n.len() <= MAX_NICK && core::str::from_utf8(n).is_ok()).ok_or(Bad)?;
+                    let nick = r.take(nl).filter(|n| n.len() <= MAX_NICK && ephem_proto::card::valid_nick(n)).ok_or(Bad)?;
                     // The SAS is always mandatory for an identity transfer (§10.4).
                     let sas_optional = !self.transfer && self.scanned && self.peer_caps & caps::SCANNED != 0;
                     sink(Event::Hello { nick, sas_optional, sign_pk });

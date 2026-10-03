@@ -11,6 +11,10 @@ use crate::varint;
 /// A block and its CID.
 pub type Block = (Cid, Vec<u8>);
 
+/// The largest block accepted: the IPFS block limit (1 MiB). Channel blocks stay far below it
+/// (a page of 64 posts is ≤ ~280 KiB); anything larger fails the whole file.
+pub const MAX_BLOCK: usize = 1 << 20;
+
 pub fn write(roots: &[Cid], blocks: &[Block]) -> Vec<u8> {
     let header = cbor::map(vec![("roots", Value::Array(roots.iter().cloned().map(Value::Link).collect())), ("version", Value::Uint(1))]).encode();
     let mut out = Vec::with_capacity(header.len() + blocks.iter().map(|(_, b)| b.len() + 48).sum::<usize>());
@@ -41,11 +45,15 @@ pub fn read(src: &[u8]) -> Option<(Vec<Cid>, Vec<Block>)> {
     while pos < src.len() {
         let (len, n) = varint::get(&src[pos..])?;
         pos += n;
-        let end = pos.checked_add(usize::try_from(len).ok()?)?;
+        let len = usize::try_from(len).ok()?;
+        if len > MAX_BLOCK + 128 {
+            return None; // before reading: a CID is far below 128 bytes
+        }
+        let end = pos.checked_add(len)?;
         let section = src.get(pos..end)?;
         let (cid, used) = Cid::read(section)?;
         let data = &section[used..];
-        if !cid.verifies(data) {
+        if data.len() > MAX_BLOCK || !cid.verifies(data) {
             return None;
         }
         blocks.push((cid, data.to_vec()));

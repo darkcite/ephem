@@ -1482,7 +1482,7 @@ function openCodeSheet(text = '') {
 }
 const closeCodeSheet = () => { $('code-sheet').hidden = true; };
 
-function applyCode(raw, scanned) {
+function applyCode(raw, scanned, fromLink = false) {
   const v = raw.trim();
   if (!v) return;
   closeCodeSheet();
@@ -1505,6 +1505,12 @@ function applyCode(raw, scanned) {
     const as = observer ? ', as a read-only observer' : '';
     if (!confirm(kind === 5 ? `This is an invite to a room${as}, through Tor. Join?`
       : `This is an invite to a room${as}. Every member of the room will see your IP address, and you theirs (direct connections, never a relay). Join?`)) return;
+  }
+  if (fromLink && kind === 1 && !group && !sending) {
+    // Opening a direct invite starts connectivity checks to its creator at once, which shows
+    // them this device's IP address (security audit F-02): a link opened on page load waits for
+    // a yes. A pasted or scanned code is already a deliberate act.
+    if (!confirm('Open this chat invite? Its creator will see your IP address (direct connection, never a relay; LAN only shows just your local address).')) return;
   }
   applyPrefs();
   if (app.apply_code(v, scanned) !== 0) return;
@@ -1795,28 +1801,28 @@ async function registerWorker() {
   if (!('serviceWorker' in navigator)) return;
   const reg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => null);
   if (!reg) return;
-  const offer = (w) => {
-    if (!w || !navigator.serviceWorker.controller) return; // first install: nothing to replace
+  let reloading = false;
+  const reload = () => { if (!reloading) { reloading = true; location.reload(); } };
+  const offer = (w, version) => {
     updateWorker = w;
-    navigator.serviceWorker.addEventListener('message', (e) => {
-      if (e.source === w && e.data?.version) $('update-text').textContent = `A new version of Ephem is available (build ${e.data.version}).`;
-    });
-    $('update-text').textContent = 'A new version of Ephem is available.';
-    w.postMessage('version');
+    $('update-text').textContent = version ? `A new version of Ephem is available (build ${version}).` : 'A new version of Ephem is available.';
     $('update').hidden = false;
   };
-  offer(reg.waiting);
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    const d = e.data || {};
+    if (d.accepted && updateWorker && e.source === updateWorker && !d.version) return reload(); // the user said yes
+    // A worker reports its build and the build the user accepted: a newer worker that is already
+    // running (the app was closed and reopened) still serves the accepted build until Update.
+    if (d.version && (e.source !== navigator.serviceWorker.controller || d.version !== d.accepted)) offer(e.source, d.version);
+  });
+  const ask = (w) => { if (w && navigator.serviceWorker.controller) w.postMessage('version'); }; // first install: nothing to replace
+  ask(reg.waiting);
+  ask(navigator.serviceWorker.controller);
   reg.addEventListener('updatefound', () => {
     const w = reg.installing;
-    w?.addEventListener('statechange', () => { if (w.state === 'installed') offer(w); });
+    w?.addEventListener('statechange', () => { if (w.state === 'installed') ask(w); });
   });
-  let reloading = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (updateWorker && !reloading) {
-      reloading = true;
-      location.reload();
-    }
-  });
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (updateWorker) reload(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
 }
 
@@ -2274,7 +2280,7 @@ async function main() {
   }
   if (frag.startsWith('#c=')) return channels.openLink(frag);
   if (frag.startsWith('#b=')) return openBridgeLink(frag);
-  if (frag.startsWith('#i=') || frag.startsWith('#t=') || frag.startsWith('#k=')) return applyCode(frag, false);
+  if (frag.startsWith('#i=') || frag.startsWith('#t=') || frag.startsWith('#k=')) return applyCode(frag, false, true);
   if (await forward(frag)) {
     $('handoff-title').textContent = 'Code delivered';
     $('handoff-text').textContent = 'The code was passed to your open Ephem tab. You can close this tab.';

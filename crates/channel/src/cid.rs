@@ -66,7 +66,7 @@ impl Cid {
         let (len, d) = varint::get(&src[a + b + c..])?;
         let start = a + b + c + d;
         let len = usize::try_from(len).ok()?;
-        let hash = src.get(start..start + len)?.to_vec();
+        let hash = src.get(start..start.checked_add(len)?)?.to_vec();
         let ok = ver == 1
             && match codec {
                 DAG_CBOR | RAW => mh == SHA2_256 && len == 32,
