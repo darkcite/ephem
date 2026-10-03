@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 Anton (darkcite)
+[package]
+name = "ephem-board"
+description = "Ephem boards (Appendix G, docs/BOARDS.md): a 4chan-like channel type: threads, replies, the single writer's model, blocks and the reader's verification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ephem-channel = { path = "../channel" }
+ed25519-dalek = { version = "2", default-features = false, features = ["zeroize"] }
+sha2 = { version = "0.10", default-features = false }

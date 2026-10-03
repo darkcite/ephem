@@ -61,7 +61,7 @@ It extends Appendix D of `docs/P2P-CHAT.md` and follows every principle there, P
 ```
 
 - **Only the host writes.** It assigns numbers and time, applies moderation and signs the snapshot (the IPNS record). Everyone else submits.
-- **The host runs in its own tab with its own Tor client**, never beside the owner's chat onion or channels (A-M5: one shared Snowflake session makes every onion in the tab go down and up together, which links them). The app enforces this: "Host this board" opens a dedicated tab.
+- **The host runs in the main app tab (R6)**, beside the owner's chat onion and channels. One shared Snowflake session makes every onion in the tab go down and up together, which links them (A-M5); the board's warning says so, and an owner who needs them unlinked hosts the board from another browser profile.
 - **Mirrors are read-only in v1** (G.10). In v1.5 they become the front door and the writer onion becomes private (BD-8).
 
 ## G.4 Keys and identities
@@ -395,6 +395,15 @@ Revision 1 relied on the identity-wide vault lease, which is taken silently once
 | R2 | G.18 | Keep the DoS rows | Cut it all | **Keep the DoS rows and the configuration, drop the scale claims** (G.18 rewritten) |
 | R3 | Per-circuit limits in v1 | Keep | Cut | **Keep**: they come free with the bounded accept loop (G.6.2) |
 | R4 | Restricted-discovery writer | The BD-8 design | v1.5 after a spike | **v1.5, after spike B-P12** |
+
+**The owner, 2026-10-03 (before implementation starts):**
+
+| # | Question | Decision |
+|---|---|---|
+| R5 | Where boards appear | **Inside the existing tabs**: Following and My channels, marked ▦ (4 tabs stay on phones) |
+| R6 | Where the owner's tab hosts a board | **In the main app tab** (not a dedicated hosting tab). Consequence, stated in the UI and in G.9.3: the chat onion and the board onion share one Tor client, so they go up and down together and an observer probing both can link them (A-M5). A separate identity for the board does not remove this; hosting from another browser profile does |
+| R7 | Live spikes vs building | **Build now; the live spikes (phone PoW timing B-P1b, 8–24 h hosting soak B-P11) run in parallel** on the owner's devices; efforts are calibrated from their numbers before v1 ships |
+| R8 | Automatic panic mode | **Close new threads** (replies keep working) when the thread budget or the posts cap stays saturated; the owner is notified and reopens |
 
 
 ## G.16 Versions, phases and spikes

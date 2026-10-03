@@ -2,7 +2,7 @@
 # Copyright 2026 Anton (darkcite)
 [workspace]
 resolver = "2"
-members = ["crates/proto", "crates/crypto", "crates/core", "crates/snowflake", "crates/tor", "crates/wasm", "crates/channel", "crates/channel-web"]
+members = ["crates/proto", "crates/crypto", "crates/core", "crates/snowflake", "crates/tor", "crates/wasm", "crates/channel", "crates/channel-web", "crates/board"]
 
 [workspace.package]
 version = "0.1.0"
@@ -21,6 +21,13 @@ strip = true
 [profile.dev.package.argon2]
 opt-level = 3
 [profile.dev.package.blake2]
+opt-level = 3
+# Boards sign and verify tens of thousands of posts in their tests (BD-1).
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
+[profile.dev.package.ed25519-dalek]
+opt-level = 3
+[profile.dev.package.sha2]
 opt-level = 3
 
 # Small browser patches of arti 0.46 (vendor/README.md): in-memory state (arti-client,

@@ -1179,6 +1179,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ephem-board"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "ephem-channel",
+ "sha2",
+]
+
+[[package]]
 name = "ephem-channel"
 version = "0.1.0"
 dependencies = [
