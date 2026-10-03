@@ -79,6 +79,7 @@ const isChannel = (f) => f.k !== 'board';
  *  side of publishing (each board has its own lease; the channels' stays as read). */
 export const vaultApi = {
   last: () => vault,
+  routing: () => routing(),
   leaseS: () => LEASE_S,
   device: () => deviceId(),
   async fetch() {

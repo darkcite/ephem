@@ -395,3 +395,18 @@ fn stale_mode_after_expiry() {
     assert!(verify::verify_stale(&name, &bad, &blocks, later, 0, &[]).is_err(), "a forged record is not let through as stale");
     let _ = &mut h;
 }
+
+#[test]
+fn see_also_links() {
+    let mut board = Board::new(&[1; 32], "Linked", "", "", T0).unwrap();
+    let other = format!("k51qzi5uqu5dl{}@{}.onion", "a".repeat(10), "b".repeat(56));
+    assert!(board.set_see_also(vec!["javascript:alert(1)".into()]).is_err(), "only <name>@<onion>");
+    board.set_see_also(vec![other.clone()]).unwrap();
+    let intake = Intake::new(board.name(), [2; 32], LOW, T0);
+    let ms = T0 * 1000;
+    let mut h = Host::new(board, intake, [9; 32], ms);
+    let v = read(&mut h, ms, &[]);
+    assert_eq!(v.manifest.see_also, vec![other], "signed into the manifest, verified by readers");
+    let page = String::from_utf8(serve(&mut h, &get("/"), ms)).unwrap();
+    assert!(page.contains(&format!("<a href=\"http://{}.onion/\">", "b".repeat(56))));
+}

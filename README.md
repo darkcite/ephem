@@ -9,6 +9,7 @@ Ephemeral, serverless, end-to-end encrypted chat that runs entirely in the brows
 - **Tor mode** (`app/tor.html`): the Tor client (arti) runs inside the page and reaches Tor through Snowflake; chats go onion service to onion service with Noise IK, so nobody sees anyone's IP address. One code, no answer; saved contacts reconnect without a code. Optional Snowflake **bridge lines** for networks where the defaults are blocked.
 - **Contacts and contact cards**, kept only in an encrypted key file (Argon2id); several saved identities per device; identity transfer between devices (direct mode).
 - **Public channels**: the owner posts, anyone with the link reads, through Tor. A channel is IPFS data (CIDv1, DAG-CBOR, CAR, IPNS records) served on an onion service from the owner's tab, verified by every reader; followers can mirror it. In the app's **Following** and **My channels** tabs.
+- **Boards** (`docs/BOARDS.md`): 4chan-like, text only. Anyone with the link posts anonymously after a small proof of work (Equi-X, solved in Web Workers while typing); threads bump and fall off. The owner's tab hosts the board on its own onion and moderates (deletes with undo, mass delete, lock, sticky, bans of trips, trips-only, pre-moderation); readers verify every post; mirrors keep it readable while the owner is away; Tor Browser reads plain pages. Marked ▦ in **Following** and **My channels**.
 
 - **Try it:** `https://darkcite.github.io/ephem/` (landing) → `/app/` (direct) or `/app/tor.html` (Tor)
 - **Design, spec, plan and checkpoint results:** [`docs/P2P-CHAT.md`](docs/P2P-CHAT.md)
@@ -18,7 +19,7 @@ Ephemeral, serverless, end-to-end encrypted chat that runs entirely in the brows
 | Path | What |
 |---|---|
 | `index.html`, `site.css` | Landing page |
-| `app/` | The web app: `index.html` (direct) and `tor.html` (Tor, generated), `app.js` (chats, shell), `channels.js` (Following, My channels), `bridges.js`, `slots.js`, `ui.js`; `app/pkg/` is the built WASM (committed so GitHub Pages can serve it) |
+| `app/` | The web app: `index.html` (direct) and `tor.html` (Tor, generated), `app.js` (chats, shell), `channels.js` (Following, My channels), `boards.js` with `pow-worker.js` and `store-worker.js` (boards), `bridges.js`, `slots.js`, `ui.js`; `app/pkg/` is the built WASM (committed so GitHub Pages can serve it) |
 | `crates/proto` | `no_std`, allocation-free wire formats: codes, cards, SDP template, frames |
 | `crates/crypto` | Identity, Noise KK/IK, in-place transport cipher, SAS, key file, contacts |
 | `crates/core` | Sans-IO session and room state machines (natively tested) |
@@ -26,6 +27,8 @@ Ephemeral, serverless, end-to-end encrypted chat that runs entirely in the brows
 | `crates/tor` | arti in the page over Snowflake, onion services, bridge lines |
 | `crates/channel` | Public channels: CID, strict DAG-CBOR, CAR, IPNS V2, signed manifest and posts, the onion gateway (sans-IO) |
 | `crates/channel-web` | Channels in the browser (owner, reader, mirrors); part of the Tor build |
+| `crates/board` | Boards: the model, blocks and reader verification, the submit format, the host's intake and proof of work, the onion's gateway and plain pages, the encrypted owner state (sans-IO) |
+| `crates/pow` | The boards' proof-of-work solver for Web Workers (`app/pkg/ephem_pow.wasm`, 60 KB, no imports) |
 | `crates/wasm` | The browser adapter: WebRTC, Tor streams, several chats per tab, QR encode/scan. Two builds: direct (`pkg/ephem*`, 232 KB gzip) and Tor (`pkg/ephem_tor*`, 2.2 MB gzip; the direct page loads it only for its channel tabs) |
 | `vendor/` | arti 0.46 with four small wasm patches (see `vendor/README.md`) |
 | `tools/` | `stamp.py` (integrity hashes, CSPs, `tor.html`, service-worker version; run by `build.sh`), `make_icons.py` |

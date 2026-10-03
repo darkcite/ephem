@@ -391,6 +391,16 @@ impl Board {
         Ok(())
     }
 
+    /// "See also" (G.12): other boards the owner points to, each `<name>@<onion>` (≤ 16).
+    pub fn set_see_also(&mut self, links: Vec<String>) -> Result<(), BoardError> {
+        let ok = |l: &String| l.split_once('@').is_some_and(|(n, o)| n.starts_with("k51") && n.len() <= 70 && n.bytes().all(|b| b.is_ascii_alphanumeric()) && o.len() == 62 && o.ends_with(".onion"));
+        if links.len() > limits::SEE_ALSO || !links.iter().all(ok) {
+            return Err(BoardError::Invalid);
+        }
+        self.manifest.see_also = links;
+        Ok(())
+    }
+
     fn manifest_value(&self) -> Value {
         let m = &self.manifest;
         let texts = |v: &[String]| Value::Array(v.iter().cloned().map(Value::Text).collect());

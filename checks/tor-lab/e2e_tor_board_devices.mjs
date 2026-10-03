@@ -6,7 +6,7 @@
 //   A hosts a board; a poster posts under a trip and A bans it → the vault (v2) lists the board
 //   with A's lease → a phone signs in: the board is hosted elsewhere and the phone may not host
 //   it → desktop B signs in: "Host this board here" (explicit) reads the whole board from A's
-//   onion, numbers continue, the ban survives (the encrypted own block) → A stops (its renewal
+//   onion, numbers continue (above the old lease's bound, G.13.6), the ban survives (the encrypted own block) → A stops (its renewal
 //   or its fencing sees B) and says so → a post reaches B with the next number; the banned trip
 //   is still refused.
 //
@@ -56,13 +56,19 @@ async function signIn(p, file) {
 }
 
 const own = (p, fn, ...args) => p.evaluate(([f, a]) => globalThis.ephemBoards.app[f](0, ...a), [fn, args]);
+/** A post; once more if Tor itself failed (a circuit, not a refusal by the board). */
 const post = (p, name, onion, thread, body, trip = '') => p.evaluate(async ([n, o, t, b, tr]) => {
-  try {
-    const r = await globalThis.ephemBoards.post(n, o, t, t ? '' : 'Thread', b, false, { trip: tr });
-    return { no: r.no };
-  } catch (e) {
-    return { error: String(e?.message || e) };
+  let last = '';
+  for (let i = 0; i < 2; i++) {
+    try {
+      const r = await globalThis.ephemBoards.post(n, o, t, t ? '' : 'Thread', b, false, { trip: tr });
+      return { no: r.no };
+    } catch (e) {
+      last = String(e?.message || e);
+      if (/E_BOARD_/.test(last)) break;
+    }
   }
+  return { error: last };
 }, [name, onion, thread, body, trip]);
 
 /** The board row in My channels, once the vault (or the store) lists it. */
@@ -117,8 +123,10 @@ try {
   await B.waitForSelector('#v-board-own:not([hidden])', { timeout: T * 2 });
   const st = JSON.parse(await own(B, 'status'));
   const vB = JSON.parse(await own(B, 'owner_view', [t.no]));
-  check('B hosts the board with its posts, its next number and the ban (encrypted own block)',
-    vB.catalog.length === 1 && vB.threads[0]?.posts.length === 2 && st.next_no === 3 && st.bans === 1 && st.onion === onion, `${Date.now() - t0} ms; next No. ${st.next_no}, bans ${st.bans}`);
+  // Numbers continue above the old lease's bound (G.13.6: 120 a minute of the lease left), so
+  // posts the old device took before it stopped can never collide with new ones.
+  check('B hosts the board with its posts, the ban (encrypted own block), and numbers that cannot collide',
+    vB.catalog.length === 1 && vB.threads[0]?.posts.length === 2 && st.next_no >= 3 && st.bans === 1 && st.onion === onion, `${Date.now() - t0} ms; next No. ${st.next_no}, bans ${st.bans}`);
 
   // ---- A stops ----
   await A.waitForFunction(() => !globalThis.ephemBoards.app.open_boards().length, null, { timeout: 120_000 });
@@ -130,7 +138,7 @@ try {
   await own(B, 'set_efforts', 40, 80);
   await B.waitForTimeout(2_000);
   const next = await post(P, name, onion, t.no, 'after the move');
-  check('a post after the move gets the next number (from B)', next.no === 3, JSON.stringify(next));
+  check('a post after the move gets B\'s next number', next.no === st.next_no, JSON.stringify(next));
   const again = await post(P, name, onion, t.no, 'banned trip again', 'lab');
   check('the banned trip is still refused on B', /E_BOARD_REFUSED/.test(again.error || ''), again.error);
 

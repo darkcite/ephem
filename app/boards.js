@@ -44,6 +44,8 @@ export function init(c) {
     return f ? (showBoard(f.n, f.o), true) : false;
   });
   if (ctx.TOR && ctx.ch) adopt(new ctx.mod.BoardApp(ctx.ch));
+  if (ctx.TOR) channels.torIsUp().then(resumeMirrors);
+  setInterval(publishIpfs, 60_000);
 }
 
 function adopt(b) {
@@ -418,6 +420,8 @@ function renderOwn() {
   if (document.activeElement !== $('bo-eff-reply')) $('bo-eff-reply').value = st.base_reply;
   if (document.activeElement !== $('bo-eff-thread')) $('bo-eff-thread').value = st.base_thread;
   if (document.activeElement !== $('bo-mirrors')) $('bo-mirrors').value = v.mirrors.join(', ');
+  if (document.activeElement !== $('bo-see')) $('bo-see').value = v.see_also.join(', ');
+  $('bo-ipfs').checked = ipfsOn(v.name);
   // Held posts (pre-moderation).
   const held = JSON.parse(boards.held(i));
   $('bo-held-card').hidden = !held.length;
@@ -510,7 +514,7 @@ async function showBoard(name, onions, thread = 0) {
   current = { read: name, onions, thread };
   ctx.showPane('v-board');
   renderFollows();
-  const cached = views.get(name);
+  const cached = views.get(name) || cachedView(name);
   if (cached) renderBoard(cached);
   else {
     $('bd-title').textContent = '▦ Board';
@@ -534,6 +538,7 @@ async function refresh() {
     const b = await net();
     const v = JSON.parse(await b.read(c.read, onions.join(','), f?.s || 0, c.thread ? [c.thread] : []));
     views.set(c.read, v);
+    cacheView(v);
     if (f) {
       f.t = v.title;
       f.s = v.sequence;
@@ -567,7 +572,17 @@ function renderBoard(v) {
   $('b-bd-catalog').hidden = !c.thread;
   const t = c.thread && v.threads.find((x) => x.no === c.thread);
   $('bd-catalog').hidden = !!c.thread;
-  if (!c.thread) renderCatalog($('bd-catalog'), v, (no) => { current.thread = no; setBox(); refresh(); });
+  $('bd-tools').hidden = !!c.thread;
+  if (!c.thread) renderCatalog($('bd-catalog'), sorted(v), (no) => { current.thread = no; setBox(); refresh(); });
+  $('bd-see').hidden = !v.see_also?.length;
+  $('bd-see').replaceChildren(...(v.see_also?.length ? ['See also: ', ...v.see_also.flatMap((l) => {
+    const [n, o] = l.split('@');
+    const a = document.createElement('a');
+    a.href = `#B=${n}&o=${o}`;
+    a.textContent = `${n.slice(0, 14)}…`;
+    a.onclick = (e) => { e.preventDefault(); showBoard(n, [o]); };
+    return [a, ' '];
+  })] : []));
   $('bd-posts').replaceChildren(...(t ? t.posts.map((p) => postItem(p)) : []));
   if (c.thread && !t) $('bd-source').textContent += ' This thread is no longer on the board (pruned or deleted).';
 }
@@ -680,9 +695,74 @@ async function mirror() {
   try {
     const b = await net();
     const onion = await b.mirror(c.read, c.onions.join(','), mirrorSeed(c.read));
-    note.textContent = `Mirroring on ${onion}. It refreshes every 10 s while this tab is open. Send this address to the board's owner to sign it into the board.`;
+    note.textContent = `Mirroring on ${onion}. It refreshes every 10 s while this tab is open, and starts again when Ephem opens. Send this address to the board's owner to sign it into the board.`;
+    rememberMirror(c.read, c.onions);
+    $('bd-mirror-ipfs-row').hidden = false;
+    $('bd-mirror-ipfs').checked = ipfsOn(c.read);
   } catch (e) {
     note.textContent = `The mirror could not start: ${e?.message || e}`;
+  }
+}
+
+/** The catalog as the reader asked: sorted (bump, new, replies; sticky first) and searched. */
+function sorted(v) {
+  const q = $('bd-search').value.trim().toLowerCase();
+  const by = { bump: (t) => t.bump, new: (t) => t.no, replies: (t) => t.r }[$('bd-sort').value] || ((t) => t.bump);
+  const catalog = v.catalog
+    .filter((t) => !q || `${t.sub} ${t.ex}`.toLowerCase().includes(q))
+    .sort((a, b) => (b.st - a.st) || (by(b) - by(a)) || (b.no - a.no));
+  return { ...v, catalog };
+}
+
+// ---- kept across visits: the last catalog (B-UX-3), mirrors, the IPFS opt-ins ------------------
+
+const store$ = {
+  get(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked or full */ } },
+};
+
+/** The last verified catalog of a board (no thread bodies), shown at once on the next visit. */
+function cacheView(v) {
+  store$.set(`ephem-board-view:${v.name}`, { ...v, threads: [] });
+}
+function cachedView(name) {
+  const v = store$.get(`ephem-board-view:${name}`);
+  if (v) views.set(name, v);
+  return v;
+}
+
+function rememberMirror(name, onions) {
+  const list = (store$.get('ephem-board-mirrors') || []).filter((m) => m.n !== name);
+  list.push({ n: name, o: onions });
+  store$.set('ephem-board-mirrors', list.slice(-8));
+}
+
+/** Mirrors this browser kept start again once Tor is up. */
+async function resumeMirrors() {
+  const list = store$.get('ephem-board-mirrors') || [];
+  if (!list.length) return;
+  const b = await net();
+  for (const m of list) b.mirror(m.n, m.o.join(','), mirrorSeed(m.n)).catch((e) => console.info('board mirror:', e?.message || e));
+}
+
+const ipfsOn = (name) => !!name && (store$.get('ephem-board-ipfs') || []).includes(name);
+function setIpfs(name, on) {
+  if (!name) return;
+  const list = (store$.get('ephem-board-ipfs') || []).filter((n) => n !== name);
+  if (on) list.push(name);
+  store$.set('ephem-board-ipfs', list);
+  if (on) publishIpfs();
+}
+
+let ipfsAt = 0;
+/** The opted-in boards' records (hosted or mirrored here) to the IPFS routing network, at most
+ *  every 10 minutes (G.5.3), through a Tor exit. */
+async function publishIpfs() {
+  if (!boards || Date.now() - ipfsAt < 10 * 60_000) return;
+  ipfsAt = Date.now();
+  const [host, root] = channels.vaultApi.routing();
+  for (const name of store$.get('ephem-board-ipfs') || []) {
+    boards.publish_ipfs(name, host, root).catch((e) => console.info('board ipfs:', e?.message || e));
   }
 }
 
@@ -845,6 +925,11 @@ function wire() {
   for (const k of ['paused', 'threads_closed', 'trips_only', 'approved_only', 'premod', 'panic_trips']) $(`bs-${k}`).onchange = setSwitches;
   $('b-bo-efforts').onclick = () => act(() => boards.set_efforts(current.own, Number($('bo-eff-reply').value), Number($('bo-eff-thread').value)));
   $('b-bo-mirrors').onclick = () => act(() => boards.set_mirrors(current.own, $('bo-mirrors').value));
+  $('b-bo-see').onclick = () => act(() => boards.set_see_also(current.own, $('bo-see').value.replace(/\s+/g, '')));
+  $('bo-ipfs').onchange = () => setIpfs(owned.find((o) => o.i === current?.own)?.name, $('bo-ipfs').checked);
+  $('bd-mirror-ipfs').onchange = () => setIpfs(current?.read, $('bd-mirror-ipfs').checked);
+  $('bd-sort').onchange = () => { const v = views.get(current?.read); if (v) renderBoard(v); };
+  $('bd-search').oninput = () => { const v = views.get(current?.read); if (v) renderBoard(v); };
   $('b-bo-from').onclick = () => {
     const no = Number($('bo-from').value);
     if (no > 0) act(() => boards.delete_from(current.own, no));

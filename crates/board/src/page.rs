@@ -54,6 +54,7 @@ struct Head {
     title: String,
     about: String,
     rules: String,
+    see_also: Vec<String>,
     rows: Vec<Row>,
     updated: u64,
 }
@@ -78,7 +79,8 @@ fn head<B: Blocks + ?Sized>(b: &B, root: &Cid) -> Option<Head> {
         }
     }
     rows.sort_by(|a, b| b.st.cmp(&a.st).then(b.bump.cmp(&a.bump)).then(b.no.cmp(&a.no)));
-    Some(Head { title: t(&m, "title")?, about: t(&m, "about")?, rules: t(&m, "rules")?, rows, updated: r.get("updated")?.uint()? })
+    let see_also = m.get("see_also").and_then(Value::array).map(|a| a.iter().filter_map(|x| x.text().map(str::to_owned)).collect()).unwrap_or_default();
+    Some(Head { title: t(&m, "title")?, about: t(&m, "about")?, rules: t(&m, "rules")?, see_also, rows, updated: r.get("updated")?.uint()? })
 }
 
 fn open(s: &mut String, title: &str) {
@@ -127,6 +129,19 @@ pub fn catalog<B: Blocks + ?Sized>(b: &B, name: &str, root: &Cid, seq: u64, serv
         s.push_str("<details><summary>Rules</summary><p class=\"rules\">");
         esc(&mut s, &h.rules);
         s.push_str("</p></details>");
+    }
+    if !h.see_also.is_empty() {
+        s.push_str("<p class=\"note\">See also: ");
+        for l in &h.see_also {
+            if let Some((_, onion)) = l.split_once('@') {
+                s.push_str("<a href=\"http://");
+                esc(&mut s, onion);
+                s.push_str("/\">");
+                esc(&mut s, onion);
+                s.push_str("</a> ");
+            }
+        }
+        s.push_str("</p>");
     }
     served_box(&mut s, served, seq, h.updated);
     s.push_str("<ol>");

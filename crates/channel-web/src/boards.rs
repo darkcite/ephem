@@ -439,6 +439,35 @@ impl BoardApp {
         Ok(())
     }
 
+    /// Signs "see also" links into board `index`'s manifest (comma-separated `<name>@<onion>`).
+    pub fn set_see_also(&self, index: u32, csv: &str) -> Result<(), JsValue> {
+        let h = self.host(index)?;
+        h.borrow_mut().board.set_see_also(list(csv)).map_err(|e| err(format!("{e:?}")))?;
+        h.borrow_mut().touch();
+        Ok(())
+    }
+
+    /// Publishes board `name`'s current record to the IPFS routing network (G.5.3, optional):
+    /// `PUT https://<host>/routing/v1/ipns/<name>` through a Tor exit, as channels do. The owner's
+    /// own record, or a mirror's copy while it is unexpired (mirrors cannot extend validity). The
+    /// page calls it at most every 10 minutes.
+    pub fn publish_ipfs(&self, name: &str, host: &str, extra_root: &[u8]) -> Result<js_sys::Promise, JsValue> {
+        let tor = self.tor()?;
+        let record = {
+            let st = self.st.borrow();
+            let hosted = st.boards.hosted.iter().find(|b| b.host.borrow().served.name_text() == name).map(|b| b.host.borrow().served.record.clone());
+            let mirrored = || st.boards.mirrors.iter().find(|m| m.name.to_text() == name).map(|m| m.m.borrow().served.record.clone());
+            hosted.or_else(mirrored).ok_or_else(|| err("that board is neither hosted nor mirrored here"))?
+        };
+        let cid = Cid::parse(name).ok_or_else(|| err("not a board name"))?;
+        ipns::verify(&cid, &record, now_s()).map_err(|_| err("the record has expired: a mirror cannot republish it"))?;
+        let (host, root, path) = (host.to_owned(), extra_root.to_vec(), format!("/routing/v1/ipns/{name}"));
+        Ok(wasm_bindgen_futures::future_to_promise(async move {
+            let status = with_timeout(FETCH_MS, crate::https::request(&tor, "PUT", &host, &path, gateway::CT_RECORD, &record, &root)).await.map_err(err)?.0;
+            if (200..300).contains(&status) { Ok(JsValue::from(status)) } else { Err(err(format!("the routing service answered {status}"))) }
+        }))
+    }
+
     // ---- several devices (G.13) ----
 
     /// "Host this board here": board `index` is read in full (index, every thread, the
@@ -889,7 +918,7 @@ fn remember_dels(all: &mut KnownDels, name: &Cid, dels: &[([u8; 32], u64)]) {
     known.drain(..over);
 }
 
-/// `{"name","root","sequence","stale","mirrors":[…],"title","about","rules","next_no","updated","catalog":[{"no",
+/// `{"name","root","sequence","stale","mirrors":[…],"see_also":[…],"title","about","rules","next_no","updated","catalog":[{"no",
 /// "sub","ex","r","bump","st","lk"}…],"threads":[{"no","sub","posts":[{"no","ts","sub","body",
 /// "sage","cap","del","trip"}…]}…],"archive":[{"no","sub","ex","pruned"}…],"modlog":[{"ts","act","no",
 /// "why"}…]}` (`del`: 0, or who deleted; `trip`: `!` + 16 characters, or "").
@@ -902,6 +931,13 @@ pub fn view_json(v: &View) -> String {
     let _ = write!(o, ",\"sequence\":{},\"next_no\":{},\"updated\":{},\"stale\":{}", v.sequence, v.next_no, v.updated, v.stale);
     o.push_str(",\"mirrors\":[");
     for (i, m) in v.manifest.mirrors.iter().enumerate() {
+        if i > 0 {
+            o.push(',');
+        }
+        json::string(&mut o, m);
+    }
+    o.push_str("],\"see_also\":[");
+    for (i, m) in v.manifest.see_also.iter().enumerate() {
         if i > 0 {
             o.push(',');
         }
