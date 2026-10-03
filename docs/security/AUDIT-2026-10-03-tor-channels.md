@@ -11,13 +11,15 @@
 | M-1 | medium | **Fixed**: an identity change (`bind`, `sign_in`) takes the previous identity's channel and mirror onions down and forgets its vault and sequence (`State::forget_identity`). Lab check in `e2e_tor_vault.mjs` |
 | M-2 | medium | **Fixed**: restore reads at least the vault's `record_seq`; the highest vault sequence is kept across visits (`vault_floor`) and an older record is refused; no publish over an unread vault; before a post the lease is re-read if older than 60 s (the spec's "re-read before every post" is met through the lease, not the channel record) |
 | M-3 | medium | **Fixed**: a read keeps the newest valid answer; after the first, the other sources get 4 s |
-| M-4 | medium | Open |
+| M-4 | medium | **Fixed**: a hosted channel keeps only the blocks reachable from its root (`gateway::reachable`), and a verified reading is re-written with the record's root and those blocks before the page stores, mirrors or serves it. Test: `extra_blocks_are_not_served` |
 | M-5 | medium | **Fixed**: every request through a Tor exit uses a new circuit; the vault publish after a change waits a random 5–30 s |
 | M-7 | medium | Open (with H-2's bounded loop, shared uptime remains a property of hosting several onions in one tab) |
 | M-6 | medium | **Fixed**: the HTTP parser moved to `gateway::parse_any_response`, bounds-checked, CRLF required; test `any_response_never_panics` |
-| L-1, L-2 | low | Open |
+| L-1 | low | **Fixed**: reads dial only well-formed v3 onion addresses, each once, at most 1 + 8 |
+| L-2 | low | **Fixed**: `Cid::parse` refuses text over 100 characters before decoding |
 | I-2 | info | **Fixed**: `Cid::read` uses `checked_add` |
-| I-1, I-3 | info | Open |
+| I-1 | info | **Fixed**: no user info in a loopback broker URL either |
+| I-3 | info | **Fixed**: `config::build` accepts only 40-hex-digit fingerprints |
 
 
 ## Scope and method

@@ -1309,7 +1309,8 @@ impl Session {
                     let total = r.u16().ok_or(Bad)?;
                     let data = r.take(r.remaining()).unwrap_or(&[]);
                     let max_chunks = MAX_IDENTITY.div_ceil(IDENTITY_CHUNK) as u16;
-                    if idx != self.xfer_next || total == 0 || total > max_chunks || (idx > 0 && total != self.xfer_total) || data.len() > IDENTITY_CHUNK {
+                    // `idx < total`: nothing is appended once the key file is complete (security audit F-07).
+                    if idx != self.xfer_next || idx >= total || total == 0 || total > max_chunks || (idx > 0 && total != self.xfer_total) || data.len() > IDENTITY_CHUNK {
                         return Err(Bad);
                     }
                     if idx == 0 {

@@ -92,6 +92,11 @@ impl Cid {
 
     /// Parses `b…` (base32) or `k…` (base36) text.
     pub fn parse(s: &str) -> Option<Self> {
+        // A real CID here is 59 (`bafy…`) or 62 (`k51…`) characters; refuse long input before the
+        // quadratic base-36 decoding (security audit L-2: a 1 MB pasted name froze the tab).
+        if s.len() > MAX_TEXT {
+            return None;
+        }
         let bytes = match s.as_bytes().first()? {
             b'b' => unbase32(&s[1..])?,
             b'k' => unbase36(&s[1..])?,
@@ -100,6 +105,9 @@ impl Cid {
         Self::from_bytes(&bytes)
     }
 }
+
+/// Longest CID text accepted by [`Cid::parse`].
+pub const MAX_TEXT: usize = 100;
 
 /// libp2p `PublicKey { Type = Ed25519 (1), Data = pk }`, protobuf.
 pub fn pubkey_protobuf(pk: &[u8; 32]) -> [u8; 36] {

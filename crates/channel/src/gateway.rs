@@ -46,6 +46,10 @@ pub struct Hosted {
 impl Hosted {
     /// What an onion serves for channel `name`: the owner's (`Served::Owner`) or a mirror's.
     pub fn new(name: Cid, root: Cid, record: Vec<u8>, blocks: Vec<Block>, served: Served) -> Self {
+        // Only what the channel links to is served (security audit M-4): a CAR from a mirror may
+        // carry extra blocks that hash right but belong to nothing (third-party content, a CBOR
+        // bomb), and this onion must not host them.
+        let blocks = reachable(&root, blocks);
         // Hosted data is verified before it gets here (built by the owner, or checked by the
         // mirror); the record's validity is the readers' concern (time 0 skips it).
         let page = match channel::verify(&name, &record, &blocks, 0, 0) {
@@ -83,6 +87,21 @@ impl Hosted {
     pub fn car(&self) -> Vec<u8> {
         car::write(std::slice::from_ref(&self.root), &self.dag(&self.root).unwrap_or_default())
     }
+}
+
+/// The blocks reachable from `root` by pin links (`root` first), the rest dropped (M-4).
+pub fn reachable(root: &Cid, blocks: Vec<Block>) -> Vec<Block> {
+    let mut held: HashMap<Cid, Vec<u8>> = blocks.into_iter().collect();
+    let mut out = Vec::with_capacity(held.len());
+    let mut todo = vec![root.clone()];
+    while let Some(c) = todo.pop() {
+        let Some(data) = held.remove(&c) else { continue };
+        if let Some(v) = Value::decode(&data) {
+            links(&v, &mut todo);
+        }
+        out.push((c, data));
+    }
+    out
 }
 
 fn links(v: &Value, out: &mut Vec<Cid>) {
@@ -269,6 +288,20 @@ pub fn parse_any_response(resp: &[u8]) -> Result<(u16, Vec<u8>), &'static str> {
 mod tests {
     use super::*;
     use crate::channel::{self, Channel};
+
+    #[test]
+    fn extra_blocks_are_not_served() {
+        let mut c = Channel::new(&[3; 32], "t", "", 1_790_000_000).unwrap();
+        c.post("one", 0, 1_790_000_001).unwrap();
+        let (root, mut blocks) = c.build(1_790_000_002);
+        let record = c.record(&root, 1_790_000_002);
+        let junk = b"someone else's bytes".to_vec();
+        let junk_cid = Cid::of(crate::cid::RAW, &junk);
+        blocks.push((junk_cid.clone(), junk));
+        let h = Hosted::new(c.name(), root, record, blocks, Served::Mirror);
+        let r = respond(&get("x", &format!("/ipfs/{}?format=raw", junk_cid.to_text())), &h);
+        assert_eq!(parse_response(&r), Err(HttpError::Status(404)), "a block the channel does not link to");
+    }
 
     #[test]
     fn root_car_built_once_per_version() {

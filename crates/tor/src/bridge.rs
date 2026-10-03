@@ -128,7 +128,9 @@ fn broker(url: &str) -> bool {
         let h = host(rest);
         return !h.is_empty() && !h.contains('@') && !h.contains(char::is_whitespace);
     }
-    url.strip_prefix("http://").map(host).is_some_and(|h| h.starts_with("127.0.0.1:") || h.starts_with("localhost:") || h == "127.0.0.1" || h == "localhost")
+    // No user info in the loopback form either (`http://localhost:1@other.example/` names
+    // other.example; security audit I-1).
+    url.strip_prefix("http://").map(host).is_some_and(|h| !h.contains('@') && (h.starts_with("127.0.0.1:") || h.starts_with("localhost:") || h == "127.0.0.1" || h == "localhost"))
 }
 
 /// `stun:host:port` (the form the Snowflake client takes).

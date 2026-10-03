@@ -43,6 +43,13 @@ pub fn list(s: &str) -> Vec<String> {
     s.split(',').map(str::trim).filter(|x| !x.is_empty()).map(str::to_owned).collect()
 }
 
+/// A v3 onion address: 56 base-32 characters and `.onion`, nothing else (security audit L-1:
+/// a link or a manifest could make readers send channel requests to clearnet hosts through
+/// exits, which then learn what is read).
+pub fn is_onion(s: &str) -> bool {
+    s.len() == 62 && s.ends_with(".onion") && s.as_bytes()[..56].iter().all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7'))
+}
+
 /// `"<56 base32 chars>.onion"` of an onion service key.
 pub fn onion_address(pk: &[u8; 32]) -> String {
     safelog::DisplayRedacted::display_unredacted(&HsId::from(*pk)).to_string()

@@ -12,7 +12,11 @@
 | F-03 | medium | **Fixed**: a resume invite is accepted only while the path is down or degraded; a live chat refuses it. Test: `security_regressions::forged_resume_invite_does_not_drop_a_live_chat` |
 | F-04 | medium | **Fixed**: `card::valid_nick` (no control, invisible, direction or check-mark characters) for HELLO, own nickname and contacts; older saved names that break it are dropped, not the key file. Tests: `security_regressions.rs`, `card.rs` |
 | F-05 | medium | Open |
-| F-06 – F-10 | low/info | Open |
+| F-06 | low | **Fixed**: a key file's Argon2 parameters are kept and re-written on save (`keyfile::Kdf`); accepted maxima lowered to m ≤ 64 MiB, t ≤ 8. Test: `resave_keeps_the_file_parameters` |
+| F-07 | low | **Fixed**: identity chunks with `idx >= total` are refused |
+| F-08 | low | **Fixed**: a failed re-save emits `E_KEYFILE_INVALID` instead of an empty file |
+| F-09 | low | **Accepted**: adding the card of a known contact gives you its Tor address (a feature, kept). A forged card can only misdirect "Connect"; the IK handshake to the contact's key then fails, so nobody is impersonated |
+| F-10 | info | Open: a handshake deadline must not count the time a Tor dial takes to reach the onion |
 
 
 ## Scope and method

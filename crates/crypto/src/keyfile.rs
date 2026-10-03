@@ -28,6 +28,20 @@ pub const MAX_BODY: usize = 65_536;
 pub const MIN_PASSPHRASE: usize = 12;
 const TAG_LEN: usize = 16;
 
+/// The Argon2id parameters a key file was written with. A re-save keeps them: the file key in
+/// memory was derived with them (security audit F-06: writing the defaults next to a key derived
+/// with other parameters made the file unopenable).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Kdf {
+    pub m_mib: u16,
+    pub t: u8,
+    pub p: u8,
+}
+
+impl Kdf {
+    pub const DEFAULT: Self = Self { m_mib: M_MIB, t: T_COST, p: P_COST };
+}
+
 /// A decrypted key file. Secrets are wiped on drop.
 pub struct Opened {
     pub seed: Zeroizing<[u8; 32]>,
@@ -38,6 +52,7 @@ pub struct Opened {
     /// The derived file key, kept in memory so the app can re-save without asking again.
     pub key: Zeroizing<[u8; 32]>,
     pub salt: [u8; 16],
+    pub kdf: Kdf,
 }
 
 fn derive(pass: &[u8], salt: &[u8; 16], m_mib: u16, t: u8, p: u8) -> Result<Zeroizing<[u8; 32]>, ErrorCode> {
@@ -60,7 +75,7 @@ pub fn new_key(pass: &[u8]) -> Result<(Zeroizing<[u8; 32]>, [u8; 16]), ErrorCode
 }
 
 /// Encrypts an identity with an already derived key (fresh nonce every save).
-pub fn seal(key: &[u8; 32], salt: &[u8; 16], label: &[u8], seed: &[u8; 32], nick: &[u8], tlv: &[u8]) -> Result<Vec<u8>, ErrorCode> {
+pub fn seal(key: &[u8; 32], salt: &[u8; 16], kdf: Kdf, label: &[u8], seed: &[u8; 32], nick: &[u8], tlv: &[u8]) -> Result<Vec<u8>, ErrorCode> {
     if label.len() > MAX_LABEL || nick.len() > MAX_NICK || core::str::from_utf8(label).is_err() || core::str::from_utf8(nick).is_err() {
         return Err(ErrorCode::NotPermitted);
     }
@@ -75,9 +90,9 @@ pub fn seal(key: &[u8; 32], salt: &[u8; 16], label: &[u8], seed: &[u8; 32], nick
     out.extend_from_slice(MAGIC);
     out.push(VERSION);
     out.push(KDF_ARGON2ID);
-    out.extend_from_slice(&M_MIB.to_le_bytes());
-    out.push(T_COST);
-    out.push(P_COST);
+    out.extend_from_slice(&kdf.m_mib.to_le_bytes());
+    out.push(kdf.t);
+    out.push(kdf.p);
     out.extend_from_slice(salt);
     out.extend_from_slice(&nonce);
     out.push(label.len() as u8);
@@ -113,8 +128,9 @@ pub fn open(blob: &[u8], pass: &[u8]) -> Result<Opened, ErrorCode> {
     }
     let m_mib = r.u16().ok_or(Bad)?;
     let (t, p) = (r.u8().ok_or(Bad)?, r.u8().ok_or(Bad)?);
-    // Bound the cost an attacker-supplied file can make us pay (and what a phone can do).
-    if !(8..=256).contains(&m_mib) || !(1..=16).contains(&t) || !(1..=4).contains(&p) {
+    // Bound the cost an attacker-supplied file (or an identity transfer) can make us pay: what a
+    // phone can do (F-06; the defaults are 19 MiB, t = 4, p = 1).
+    if !(8..=64).contains(&m_mib) || !(1..=8).contains(&t) || !(1..=4).contains(&p) {
         return Err(Bad);
     }
     let salt = r.arr::<16>().ok_or(Bad)?;
@@ -140,7 +156,7 @@ pub fn open(blob: &[u8], pass: &[u8]) -> Result<Opened, ErrorCode> {
     let nl = b.u8().ok_or(Bad)? as usize;
     let nick = b.take(nl).filter(|n| n.len() <= MAX_NICK && core::str::from_utf8(n).is_ok()).ok_or(Bad)?.to_vec();
     let tlv = Zeroizing::new(b.take(b.remaining()).unwrap_or(&[]).to_vec());
-    Ok(Opened { seed, nick, label, tlv, key, salt })
+    Ok(Opened { seed, nick, label, tlv, key, salt, kdf: Kdf { m_mib, t, p } })
 }
 
 #[cfg(test)]
@@ -151,7 +167,7 @@ mod tests {
     fn roundtrip_label_and_failures() {
         let pass = b"correct horse battery";
         let (key, salt) = new_key(pass).unwrap();
-        let blob = seal(&key, &salt, b"Work", &[7; 32], b"alice", &[0x04, 2, 0, 9, 9]).unwrap();
+        let blob = seal(&key, &salt, Kdf::DEFAULT, b"Work", &[7; 32], b"alice", &[0x04, 2, 0, 9, 9]).unwrap();
         assert_eq!(label(&blob), Some(&b"Work"[..]));
         let o = open(&blob, pass).unwrap();
         assert_eq!(*o.seed, [7; 32]);
@@ -169,8 +185,26 @@ mod tests {
         assert_eq!(new_key(b"short").err(), Some(ErrorCode::NotPermitted));
 
         // Re-save with the kept key: new nonce, same passphrase opens it.
-        let again = seal(&o.key, &o.salt, &o.label, &o.seed, &o.nick, &o.tlv).unwrap();
+        let again = seal(&o.key, &o.salt, o.kdf, &o.label, &o.seed, &o.nick, &o.tlv).unwrap();
         assert_ne!(again, blob);
         assert_eq!(*open(&again, pass).unwrap().seed, [7; 32]);
+    }
+
+    /// F-06: a file written with other (accepted) parameters stays openable after a re-save.
+    #[test]
+    fn resave_keeps_the_file_parameters() {
+        let pass = b"correct horse battery";
+        let kdf = Kdf { m_mib: 8, t: 1, p: 1 };
+        let salt = [3; 16];
+        let key = derive(pass, &salt, kdf.m_mib, kdf.t, kdf.p).unwrap();
+        let blob = seal(&key, &salt, kdf, b"Old", &[7; 32], b"", &[]).unwrap();
+        let o = open(&blob, pass).unwrap();
+        assert_eq!(o.kdf, kdf);
+        let again = seal(&o.key, &o.salt, o.kdf, &o.label, &o.seed, &o.nick, &o.tlv).unwrap();
+        assert_eq!(*open(&again, pass).unwrap().seed, [7; 32]);
+        // A file demanding more than a phone can do is refused before any work.
+        let mut heavy = blob.clone();
+        heavy[6..8].copy_from_slice(&256u16.to_le_bytes());
+        assert_eq!(open(&heavy, pass).err(), Some(ErrorCode::KeyfileInvalid));
     }
 }

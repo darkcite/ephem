@@ -363,8 +363,11 @@ pub fn cache_export() -> Option<Vec<u8>> {
 /// are kept as they are: arti validates cached documents (signatures, lifetimes) on load, as it
 /// does with its SQLite cache. Returns whether the snapshot was readable.
 pub fn cache_import(gz: &[u8]) -> bool {
+    // Bounded (Ephem security audit W-8): a snapshot is a few MB of JSON; a stored one that
+    // inflates beyond this (a gzip bomb in IndexedDB) is dropped instead of filling the tab.
+    const MAX_JSON: u64 = 64 << 20;
     let mut json = String::new();
-    if GzDecoder::new(gz).read_to_string(&mut json).is_err() {
+    if GzDecoder::new(gz).take(MAX_JSON + 1).read_to_string(&mut json).is_err() || json.len() as u64 > MAX_JSON {
         return false;
     }
     let Ok(snap) = serde_json::from_str::<Snapshot<'_>>(&json) else { return false };

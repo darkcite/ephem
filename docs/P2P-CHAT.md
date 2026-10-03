@@ -143,7 +143,7 @@ Application backend, WebSocket or HTTP signalling, TURN, chat relay, message dat
 | Party | What we trust it for | Mitigation |
 |---|---|---|
 | Out-of-band channel (in person, messenger, …) | Integrity of the invite and answer: they carry the DTLS fingerprints and static keys | SAS comparison (§10.4). In-person QR scanning is strongest. |
-| Static host / repository owner | Serving honest code | CSP, SRI, a service worker that pins the accepted version and asks before updating (§17; it cannot stop a hostile `sw.js` from the host, §17.1), reproducible builds with published hashes |
+| Static host / repository owner | Serving honest code | CSP, SRI, a service worker that pins the accepted version and asks before updating (§17; it cannot stop a hostile `sw.js` from the host, §17.1); reproducible builds with published hashes are planned (§17.2) |
 | Browser and OS | Everything | Out of scope (§21) |
 | STUN operator | Nothing about security. It learns metadata only | Configurable list, and a LAN-only mode |
 | Embedded Tor client (Tor mode only, §28) | Correct Tor protocol behaviour, built from upstream arti with a small patch set | Our code; reviewed and fuzzed like the rest of the WASM (§28.9) |
@@ -879,7 +879,7 @@ Wallet authentication is not in any current phase (§7.4). Identity comes only f
 
 - `index.html` is the root of trust, pinned by the service worker. `tools/stamp.py` (run by `./build.sh`) writes into it: SRI on `app.css` and `app.js`; an **import map with `integrity`** for every JS module (`app.js`, `pkg/ephem.js`), whose own SHA-256 is allowed in the CSP `script-src`; and the SHA-384 of `ephem_bg.wasm`, which `app.js` passes to `fetch(…, { integrity })`. A tampered wasm or `app.js` is refused (APP-E2E). Browsers without import-map integrity still check `app.js` and the wasm.
 - The build id (first 12 hex digits of SHA-256 over the stamped hashes) is the service-worker cache version and is shown in the app footer.
-- Builds are reproducible (pinned toolchain, `--remap-path-prefix`). The hash of each build is published in GitHub Releases and shown in the app's About screen.
+- **Planned, not built yet** (security audit W-7): reproducible builds (a pinned toolchain, `--remap-path-prefix`; today the wasm still carries build paths) with the hash of each build published in GitHub Releases. Today the build id is shown in the app footer and is the only thing to compare.
 
 ### 17.3 CSP (set in a `<meta>` tag, because GitHub Pages cannot set headers)
 
@@ -1025,7 +1025,7 @@ Members     4 / 8  (links 5 / 6)
 | Network observer | IPs, timing, sizes, volume | DTLS + Noise hide the contents. Metadata is accepted as exposed |
 | Out-of-band channel MITM (messenger) | Swaps invite and answer | SAS comparison on another channel |
 | Malicious peer | Fake identity, injection, replay, joining, abuse of membership, relay candidates | Keys pinned by the invite, AEAD with strict nonces, owner-only admission and signed room state, relay filtering |
-| Thief of a key file | Offline passphrase guessing; this also exposes the contacts list | Argon2id. The UI enforces a minimum passphrase strength |
+| Thief of a key file | Offline passphrase guessing; this also exposes the contacts list | Argon2id (19 MiB, t = 4). The UI requires at least 12 characters (length only, no strength estimate) |
 | Snowflake proxy / broker (Tor mode) | Sees your IP and that you use Snowflake; a malicious proxy can drop traffic | Tor's own encryption and circuit verification inside WASM; proxy rotation (Turbotunnel keeps the session across proxies) |
 | Static host | Serves altered code | SRI, a service worker that pins the accepted version and asks before updating, reproducible builds. **Limit:** a hostile `sw.js` from the host runs on the next visit (§17.1); only checking the build id against the published hash detects it |
 | STUN operator | Learns IPs and timing | Configurable list, LAN-only mode |

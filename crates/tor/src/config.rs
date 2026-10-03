@@ -17,6 +17,11 @@ pub fn build(bridge_fps: &[String], network_toml: &str, storage_root: &str) -> R
     if bridge_fps.is_empty() || bridge_fps.len() > BRIDGE_ADDRS.len() {
         return Err("config: 1 to 4 Snowflake bridges".into());
     }
+    // Interpolated into TOML below: 40 hex digits and nothing else, whoever calls (security
+    // audit I-3: the lab page's API passed them unchecked).
+    if !bridge_fps.iter().all(|f| f.len() == 40 && f.bytes().all(|b| b.is_ascii_hexdigit())) {
+        return Err("config: a bridge fingerprint must be 40 hexadecimal digits".into());
+    }
     let bridges: Vec<String> = bridge_fps.iter().zip(BRIDGE_ADDRS).map(|(fp, a)| format!("\"{a} ${fp}\"")).collect();
     let base = format!(
         r#"

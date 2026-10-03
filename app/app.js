@@ -1106,7 +1106,7 @@ function ended(c, name) {
 function renderPath(c) {
   c.$('diag-path').textContent = c.$('c-addr').checked
     ? c.pathText
-    : c.pathText.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '•••').replace(/\[[0-9a-fA-F:.]+\]/g, '[•••]');
+    : c.pathText.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '•••').replace(/\[[^\]]+\]/g, '[•••]'); // incl. zone ids: [fe80::1%en0] (W-10)
 }
 
 // ---- the controls of one chat (its copy of #t-chat) -------------------------------------------
@@ -2051,6 +2051,12 @@ const io = new IntersectionObserver((entries) => {
 }, { threshold: 0.6 });
 
 async function main() {
+  // Never inside another page's frame (security audit W-9): GitHub Pages cannot send
+  // `frame-ancestors`, and a framing page could overlay clicks on ours (codes, "Codes match").
+  if (window.top !== window.self) {
+    document.body.textContent = 'Ephem does not run inside another page. Open it in its own tab.';
+    return;
+  }
   // A Tor invite or bridge link opens in Tor mode, every other code in direct mode (modes never
   // mix, §28.2). Channel links open where they are (channels always go through Tor).
   if (/^#[tb]=/.test(location.hash) !== TOR && /^#[iarqtb]=/.test(location.hash)) {

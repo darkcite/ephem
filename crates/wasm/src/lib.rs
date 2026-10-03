@@ -181,6 +181,7 @@ struct Prefs {
 struct Saved {
     key: Zeroizing<[u8; 32]>,
     salt: [u8; 16],
+    kdf: keyfile::Kdf,
     label: Vec<u8>,
     contacts: Contacts,
     others: Zeroizing<Vec<u8>>,
@@ -727,8 +728,8 @@ impl App {
         let res = (|| {
             let (key, salt) = keyfile::new_key(pass)?;
             let mut g = self.inner.borrow_mut();
-            let blob = keyfile::seal(&key, &salt, label.as_bytes(), g.id.seed(), g.prefs.settings.nick(), &[])?;
-            g.saved = Some(Saved { key, salt, label: label.as_bytes().to_vec(), contacts: Contacts::new(), others: Zeroizing::new(Vec::new()) });
+            let blob = keyfile::seal(&key, &salt, keyfile::Kdf::DEFAULT, label.as_bytes(), g.id.seed(), g.prefs.settings.nick(), &[])?;
+            g.saved = Some(Saved { key, salt, kdf: keyfile::Kdf::DEFAULT, label: label.as_bytes().to_vec(), contacts: Contacts::new(), others: Zeroizing::new(Vec::new()) });
             Ok(blob)
         })();
         pass.fill(0);
@@ -743,7 +744,12 @@ impl App {
         let g = self.inner.borrow();
         let Some(s) = g.saved.as_ref() else { return Vec::new() };
         let tlv = Zeroizing::new(s.contacts.to_tlv(&s.others));
-        keyfile::seal(&s.key, &s.salt, &s.label, g.id.seed(), g.prefs.settings.nick(), &tlv).unwrap_or_default()
+        // A failed save says so (security audit F-08: an empty result made the page skip the
+        // save without a word, e.g. past the 64 KiB body).
+        keyfile::seal(&s.key, &s.salt, s.kdf, &s.label, g.id.seed(), g.prefs.settings.nick(), &tlv).unwrap_or_else(|_| {
+            emit_err(ev::ERROR, ErrorCode::KeyfileInvalid);
+            Vec::new()
+        })
     }
 
     /// Signs in with a key file. Only while no chat is open. Returns 0 or an error code.
@@ -757,7 +763,7 @@ impl App {
             let mut g = self.inner.borrow_mut();
             g.id = Identity::from_seed(&o.seed);
             g.prefs.settings.set_nick(&o.nick);
-            g.saved = Some(Saved { key: o.key, salt: o.salt, label: o.label, contacts, others: Zeroizing::new(others) });
+            g.saved = Some(Saved { key: o.key, salt: o.salt, kdf: o.kdf, label: o.label, contacts, others: Zeroizing::new(others) });
             Ok(())
         })();
         pass.fill(0);

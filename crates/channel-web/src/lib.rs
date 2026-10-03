@@ -620,7 +620,14 @@ impl ChannelApp {
     pub fn read(&self, name: &str, onions: &str, min_seq: f64) -> Result<js_sys::Promise, JsValue> {
         let name = Cid::parse(name).filter(|c| c.ed25519_key().is_some()).ok_or_else(|| err("not a channel name"))?;
         let tor = self.tor()?;
-        let onions = list(onions);
+        // Well-formed onions only, each once, at most the owner's plus a full mirror list (L-1).
+        let mut onions_ok: Vec<String> = Vec::with_capacity(1 + ephem_channel::channel::MAX_MIRRORS);
+        for o in list(onions) {
+            if ephem_tor::web::is_onion(&o) && !onions_ok.contains(&o) && onions_ok.len() <= ephem_channel::channel::MAX_MIRRORS {
+                onions_ok.push(o);
+            }
+        }
+        let onions = onions_ok;
         if onions.is_empty() {
             return Err(err("no onion address to read from"));
         }
@@ -818,7 +825,10 @@ impl Reading {
 fn verified(name: &Cid, record: &[u8], car_bytes: &[u8], min_seq: u64) -> Result<Reading, String> {
     let (_, blocks) = car::read(car_bytes).ok_or("the CAR is invalid or a block does not match its CID")?;
     let v = channel::verify(name, record, &blocks, now_s(), min_seq).map_err(|e| format!("{e:?}"))?;
-    Ok(Reading { name: name.to_text(), json: json::view(&v), record: record.to_vec(), car: car_bytes.to_vec(), seq: v.record.sequence })
+    // Re-written with the record's root and only the blocks it links to (security audit M-4):
+    // what the page stores, mirrors and serves is exactly the verified channel.
+    let car = car::write(std::slice::from_ref(&v.root), &gateway::reachable(&v.root, blocks));
+    Ok(Reading { name: name.to_text(), json: json::view(&v), record: record.to_vec(), car, seq: v.record.sequence })
 }
 
 async fn with_timeout<T>(ms: u32, f: impl std::future::Future<Output = Result<T, String>>) -> Result<T, String> {
