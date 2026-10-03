@@ -881,7 +881,9 @@ async fn fetch_channel(tor: &Tor, name: &Cid, onion: &str, min_seq: u64, fresh: 
             return Err(format!("older than what we saw (sequence {} < {min_seq})", rec.sequence));
         }
         let root = rec.value.strip_prefix("/ipfs/").ok_or("record value")?;
-        let car_bytes = http_get(tor, onion, &format!("/ipfs/{root}?format=car"), false).await?;
+        // The record's circuit (a retry round's is fresh: the cached one may lead to a host
+        // instance that is gone).
+        let car_bytes = http_get(tor, onion, &format!("/ipfs/{root}?format=car"), fresh).await?;
         verified(name, &record, &car_bytes, min_seq)
     })
     .await

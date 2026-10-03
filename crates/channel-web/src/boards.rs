@@ -48,6 +48,8 @@ const ANSWER_MS: u32 = 20_000;
 /// The whole of one request, write included.
 const SERVE_MS: u32 = 60_000;
 const FETCH_MS: u32 = 90_000;
+/// `/pow` on the reads' circuit, before a retry on a fresh one.
+const POW_MS: u32 = 30_000;
 const READ_ROUNDS: u32 = 4;
 /// The publish loop's period; `Host::due` decides.
 const TICK_MS: u32 = 250;
@@ -275,7 +277,13 @@ impl BoardApp {
         }
         let onion = onion.to_owned();
         Ok(wasm_bindgen_futures::future_to_promise(async move {
-            let resp = with_timeout(FETCH_MS, fetch(&tor, &onion, &ephem_channel::gateway::get(&onion, "/pow"), false, 1024)).await.map_err(err)?;
+            // The reads' circuit first; if it fails (it may lead to a host instance that is gone,
+            // after the owner reloaded), once more on a fresh one.
+            let req = ephem_channel::gateway::get(&onion, "/pow");
+            let resp = match with_timeout(POW_MS, fetch(&tor, &onion, &req, false, 1024)).await {
+                Ok(r) => r,
+                Err(_) => with_timeout(FETCH_MS, fetch(&tor, &onion, &req, true, 1024)).await.map_err(err)?,
+            };
             let body = ephem_channel::gateway::parse_response(&resp).map_err(|e| err(format!("/pow: {e:?}")))?;
             let info = PowInfo::read(body.try_into().map_err(|_| err("/pow: wrong length"))?);
             let mut seed = [0u8; 32];
@@ -447,7 +455,9 @@ async fn read_from(tor: &Tor, name: &Cid, onion: &str, min_seq: u64, threads: &[
     }
     for no in threads {
         let Some(c) = index.catalog.iter().find(|c| c.no == *no) else { continue }; // pruned or deleted
-        let resp = fetch(tor, onion, &ephem_channel::gateway::get(onion, &format!("/ipfs/{}?format=car", c.thread.to_text())), false, gateway::MAX_CAR).await?;
+        // On a retry round every request takes a fresh circuit: the cached one may lead to a
+        // service instance that is gone (the host reloaded its tab).
+        let resp = fetch(tor, onion, &ephem_channel::gateway::get(onion, &format!("/ipfs/{}?format=car", c.thread.to_text())), fresh, gateway::MAX_CAR).await?;
         let body = ephem_channel::gateway::parse_response(&resp).map_err(|e| format!("thread {no}: {e:?}"))?;
         let (_, b) = ephem_channel::car::read(body).ok_or("thread: not a valid CAR")?;
         blocks.extend(b);
