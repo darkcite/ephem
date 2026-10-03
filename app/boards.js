@@ -42,7 +42,7 @@ export function init(c) {
     if (current?.read) return showBoard(current.read, current.onions, current.thread), true;
     const f = follows()[0];
     return f ? (showBoard(f.n, f.o), true) : false;
-  });
+  }, openLink);
   if (ctx.TOR && ctx.ch) adopt(new ctx.mod.BoardApp(ctx.ch));
   if (ctx.TOR) channels.torIsUp().then(resumeMirrors);
   setInterval(publishIpfs, 60_000);

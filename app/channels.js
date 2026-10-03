@@ -38,6 +38,7 @@ let refreshing = false;
 let torMod = null;                   // the Tor build's module (boards construct BoardApp from it)
 let boardsHook = null;               // boards.js: re-render its rows when the follow list changes
 let boardsOpen = null;               // boards.js: show a followed board (the tab has only boards)
+let boardsLink = null;               // boards.js: open a board link (#B=…) pasted or scanned here
 
 export function init(c) {
   ctx = c;
@@ -69,9 +70,10 @@ export function channelApp() {
 export const torIsUp = () => torUp;
 export const followList = () => follows;
 export const saveFollowList = () => saveFollows();
-export function setBoardsHook(f, open) {
+export function setBoardsHook(f, open, link) {
   boardsHook = f;
   boardsOpen = open;
+  boardsLink = link;
 }
 const isChannel = (f) => f.k !== 'board';
 
@@ -160,6 +162,8 @@ export async function prepare() {
 
 /** A channel link (`#c=<name>&o=<onion>[,<mirror>…]`): the reader, in the Following tab. */
 export async function openLink(text) {
+  // A board link pasted or scanned in Following: the board reader (boards.js).
+  if (/#B=k51/.test(text) && boardsLink) return boardsLink(text);
   const frag = text.slice(text.indexOf('#') + 1);
   const p = new URLSearchParams(frag);
   const n = p.get('c');
