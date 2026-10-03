@@ -6,7 +6,8 @@
 // → the next probe finds it online: an in-app notice, and a tap opens the channel.
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`. Probes run through the lab hook
-// `ephemProbeAll` (the page's timer runs every 2 minutes).
+// `ephemProbeAll`, which probes every followed owner now (the page's timer: every 2 minutes for an
+// offline owner, 10 for an online one).
 import { check, finish, launch, PASS, problems, toSettings, watch } from '../e2e_lib.mjs';
 import { T, dumpLogs, record, serveTor, torContext, unexpected } from './tor_env.mjs';
 
@@ -82,6 +83,8 @@ try {
   await o.locator('#slots li', { hasText: 'Online' }).locator('button', { hasText: 'Sign in' }).click();
   await o.waitForFunction(() => /Online/.test(document.querySelector('#id-desc')?.textContent));
   await tab(o, 'own');
+  await o.waitForFunction(() => document.querySelectorAll('#owns li').length === 1, null, { timeout: 30_000 });
+  await o.locator('#owns li', { hasText: 'Comes and goes' }).click();
   await o.waitForFunction(() => /Online through Tor/.test(document.querySelector('#o-serving')?.textContent), null, { timeout: T });
   const t1 = Date.now();
   const note = r.locator('#notices .notice', { hasText: 'Comes and goes' });

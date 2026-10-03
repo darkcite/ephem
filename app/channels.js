@@ -18,7 +18,7 @@ const GATEWAY = 'https://trustless-gateway.link';
 const ROUTING_HOST = 'delegated-ipfs.dev';
 const REFRESH_MS = 10 * 60 * 1000;   // followed channels and mirrors
 const PARALLEL = 4;                  // channels read at once (Tor circuits are not free)
-const PROBE_MS = 2 * 60 * 1000;      // an offline owner, probed for the online notice (F.6.1)
+const PROBE_MS = 2 * 60 * 1000;      // an offline owner, probed for the online notice (F.7)
 const MISSES = 2;                    // probes in a row an online owner must miss to be offline
 const ONLINE_KEY = 'ephem-notify-online';
 const MAX_OWNED = 16;                // channel indices looked for in the store
@@ -53,7 +53,7 @@ export function init(c) {
     engine = Promise.resolve(ch);
     if (globalThis.ephemTorLab) globalThis.ephemChannel = ch; // lab test hook (C-P3)
   }
-  if (globalThis.ephemTorLab) Object.assign(globalThis, { ephemChannelsRefresh: refreshAll, ephemProbeAll: probeAll }); // lab: now
+  if (globalThis.ephemTorLab) Object.assign(globalThis, { ephemChannelsRefresh: refreshAll, ephemProbeAll: () => probeAll(true) }); // lab: now
 }
 
 /** The page's ChannelApp and the Tor build's module, once loaded (direct mode: on first use).
@@ -358,7 +358,7 @@ async function refreshAll() {
   saveFollows();
 }
 
-// ---- the online notice (optional, docs/P2P-CHAT.md F.6.1) --------------------------------------
+// ---- the online notice (optional, docs/P2P-CHAT.md F.7) --------------------------------------
 // With the setting on, the owner's address of every followed channel and board (the first one:
 // the link's `o=`) is probed: every PROBE_MS while it is offline or has just missed a probe,
 // every REFRESH_MS while online. A notice when an owner comes back: never at start (unknown →
@@ -366,11 +366,11 @@ async function refreshAll() {
 // circuit). The state is RAM only.
 const onlineOn = () => { try { return localStorage.getItem(ONLINE_KEY) === '1'; } catch { return false; } };
 let probing = false;
-async function probeAll() {
+async function probeAll(all = false) {
   if (probing || !ch || torResolve || !onlineOn()) return;
   probing = true;
   const now = Date.now();
-  const queue = follows.filter((f) => f.o?.[0] && (f.up !== true || f.miss || now - (f.pt || 0) >= REFRESH_MS));
+  const queue = follows.filter((f) => f.o?.[0] && (all || f.up !== true || f.miss || now - (f.pt || 0) >= REFRESH_MS));
   const worker = async () => {
     for (let f = queue.shift(); f; f = queue.shift()) {
       f.pt = Date.now();
