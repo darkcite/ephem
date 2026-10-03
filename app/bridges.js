@@ -6,12 +6,11 @@
 
 // The built-in setup, as bridge lines: the Tor Project's two Snowflake bridges (snowflake-01,
 // -02, as in Tor Browser), the direct broker and its CDN URL (reachable where the broker's name
-// is blocked; no domain fronting, which browsers cannot do), and STUN servers for the proxy
-// connections only, never for a chat peer (§28.5).
-const STUN = 'stun:stun.l.google.com:19302,stun:stun.antisip.com:3478,stun:stun.bluesip.net:3478,stun:stun.dus.net:3478,stun:stun.epygi.com:3478,stun:stun.sonetel.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.voys.nl:3478';
+// is blocked; no domain fronting, which browsers cannot do). No ice=: Rust adds its built-in STUN
+// servers (`bridge::DEFAULT_ICE`), used for the proxy connections only, never for a chat peer (§28.5).
 export const DEFAULT_BRIDGES = [
-  `snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://snowflake-broker.torproject.net/ ice=${STUN}`,
-  `snowflake 192.0.2.4:80 8838024498816A039FCBBAB14E6F40A0843051FA url=https://1098762253.rsc.cdn77.org/ ice=${STUN}`,
+  'snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://snowflake-broker.torproject.net/',
+  'snowflake 192.0.2.4:80 8838024498816A039FCBBAB14E6F40A0843051FA url=https://1098762253.rsc.cdn77.org/',
 ].join('\n');
 
 // A comment line in the saved text (the parser skips comments): also use the defaults.

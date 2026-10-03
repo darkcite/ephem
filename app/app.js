@@ -1955,7 +1955,7 @@ function showBridgeProblems(check) {
   if (!check.usable) {
     const li = document.createElement('li');
     li.className = 'bad';
-    li.textContent = 'No usable snowflake bridge: a line needs a fingerprint, url=https://… and ice=stun:….';
+    li.textContent = 'No usable snowflake bridge: a line needs a fingerprint and url=https://… (ice=stun:… is optional).';
     ul.append(li);
   }
   ul.hidden = !ul.children.length;

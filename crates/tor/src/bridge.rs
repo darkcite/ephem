@@ -10,8 +10,28 @@
 //! Several lines merge: brokers, bridges and STUN servers are each the union, in order of first
 //! appearance (a Snowflake broker matches a proxy to any of the listed bridges). Runs once, when
 //! Tor starts or the setting is checked; the returned strings are its only allocations.
+//!
+//! `ice=` is optional. Snowflake is WebRTC: the page and a volunteer proxy are both usually behind
+//! NAT, and STUN is how each learns the public address the other must reach. A line without
+//! `ice=` therefore uses [`DEFAULT_ICE`] (a note, not an error); only a line whose every `ice=`
+//! entry is unusable (TURN, malformed) falls back the same way.
 
 use crate::net::BRIDGE_ADDRS;
+
+/// The STUN servers used when a line names none: public servers, as Tor Browser's Snowflake
+/// lines list them. They see the page's IP address and that it asks for its public address,
+/// nothing more (no Tor traffic passes through them).
+pub const DEFAULT_ICE: [&str; 9] = [
+    "stun:stun.l.google.com:19302",
+    "stun:stun.antisip.com:3478",
+    "stun:stun.bluesip.net:3478",
+    "stun:stun.dus.net:3478",
+    "stun:stun.epygi.com:3478",
+    "stun:stun.sonetel.com:3478",
+    "stun:stun.uls.co.za:3478",
+    "stun:stun.voipgate.com:3478",
+    "stun:stun.voys.nl:3478",
+];
 
 /// Why a line is not used, or what in it is ignored.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -28,20 +48,20 @@ pub enum Problem {
     NoBroker,
     BadBroker,
     AmpCacheOnly,
-    NoStun,
     // Notes: the line is used, this option is not.
     FrontIgnored,
     UtlsIgnored,
     AmpCacheIgnored,
     TurnIgnored,
     BadStunIgnored,
+    DefaultStun,
     UnknownOption,
     TooManyBridges,
 }
 
 impl Problem {
     pub fn is_error(self) -> bool {
-        (self as u8) <= (Problem::NoStun as u8)
+        (self as u8) <= (Problem::AmpCacheOnly as u8)
     }
 
     pub fn reason(self) -> &'static str {
@@ -57,12 +77,12 @@ impl Problem {
             Problem::NoBroker => "no broker: the line needs url=https://…",
             Problem::BadBroker => "the broker (url=) must be an https:// address",
             Problem::AmpCacheOnly => "AMP cache rendezvous is not supported yet; add a url= broker",
-            Problem::NoStun => "no usable STUN server (ice=stun:…)",
             Problem::FrontIgnored => "domain fronting (front=/fronts=) is ignored: browsers cannot do it; the url= address is used as is",
             Problem::UtlsIgnored => "utls options are ignored: the browser's own TLS is used",
             Problem::AmpCacheIgnored => "ampcache= is ignored (not supported yet)",
             Problem::TurnIgnored => "TURN servers are ignored: Ephem never relays through TURN",
             Problem::BadStunIgnored => "an ice= entry that is not stun:host:port is ignored",
+            Problem::DefaultStun => "no usable ice=stun:…: the built-in STUN servers are used",
             Problem::UnknownOption => "an unknown option is ignored",
             Problem::TooManyBridges => "more than 4 different bridges: the extra ones are ignored",
         }
@@ -196,8 +216,9 @@ fn parse_line(line: &str, n: u32, out: &mut Bridges) -> Result<(), Problem> {
         None if amp => return Err(Problem::AmpCacheOnly),
         None => return Err(Problem::NoBroker),
     };
-    if stuns.is_empty() {
-        return Err(Problem::NoStun);
+    let default_stun = stuns.is_empty();
+    if default_stun {
+        stuns.extend_from_slice(&DEFAULT_ICE);
     }
     let fp_upper = fp.to_ascii_uppercase();
     if !out.fingerprints.contains(&fp_upper) {
@@ -211,7 +232,7 @@ fn parse_line(line: &str, n: u32, out: &mut Bridges) -> Result<(), Problem> {
     for s in stuns {
         push_unique(&mut out.ice, s);
     }
-    let flagged = [(notes[0], Problem::FrontIgnored), (notes[1], Problem::UtlsIgnored), (amp, Problem::AmpCacheIgnored), (turn, Problem::TurnIgnored), (bad_stun, Problem::BadStunIgnored), (notes[2], Problem::UnknownOption)];
+    let flagged = [(notes[0], Problem::FrontIgnored), (notes[1], Problem::UtlsIgnored), (amp, Problem::AmpCacheIgnored), (turn, Problem::TurnIgnored), (bad_stun, Problem::BadStunIgnored), (default_stun, Problem::DefaultStun), (notes[2], Problem::UnknownOption)];
     for (on, p) in flagged {
         if on {
             out.problems.push((n, p));
@@ -252,7 +273,6 @@ snowflake 192.0.2.3:80 0123456789ABCDEF0123456789ABCDEF01234567 ampcache=https:/
 snowflake 192.0.2.3:80 0123 url=https://b.example/ ice=stun:s.example:3478
 snowflake 192.0.2.3:80 url=https://b.example/ ice=stun:s.example:3478
 snowflake 192.0.2.3:80 0123456789ABCDEF0123456789ABCDEF01234567 url=http://b.example/ ice=stun:s.example:3478
-snowflake 192.0.2.3:80 0123456789ABCDEF0123456789ABCDEF01234567 url=https://b.example/ ice=turn:t.example:3478
 snowflake 192.0.2.3:80 0123456789ABCDEF0123456789ABCDEF01234567 fingerprint=1123456789ABCDEF0123456789ABCDEF01234567 url=https://b.example/ ice=stun:s.example:3478";
         let b = parse(text);
         assert!(!b.usable());
@@ -266,8 +286,7 @@ snowflake 192.0.2.3:80 0123456789ABCDEF0123456789ABCDEF01234567 fingerprint=1123
             (9, Problem::BadFingerprint),
             (10, Problem::NoFingerprint),
             (11, Problem::BadBroker),
-            (12, Problem::NoStun),
-            (13, Problem::FingerprintMismatch),
+            (12, Problem::FingerprintMismatch),
         ];
         assert_eq!(b.problems, want);
         assert!(want.iter().all(|(_, p)| p.is_error() && !p.reason().is_empty()));
@@ -288,6 +307,21 @@ snowflake 192.0.2.3:80 0123456789ABCDEF0123456789ABCDEF01234567 fingerprint=1123
         assert_eq!(b.fingerprints.len(), BRIDGE_ADDRS.len());
         assert_eq!(b.problems.iter().filter(|(_, p)| *p == Problem::TooManyBridges).count(), 6 - BRIDGE_ADDRS.len());
         assert!(!Problem::TooManyBridges.is_error());
+    }
+
+    #[test]
+    fn stun_optional() {
+        // No ice=, or only TURN: the line is used with the built-in STUN servers.
+        let b = parse("snowflake 192.0.2.3:80 0123456789ABCDEF0123456789ABCDEF01234567 url=https://b.example/\nsnowflake 192.0.2.4:80 1123456789ABCDEF0123456789ABCDEF01234567 url=https://b.example/ ice=turn:t.example:3478");
+        assert!(b.usable());
+        assert_eq!(b.fingerprints.len(), 2);
+        assert_eq!(b.ice, DEFAULT_ICE, "the union, without duplicates");
+        assert_eq!(b.problems, [(1, Problem::DefaultStun), (2, Problem::TurnIgnored), (2, Problem::DefaultStun)]);
+        assert_eq!(b.errors(), 0);
+        // A line's own STUN servers are used as they are.
+        let b = parse("snowflake 0123456789ABCDEF0123456789ABCDEF01234567 url=https://b.example/ ice=stun:s.example:3478");
+        assert_eq!(b.ice, ["stun:s.example:3478"]);
+        assert!(b.problems.is_empty());
     }
 
     #[test]

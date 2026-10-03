@@ -1911,7 +1911,7 @@ A page has no raw TCP or UDP. It has `fetch`, WebSocket, WebTransport and WebRTC
 
 | Bridge type (Tor Browser line) | In our page | Why |
 |---|---|---|
-| `snowflake …` with its own `url=` (broker), `fingerprint=`, `ice=` | **Yes** | Everything it needs is `fetch` + WebRTC, which we already run |
+| `snowflake …` with its own `url=` (broker), `fingerprint=`, `ice=` | **Yes** | Everything it needs is `fetch` + WebRTC, which we already run. `ice=` is optional: without it (or with TURN only) the built-in STUN list `bridge::DEFAULT_ICE` is used, shown as a note |
 | `snowflake … ampcache=…` (AMP cache rendezvous) | **Spike** (BR-4) | A `GET` through `cdn.ampproject.org`; works only if the AMP cache answers cross-origin reads (CORS). Unknown until tried |
 | `snowflake … front=…` / `fronts=` (domain fronting) | Ignored, with a note | A browser cannot send a `Host` different from the URL. The URL itself is still used (as we do with the CDN77 URL) |
 | `snowflake … utls-imitate=…` | Ignored | The browser's own TLS is used; it already looks like a browser |
