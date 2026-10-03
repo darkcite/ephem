@@ -123,7 +123,7 @@ try {
   if (!REAL) {
     const car = await torBrowserGet(onion, `/ipfs/${v2.root}?format=car`);
     const idx = await torBrowserGet(onion, '/');
-    check('the root as one CAR is refused (406); the onion\'s page says it is a board', car.status === 406 && idx.status === 200 && /Ephem board/.test(idx.body), `${car.status}`);
+    check('the root as one CAR is refused (406); the onion\'s page says it is a board', car.status === 406 && idx.status === 200 && /board's own onion/.test(idx.body), `${car.status}`);
   }
 
   // ---- BD-5: owner moderation ----
