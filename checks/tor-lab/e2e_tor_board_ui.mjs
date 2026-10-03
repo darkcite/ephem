@@ -81,9 +81,6 @@ try {
 
   // ---- reader A: the link, the catalog, a thread from the reply box ----
   const a = await page('reader A');
-  await a.goto(`${base}/tor.html`);
-  await a.waitForSelector('#v-start:not([hidden])');
-  await torReady(a, 'reader A');
   await a.goto(link.replace('/tor.html#', '/tor.html?a#'));
   await a.waitForFunction(() => /Verified through Tor/.test(document.querySelector('#bd-source')?.textContent), null, { timeout: T });
   check('a reader opens the link: the board, verified', (await a.textContent('#bd-title')) === '▦ Lab /b/' && (await a.textContent('#bd-rules')) === 'Be kind.');
@@ -114,9 +111,6 @@ try {
 
   // ---- reader B mirrors; the owner signs the mirror in ----
   const b = await page('reader B');
-  await b.goto(`${base}/tor.html`);
-  await b.waitForSelector('#v-start:not([hidden])');
-  await torReady(b, 'reader B');
   await b.goto(link.replace('/tor.html#', '/tor.html?b#'));
   await b.waitForFunction(() => /Verified through Tor/.test(document.querySelector('#bd-source')?.textContent), null, { timeout: T });
   await b.click('#b-bd-mirror');
@@ -142,9 +136,6 @@ try {
   await b.waitForTimeout(12_000); // the mirror's next pull (10 s) has the signed mirror list
   await o.close();
   const c = await page('reader C');
-  await c.goto(`${base}/tor.html`);
-  await c.waitForSelector('#v-start:not([hidden])');
-  await torReady(c, 'reader C');
   const t0 = Date.now();
   await c.goto(link2.replace('/tor.html#', '/tor.html?c#'));
   await c.waitForFunction(() => /Verified through Tor/.test(document.querySelector('#bd-source')?.textContent), null, { timeout: T });
