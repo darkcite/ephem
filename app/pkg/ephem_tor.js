@@ -1403,7 +1403,7 @@ export class BoardApp {
     }
     /**
      * The owner's view of board `index`: `{name, onion, seq, threads, next_no, paused,
-     * threads_closed, closed_notice, effort_reply, effort_thread}`.
+     * threads_closed, closed_notice, effort_reply, effort_thread, blocks}`.
      * @param {number} index
      * @returns {string}
      */
