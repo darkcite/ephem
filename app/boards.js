@@ -37,6 +37,11 @@ export function init(c) {
   channels.setBoardsHook(() => {
     renderFollows();
     scanOwned();
+  }, () => {
+    // The Following tab opened and only boards are followed: the one on screen last, or the first.
+    if (current?.read) return showBoard(current.read, current.onions, current.thread), true;
+    const f = follows()[0];
+    return f ? (showBoard(f.n, f.o), true) : false;
   });
   if (ctx.TOR && ctx.ch) adopt(new ctx.mod.BoardApp(ctx.ch));
 }

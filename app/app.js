@@ -1755,7 +1755,7 @@ async function scan(onText) {
     }
     frames++;
     $('scan-status').textContent = `Looking for a code… ${frames} frames · ${info} · ${Math.round(performance.now() - t0)} ms`;
-    if (found && /#[iarqtkbc]=/.test(found)) {
+    if (found && /#[iarqtkbcB]=/.test(found)) {
       scanStop();
       onText(found);
     } else if (found) {

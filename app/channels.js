@@ -37,6 +37,7 @@ const signedMirrors = new Map();     // name → the mirror onions its last veri
 let refreshing = false;
 let torMod = null;                   // the Tor build's module (boards construct BoardApp from it)
 let boardsHook = null;               // boards.js: re-render its rows when the follow list changes
+let boardsOpen = null;               // boards.js: show a followed board (the tab has only boards)
 
 export function init(c) {
   ctx = c;
@@ -68,8 +69,9 @@ export function channelApp() {
 export const torIsUp = () => torUp;
 export const followList = () => follows;
 export const saveFollowList = () => saveFollows();
-export function setBoardsHook(f) {
+export function setBoardsHook(f, open) {
   boardsHook = f;
+  boardsOpen = open;
 }
 const isChannel = (f) => f.k !== 'board';
 
@@ -119,6 +121,7 @@ export async function openTab(tab) {
     if (!torResolve) refreshAll();
     const f = current?.read && follows.find((x) => x.n === current.read && isChannel(x));
     if (f) return showReader(f.n, f.o);
+    if (!follows.some(isChannel) && boardsOpen?.()) return;
     return ctx.showPane(follows.some(isChannel) ? 'v-read' : 'v-follow-new');
   }
   const o = current?.own !== undefined && owned.find((x) => x.i === current.own);
