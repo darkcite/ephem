@@ -352,3 +352,46 @@ fn a_stale_root_shows_later_deletions() {
     let stale = verify::verify(&name, &old_record, &old, ms, 0, &known).unwrap();
     assert!(matches!(stale.threads[0].entries[1], Entry::Tomb { .. }), "a reader who saw the newer deletion list sees a tombstone");
 }
+
+#[test]
+fn plain_pages_for_tor_browser() {
+    let board = Board::new(&[1; 32], "Pages <b>", "about & more", "no <script>", T0).unwrap();
+    let intake = Intake::new(board.name(), [2; 32], LOW, T0);
+    let mut ms = T0 * 1000;
+    let mut h = Host::new(board, intake, [9; 32], ms);
+    let p = Poster(SigningKey::from_bytes(&[3; 32]), true);
+    let (t, _) = posted(p.post(&mut h, ms, 0, "Sub <i>", "op <script>alert(1)</script>", false));
+    ms += 1_000;
+    posted(p.post(&mut h, ms, t, "", ">greentext\nplain", false));
+    let body = |r: Vec<u8>| String::from_utf8(r).unwrap();
+    let cat = body(serve(&mut h, &get("/"), ms));
+    assert!(cat.contains("Content-Security-Policy: default-src 'none'") && cat.contains("Referrer-Policy: no-referrer"));
+    assert!(cat.contains("<title>Pages &lt;b&gt;</title>") && cat.contains("about &amp; more") && cat.contains("no &lt;script&gt;"));
+    assert!(cat.contains(&format!("<a href=\"/t/{t}\">No. {t}</a> Sub &lt;i&gt;")) && cat.contains("1 replies"));
+    assert!(cat.contains("board's own onion address") && !cat.contains("<script"));
+    let th = body(serve(&mut h, &get(&format!("/t/{t}")), ms));
+    assert!(th.contains("op &lt;script&gt;alert(1)&lt;/script&gt;") && !th.contains("<script"), "post text escaped");
+    assert!(th.contains("<span class=\"gt\">&gt;greentext</span>") && th.contains("class=\"trip\">!"));
+    assert_eq!(status(&serve(&mut h, &get("/t/999"), ms)), 404);
+    assert_eq!(status(&serve(&mut h, &get("/?p=7"), ms)), 200, "a page past the end shows the last one");
+}
+
+#[test]
+fn stale_mode_after_expiry() {
+    let board = Board::new(&[1; 32], "Stale", "", "", T0).unwrap();
+    let intake = Intake::new(board.name(), [2; 32], LOW, T0);
+    let ms = T0 * 1000;
+    let mut h = Host::new(board, intake, [9; 32], ms);
+    let (record, blocks): (Vec<u8>, Vec<_>) = (h.served.record.clone(), h.served.blocks().map(|(c, b)| (c.clone(), b.to_vec())).collect());
+    let name = h.served.name.clone();
+    let later = ms + (ephem_board::limits::VALIDITY_S + 3600) * 1000;
+    assert!(verify::verify(&name, &record, &blocks, later, 0, &[]).is_err(), "expired after 72 h");
+    let v = verify::verify_stale(&name, &record, &blocks, later, 0, &[]).unwrap();
+    assert!(v.stale, "shown as stale");
+    assert!(!verify::verify_stale(&name, &record, &blocks, ms, 0, &[]).unwrap().stale, "fresh is not stale");
+    let mut bad = record.clone();
+    let n = bad.len() - 10;
+    bad[n] ^= 1;
+    assert!(verify::verify_stale(&name, &bad, &blocks, later, 0, &[]).is_err(), "a forged record is not let through as stale");
+    let _ = &mut h;
+}

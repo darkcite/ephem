@@ -92,7 +92,7 @@ impl Host {
         let (root, blocks) = board.build_into(now_ms / 1000, &|_| false, &mut live);
         let record = board.record(&root, now_ms);
         let delta = Delta { record: record.clone(), added: blocks.clone(), removed: Vec::new() };
-        let served = Served::new(board.name().clone(), root, record, blocks).expect("the owner's own board");
+        let served = Served::new(board.name().clone(), root, record, blocks, crate::page::Served::Owner).expect("the owner's own board");
         Self { board, intake, served, pending: Vec::with_capacity(caps::RING), answers: std::collections::VecDeque::with_capacity(ANSWERS), batch: [None; caps::RING], last_ms: now_ms, dirty: false, delta, own, own_key, own_dirty: false, deletes: Vec::new() }
     }
 
@@ -320,6 +320,11 @@ impl Host {
         self.own_dirty = true;
         self.dirty = true;
         Ok(())
+    }
+
+    /// The board changed outside these calls (the manifest's mirror list): publish soon.
+    pub fn touch(&mut self) {
+        self.dirty = true;
     }
 
     /// Whether a publish is due now.

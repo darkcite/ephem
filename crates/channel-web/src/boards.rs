@@ -20,7 +20,7 @@
 
 use crate::{ChannelApp, State, err, json, now_s, with_timeout, PORT};
 use ephem_board::board::{Board, Entry};
-use ephem_board::gateway::{self, Answer, Route, SHORT};
+use ephem_board::gateway::{self, Answer, Route, SHORT, Served};
 use ephem_board::host::Host;
 use ephem_board::own::Switches;
 use ephem_board::pipeline::{Efforts, Intake, Next, PowInfo, Refusal, submission};
@@ -77,6 +77,21 @@ pub(crate) struct Boards {
     /// Per board read here: the deletion-list hashes seen (G.5.1), applied to any older root a
     /// stale mirror serves later.
     known_dels: Rc<RefCell<KnownDels>>,
+    /// Boards this tab mirrors (G.10).
+    mirrors: Vec<Mirrored>,
+}
+
+/// What a mirror serves: the last verified version.
+pub(crate) struct Mirror {
+    served: Served,
+    seq: u64,
+}
+
+pub(crate) struct Mirrored {
+    name: Cid,
+    onion: String,
+    m: Rc<RefCell<Mirror>>,
+    _svc: Rc<Service>,
 }
 
 #[wasm_bindgen]
@@ -188,7 +203,7 @@ impl BoardApp {
         s.iter_mut().for_each(|x| x.fill(0));
         let svc = Rc::new(svc.map_err(err)?);
         let onion = svc.onion().to_owned();
-        wasm_bindgen_futures::spawn_local(serve_loop(Rc::downgrade(&svc), Rc::downgrade(&host)));
+        wasm_bindgen_futures::spawn_local(serve_loop(Rc::downgrade(&svc), Target::Host(Rc::downgrade(&host))));
         let mut st = self.st.borrow_mut();
         if let Some(b) = st.boards.hosted.iter_mut().find(|b| b.index == index) {
             (b.onion, b.svc) = (onion.clone(), Some(svc));
@@ -381,6 +396,79 @@ impl BoardApp {
         self.st.borrow_mut().boards.hosted.retain(|b| b.index != index);
     }
 
+    /// Signs the mirror list (comma-separated onion addresses, ≤ 8) into board `index`'s
+    /// manifest (G.10): readers try them when the owner's onion does not answer.
+    pub fn set_mirrors(&self, index: u32, csv: &str) -> Result<(), JsValue> {
+        let h = self.host(index)?;
+        h.borrow_mut().board.set_mirrors(list(csv)).map_err(|e| err(format!("{e:?}")))?;
+        h.borrow_mut().touch();
+        Ok(())
+    }
+
+    // ---- mirrors (G.10: read-only in v1) ----
+
+    /// Mirrors board `name` on this tab's onion for it (`seed`, 32 bytes, kept by the page, so
+    /// the address is stable and the owner can sign it in). Pulls from `onions` (the owner's,
+    /// then other mirrors) now and every [`PULL_MS`], fetching only threads that changed and
+    /// verifying them; serves read-only (`/pow` and `/submit` answer `E_BOARD_OFFLINE`).
+    /// Resolves to `<56 chars>.onion`.
+    pub fn mirror(&self, name: &str, onions: &str, seed: &[u8]) -> Result<js_sys::Promise, JsValue> {
+        let tor = self.tor()?;
+        let name = Cid::parse(name).filter(|c| c.ed25519_key().is_some()).ok_or_else(|| err("not a board name"))?;
+        let seed: [u8; 32] = seed.try_into().map_err(|_| err("mirror seed must be 32 bytes"))?;
+        let sources: Vec<String> = list(onions).into_iter().filter(|o| is_onion(o)).take(1 + ephem_board::limits::MIRRORS).collect();
+        if sources.is_empty() {
+            return Err(err("no onion address to mirror from"));
+        }
+        if let Some(m) = self.st.borrow().boards.mirrors.iter().find(|m| m.name == name) {
+            return Ok(js_sys::Promise::resolve(&JsValue::from_str(&m.onion)));
+        }
+        let st = self.st.clone();
+        Ok(wasm_bindgen_futures::future_to_promise(async move {
+            let mut first = None;
+            let mut last = String::new();
+            for round in 0..READ_ROUNDS {
+                for o in &sources {
+                    match with_timeout(FETCH_MS * 2, pull(&tor, &name, o, None, round > 0)).await {
+                        Ok(Some(p)) => {
+                            first = p.into_mirror(&name, None);
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(e) => last = format!("{o}: {e}"),
+                    }
+                }
+                if first.is_some() {
+                    break;
+                }
+                sleep_ms(2_000 << round).await;
+            }
+            let m = Rc::new(RefCell::new(first.ok_or_else(|| err(last))?));
+            let nick = {
+                let mut s = st.borrow_mut();
+                s.launched += 1;
+                format!("bmirror{}", s.launched)
+            };
+            let svc = Rc::new(tor.launch(&nick, &seed).map_err(err)?);
+            let onion = svc.onion().to_owned();
+            wasm_bindgen_futures::spawn_local(serve_loop(Rc::downgrade(&svc), Target::Mirror(Rc::downgrade(&m))));
+            wasm_bindgen_futures::spawn_local(pull_loop(Rc::downgrade(&m), tor, name.clone(), sources));
+            st.borrow_mut().boards.mirrors.push(Mirrored { name, onion: onion.clone(), m, _svc: svc });
+            Ok(JsValue::from_str(&onion))
+        }))
+    }
+
+    /// The sequence a mirrored board is at (0: not mirrored here).
+    pub fn mirror_seq(&self, name: &str) -> f64 {
+        let st = self.st.borrow();
+        st.boards.mirrors.iter().find(|m| m.name.to_text() == name).map_or(0.0, |m| m.m.borrow().seq as f64)
+    }
+
+    /// Stops mirroring board `name` (its mirror onion goes down).
+    pub fn unmirror(&self, name: &str) {
+        self.st.borrow_mut().boards.mirrors.retain(|m| m.name.to_text() != name);
+    }
+
     // ---- poster ----
 
     /// Opens a reply box (G.6.1 step 1): `GET /pow` from the board's onion, and the poster key:
@@ -408,8 +496,11 @@ impl BoardApp {
             let req = ephem_channel::gateway::get(&onion, "/pow");
             let resp = match with_timeout(POW_MS, fetch(&tor, &onion, &req, false, 1024)).await {
                 Ok(r) => r,
-                Err(_) => with_timeout(FETCH_MS, fetch(&tor, &onion, &req, true, 1024)).await.map_err(err)?,
+                Err(_) => with_timeout(FETCH_MS, fetch(&tor, &onion, &req, true, 1024)).await.map_err(|e| err(format!("E_BOARD_OFFLINE: the board's host does not answer ({e})")))?,
             };
+            if let Some(Answer::Refused { code, .. }) = gateway::parse_answer(&resp).filter(|a| matches!(a, Answer::Refused { .. })) {
+                return Err(err(format!("refused: {}", refusal_name(code))));
+            }
             let body = ephem_channel::gateway::parse_response(&resp).map_err(|e| err(format!("/pow: {e:?}")))?;
             let info = PowInfo::read(body.try_into().map_err(|_| err("/pow: wrong length"))?);
             Ok(Draft { name, onion, thread: thread as u64, info, key, trip: is_trip, sent: RefCell::new(Vec::new()) }.into())
@@ -577,11 +668,12 @@ fn submit(tor: Rc<Tor>, onion: String, req: Vec<u8>) -> js_sys::Promise {
 
 /// The stable names of the submit refusals (G.6.3).
 fn refusal_name(code: u16) -> &'static str {
-    [Refusal::Pow, Refusal::Busy, Refusal::Refused, Refusal::Paused].into_iter().find(|r| r.code() == code).map_or("E_BOARD", |r| match r {
+    [Refusal::Pow, Refusal::Busy, Refusal::Refused, Refusal::Paused, Refusal::Offline].into_iter().find(|r| r.code() == code).map_or("E_BOARD", |r| match r {
         Refusal::Pow => "E_BOARD_POW",
         Refusal::Busy => "E_BOARD_BUSY",
         Refusal::Refused => "E_BOARD_REFUSED",
         Refusal::Paused => "E_BOARD_PAUSED",
+        Refusal::Offline => "E_BOARD_OFFLINE",
     })
 }
 
@@ -613,7 +705,7 @@ async fn read_from(tor: &Tor, name: &Cid, onion: &str, min_seq: u64, threads: &[
     let resp = fetch(tor, onion, &ephem_channel::gateway::get(onion, &path), fresh, 2 + gateway::MAX_RECORD + gateway::MAX_CAR).await?;
     let body = ephem_channel::gateway::parse_response(&resp).map_err(|e| format!("index: {e:?}"))?;
     let (record, _, mut blocks) = gateway::parse_index(body).ok_or("index: malformed")?;
-    let index = verify::verify(name, &record, &blocks, now_ms(), min_seq, known).map_err(|e| format!("{e:?}"))?;
+    let index = verify::verify_stale(name, &record, &blocks, now_ms(), min_seq, known).map_err(|e| format!("{e:?}"))?;
     if threads.is_empty() {
         return Ok(index);
     }
@@ -626,7 +718,7 @@ async fn read_from(tor: &Tor, name: &Cid, onion: &str, min_seq: u64, threads: &[
         let (_, b) = ephem_channel::car::read(body).ok_or("thread: not a valid CAR")?;
         blocks.extend(b);
     }
-    verify::verify(name, &record, &blocks, now_ms(), min_seq, known).map_err(|e| format!("{e:?}"))
+    verify::verify_stale(name, &record, &blocks, now_ms(), min_seq, known).map_err(|e| format!("{e:?}"))
 }
 
 /// Adds a verified view's deletion list to what this tab knows of board `name` (at most
@@ -652,7 +744,7 @@ fn remember_dels(all: &mut KnownDels, name: &Cid, dels: &[([u8; 32], u64)]) {
     known.drain(..over);
 }
 
-/// `{"name","root","sequence","title","about","rules","next_no","updated","catalog":[{"no",
+/// `{"name","root","sequence","stale","mirrors":[…],"title","about","rules","next_no","updated","catalog":[{"no",
 /// "sub","ex","r","bump","st","lk"}…],"threads":[{"no","sub","posts":[{"no","ts","sub","body",
 /// "sage","cap","del","trip"}…]}…],"archive":[{"no","sub","ex","pruned"}…],"modlog":[{"ts","act","no",
 /// "why"}…]}` (`del`: 0, or who deleted; `trip`: `!` + 16 characters, or "").
@@ -662,7 +754,15 @@ pub fn view_json(v: &View) -> String {
     json::string(&mut o, &v.name.to_text());
     o.push_str(",\"root\":");
     json::string(&mut o, &v.root.to_text());
-    let _ = write!(o, ",\"sequence\":{},\"next_no\":{},\"updated\":{}", v.sequence, v.next_no, v.updated);
+    let _ = write!(o, ",\"sequence\":{},\"next_no\":{},\"updated\":{},\"stale\":{}", v.sequence, v.next_no, v.updated, v.stale);
+    o.push_str(",\"mirrors\":[");
+    for (i, m) in v.manifest.mirrors.iter().enumerate() {
+        if i > 0 {
+            o.push(',');
+        }
+        json::string(&mut o, m);
+    }
+    o.push(']');
     for (k, s) in [("title", &v.manifest.title), ("about", &v.manifest.about), ("rules", &v.manifest.rules)] {
         let _ = write!(o, ",\"{k}\":");
         json::string(&mut o, s);
@@ -733,6 +833,82 @@ pub fn view_json(v: &View) -> String {
     o
 }
 
+/// How often a mirror pulls (G.10: at most every 10 s; 8 mirrors polling each second would
+/// exceed the writer's link, A-B2).
+pub const PULL_MS: u32 = 10_000;
+
+/// One pull for a mirror: the index, then the threads (live and archived) whose block it does
+/// not hold yet, each verified. `prev`: the sequence and CIDs held (`None` the first time).
+/// Returns the record, the root and the new blocks; `Ok(None)`: nothing newer.
+async fn pull(tor: &Tor, name: &Cid, onion: &str, prev: Option<(u64, &std::collections::HashSet<Cid>)>, fresh: bool) -> Result<Option<Pulled>, String> {
+    let path = format!("/ipns/{}?format=ephem-board", name.to_text());
+    let resp = fetch(tor, onion, &ephem_channel::gateway::get(onion, &path), fresh, 2 + gateway::MAX_RECORD + gateway::MAX_CAR).await?;
+    let body = ephem_channel::gateway::parse_response(&resp).map_err(|e| format!("index: {e:?}"))?;
+    let (record, root, mut blocks) = gateway::parse_index(body).ok_or("index: malformed")?;
+    let min = prev.map_or(0, |(seq, _)| seq + 1);
+    let index = match verify::verify(name, &record, &blocks, now_ms(), min, &[]) {
+        Ok(v) => v,
+        Err(ephem_board::BoardError::Record) if prev.is_some() => return Ok(None), // not newer
+        Err(e) => return Err(format!("{e:?}")),
+    };
+    let held = |c: &Cid| prev.is_some_and(|(_, h)| h.contains(c));
+    let wanted: Vec<Cid> = index.catalog.iter().map(|c| c.thread.clone()).chain(index.archive.iter().map(|a| a.thread.clone())).filter(|c| !held(c)).collect();
+    for c in &wanted {
+        let resp = fetch(tor, onion, &ephem_channel::gateway::get(onion, &format!("/ipfs/{}?format=car", c.to_text())), fresh, gateway::MAX_CAR).await?;
+        let body = ephem_channel::gateway::parse_response(&resp).map_err(|e| format!("thread: {e:?}"))?;
+        blocks.extend(ephem_channel::car::read(body).ok_or("thread: not a valid CAR")?.1);
+    }
+    // The new threads' posts are checked here; unchanged threads (same CID) were before.
+    let v = verify::verify(name, &record, &blocks, now_ms(), min, &[]).map_err(|e| format!("{e:?}"))?;
+    Ok(Some(Pulled { record, root, blocks, seq: v.sequence }))
+}
+
+struct Pulled {
+    record: Vec<u8>,
+    root: Cid,
+    blocks: Vec<Block>,
+    seq: u64,
+}
+
+impl Pulled {
+    /// The mirror's next state: the pulled blocks plus the unchanged ones it held (only what the
+    /// new root reaches is kept, `Served::new`).
+    fn into_mirror(mut self, name: &Cid, prev: Option<&Mirror>) -> Option<Mirror> {
+        if let Some(p) = prev {
+            let have: std::collections::HashSet<Cid> = self.blocks.iter().map(|(c, _)| c.clone()).collect();
+            let old: Vec<Block> = p.served.blocks().filter(|(c, _)| !have.contains(*c)).map(|(c, b)| (c.clone(), b.to_vec())).collect();
+            self.blocks.extend(old);
+        }
+        let served = Served::new(name.clone(), self.root, self.record, self.blocks, ephem_board::page::Served::Mirror)?;
+        Some(Mirror { served, seq: self.seq })
+    }
+}
+
+/// Keeps a mirror current while it lives.
+async fn pull_loop(m: Weak<RefCell<Mirror>>, tor: Rc<Tor>, name: Cid, sources: Vec<String>) {
+    loop {
+        sleep_ms(PULL_MS).await;
+        let Some(mirror) = m.upgrade() else { return };
+        let (seq, held): (u64, std::collections::HashSet<Cid>) = {
+            let cur = mirror.borrow();
+            (cur.seq, cur.served.blocks().map(|(c, _)| c.clone()).collect())
+        };
+        for o in &sources {
+            match with_timeout(FETCH_MS * 2, pull(&tor, &name, o, Some((seq, &held)), false)).await {
+                Ok(Some(p)) => {
+                    let next = p.into_mirror(&name, Some(&mirror.borrow()));
+                    if let Some(n) = next {
+                        *mirror.borrow_mut() = n;
+                    }
+                    break;
+                }
+                Ok(None) => break,
+                Err(e) => tracing::info!("board mirror: {o}: {e}"),
+            }
+        }
+    }
+}
+
 /// Publishes when due and tells the page; stops when the board is closed here.
 async fn publish_loop(host: Weak<RefCell<Host>>, st: Weak<RefCell<State>>, index: u32) {
     let mut minute = now_s() / 60;
@@ -757,7 +933,14 @@ async fn publish_loop(host: Weak<RefCell<Host>>, st: Weak<RefCell<State>>, index
 }
 
 /// Accepts streams while the service lives, each with a slot from a fixed pool.
-async fn serve_loop(svc: Weak<Service>, host: Weak<RefCell<Host>>) {
+/// What an onion serves: the owner's host (reads, `/pow`, `/submit`) or a mirror (reads only).
+#[derive(Clone)]
+enum Target {
+    Host(Weak<RefCell<Host>>),
+    Mirror(Weak<RefCell<Mirror>>),
+}
+
+async fn serve_loop(svc: Weak<Service>, target: Target) {
     let pool: Rc<RefCell<Vec<Box<[u8; SLOT]>>>> = Rc::new(RefCell::new((0..SLOTS).map(|_| Box::new([0u8; SLOT])).collect()));
     while let Some(s) = svc.upgrade() {
         let Some(stream) = s.try_accept() else {
@@ -769,10 +952,10 @@ async fn serve_loop(svc: Weak<Service>, host: Weak<RefCell<Host>>) {
             drop(stream); // busy: closed at once (G.6.2 step 0)
             continue;
         };
-        let (host, pool) = (host.clone(), pool.clone());
+        let (target, pool) = (target.clone(), pool.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let mut slot = slot;
-            if with_timeout(SERVE_MS, serve_one(stream, &host, &mut slot)).await.is_err() {
+            if with_timeout(SERVE_MS, serve_one(stream, &target, &mut slot)).await.is_err() {
                 tracing::info!("board: a request took too long; dropped");
             }
             pool.borrow_mut().push(slot);
@@ -780,7 +963,7 @@ async fn serve_loop(svc: Weak<Service>, host: Weak<RefCell<Host>>) {
     }
 }
 
-async fn serve_one(s: DataStream, host: &Weak<RefCell<Host>>, slot: &mut [u8; SLOT]) -> Result<(), String> {
+async fn serve_one(s: DataStream, target: &Target, slot: &mut [u8; SLOT]) -> Result<(), String> {
     let (mut r, mut w) = s.split();
     let mut short = [0u8; SHORT];
     // The head (and, for a submit, the body after it) into the slot.
@@ -806,6 +989,19 @@ async fn serve_one(s: DataStream, host: &Weak<RefCell<Host>>, slot: &mut [u8; SL
             Ok(e) => e,
             Err(e) if e == "head too large" => break 'resp Out::Short(gateway::status(431, &mut short)),
             Err(_) => return Ok(()),
+        };
+        let host = match target {
+            Target::Host(h) => h,
+            Target::Mirror(m) => {
+                // A mirror serves reads; posting needs the owner's onion (G.10, until BD-8).
+                let Some(m) = m.upgrade() else { return Ok(()) };
+                let m = m.borrow();
+                break 'resp match gateway::route(&slot[..head_end], m.served.name_text()) {
+                    Err(code) => Out::Short(gateway::status(code, &mut short)),
+                    Ok(Route::Pow | Route::Submit(_)) => Out::Short(gateway::refusal(Refusal::Offline, &mut short)),
+                    Ok(route) => Out::Shared(m.served.respond(&route)),
+                };
+            }
         };
         let Some(h) = host.upgrade() else { return Ok(()) };
         let route = gateway::route(&slot[..head_end], h.borrow().served.name_text());

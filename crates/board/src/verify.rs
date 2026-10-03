@@ -76,6 +76,8 @@ pub struct View {
     pub own: Vec<u8>,
     pub next_no: u64,
     pub updated: u64,
+    /// The record has expired: the last verified state, shown as stale (G.5.3).
+    pub stale: bool,
 }
 
 type Blocks<'a> = HashMap<&'a Cid, &'a Vec<u8>>;
@@ -207,7 +209,20 @@ fn thread(by: &Blocks<'_>, cid: &Cid, name: &str, pk: &[u8; 32], next_no: u64, d
 /// Verifies a board record and the blocks held. `min_sequence`: the reader's high-water mark;
 /// `known_dels`: deletion-list hashes from newer roots the reader saw (G.5.1).
 pub fn verify(name: &Cid, record: &[u8], blocks: &[Block], now_ms: u64, min_sequence: u64, known_dels: &[[u8; 32]]) -> Result<View, BoardError> {
-    let rec = ipns::verify(name, record, now_ms / 1000).map_err(|_| BoardError::Record)?;
+    verify_with(name, record, blocks, now_ms, min_sequence, known_dels, false)
+}
+
+/// As [`verify`], but an expired record is accepted and the view marked [`View::stale`]: what a
+/// reader shows, labelled, when the host has been offline past the record's validity (G.5.3).
+/// Everything else is checked as usual.
+pub fn verify_stale(name: &Cid, record: &[u8], blocks: &[Block], now_ms: u64, min_sequence: u64, known_dels: &[[u8; 32]]) -> Result<View, BoardError> {
+    verify_with(name, record, blocks, now_ms, min_sequence, known_dels, true)
+}
+
+fn verify_with(name: &Cid, record: &[u8], blocks: &[Block], now_ms: u64, min_sequence: u64, known_dels: &[[u8; 32]], allow_expired: bool) -> Result<View, BoardError> {
+    let fresh = ipns::verify(name, record, now_ms / 1000);
+    let stale = fresh.is_err() && allow_expired;
+    let rec = if stale { ipns::verify(name, record, 0) } else { fresh }.map_err(|_| BoardError::Record)?;
     if rec.sequence < min_sequence || rec.sequence > now_ms + limits::FUTURE_MS {
         return Err(BoardError::Record);
     }
@@ -216,6 +231,7 @@ pub fn verify(name: &Cid, record: &[u8], blocks: &[Block], now_ms: u64, min_sequ
     let key = VerifyingKey::from_bytes(&pk).map_err(|_| BoardError::Invalid)?;
     let mut v = read(&key, name, &root, blocks, known_dels)?;
     v.sequence = rec.sequence;
+    v.stale = stale;
     Ok(v)
 }
 
@@ -304,5 +320,5 @@ pub fn read(key: &VerifyingKey, name: &Cid, root: &Cid, blocks: &[Block], known_
     if own.len() > limits::OWN {
         return Err(BoardError::Invalid);
     }
-    Ok(View { name: name.clone(), root: root.clone(), sequence: 0, manifest: man, catalog, threads, archive, dels, modlog, own, next_no, updated: uint(&r, "updated")? })
+    Ok(View { name: name.clone(), root: root.clone(), sequence: 0, manifest: man, catalog, threads, archive, dels, modlog, own, next_no, updated: uint(&r, "updated")?, stale: false })
 }

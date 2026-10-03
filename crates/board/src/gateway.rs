@@ -11,7 +11,7 @@
 //! | `GET /ipns/<name>?format=ephem-board` | **the index**: `u16 len ‖ record ‖ CAR(root; manifest, 10 buckets, threads, archive, arch_threads, dels, modlog)`, one response, so the record and the blocks it names never come from two versions |
 //! | `GET /ipfs/<cid>?format=car` | a thread with its chunks, a bucket, a chunk; **`406` for the root, `threads` and `arch_threads`**: their DAG is the whole board (B-M10) |
 //! | `GET /ipfs/<cid>?format=raw` | one block |
-//! | `GET /` | a plain notice for Tor Browser (the full page is BD-6) |
+//! | `GET /`, `/?p=2`…, `/t/<no>` | the board as plain pages for Tor Browser ([`crate::page`]) |
 //!
 //! **Copies (G.14.2):** the request head is parsed in place; refusals, `/pow` and answers are
 //! written into a caller's fixed buffer (no allocation). Block responses are built once into a
@@ -19,6 +19,7 @@
 //! version and shared (`Rc`).
 
 use crate::pipeline::{PowInfo, Refusal};
+use crate::page;
 use crate::submit::MAX_SUBMIT;
 use ephem_channel::car::{self, Block};
 use ephem_channel::cbor::Value;
@@ -44,13 +45,14 @@ pub const ANSWER_LEN: usize = 16;
 /// A buffer for the short responses (refusals, answers, `/pow`).
 pub const SHORT: usize = 256;
 
-const PAGE: &[u8] = b"<!doctype html><meta charset=utf-8><title>Ephem board</title><p>This onion hosts an Ephem board. Reading and posting need the Ephem app.";
-const PAGE_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; form-action 'none'";
 
 /// What a request asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Route {
-    Page,
+    /// A catalog page (1–10).
+    Page(usize),
+    /// A thread's page.
+    Thread(u64),
     Pow,
     /// `POST /submit` with this `Content-Length` (≤ [`MAX_SUBMIT`]).
     Submit(usize),
@@ -115,9 +117,15 @@ pub fn route(head: &[u8], name: &str) -> Result<Route, u16> {
     }
     let format = query_format(query);
     match path {
-        b"/" | b"/index.html" => return Ok(Route::Page),
+        b"/" | b"/index.html" => {
+            let p = query.split(|&b| b == b'&').find_map(|kv| kv.strip_prefix(b"p=")).and_then(|v| std::str::from_utf8(v).ok()).and_then(|v| v.parse().ok()).unwrap_or(1);
+            return Ok(Route::Page(p));
+        }
         b"/pow" => return Ok(Route::Pow),
         _ => {}
+    }
+    if let Some(no) = path.strip_prefix(b"/t/") {
+        return std::str::from_utf8(no).ok().and_then(|n| n.parse().ok()).map(Route::Thread).ok_or(404);
     }
     if let Some(n) = path.strip_prefix(b"/ipns/") {
         if n != name.as_bytes() {
@@ -214,6 +222,14 @@ pub struct Served {
     whole: [Cid; 3],
     /// The whole `/ipns/<name>?format=ephem-board` response of this version.
     index: Rc<[u8]>,
+    /// Who serves it (the plain pages say so).
+    pub served: page::Served,
+}
+
+impl page::Blocks for Served {
+    fn block(&self, cid: &Cid) -> Option<&[u8]> {
+        self.blocks.get(cid).map(Vec::as_slice)
+    }
 }
 
 /// The CIDs of the index (the root first), from the root block.
@@ -237,11 +253,11 @@ fn index_cids(root: &Cid, blocks: &HashMap<Cid, Vec<u8>>) -> Option<(Vec<Cid>, [
 impl Served {
     /// `blocks`: the whole state under `root` (more is dropped: only what the root links to is
     /// served, as channels, M-4). `None` if the root is not a board's.
-    pub fn new(name: Cid, root: Cid, record: Vec<u8>, blocks: Vec<Block>) -> Option<Self> {
+    pub fn new(name: Cid, root: Cid, record: Vec<u8>, blocks: Vec<Block>, served: page::Served) -> Option<Self> {
         let blocks: HashMap<Cid, Vec<u8>> = ephem_channel::gateway::reachable(&root, blocks).into_iter().collect();
         let (cids, whole) = index_cids(&root, &blocks)?;
         let index = index_response(&record, &root, &cids, &blocks)?;
-        Some(Self { name_text: name.to_text(), name, root, record, blocks, whole, index })
+        Some(Self { name_text: name.to_text(), name, root, record, blocks, whole, index, served })
     }
 
     /// The next version: `added` blocks (those the store does not hold yet) and `live`, every
@@ -275,13 +291,16 @@ impl Served {
         self.blocks.iter().map(|(c, b)| (c, b.as_slice()))
     }
 
+    /// The sequence of the record served.
+    fn sequence(&self) -> u64 {
+        ephem_channel::ipns::verify(&self.name, &self.record, 0).map_or(0, |r| r.sequence)
+    }
+
     /// The response to a read route (`Pow` and `Submit` belong to the host's intake).
     pub fn respond(&self, r: &Route) -> Rc<[u8]> {
         match r {
-            Route::Page => {
-                let extra = format!("Content-Security-Policy: {PAGE_CSP}\r\nReferrer-Policy: no-referrer\r\n");
-                response(200, "text/html; charset=utf-8", &extra, PAGE).into()
-            }
+            Route::Page(p) => html(page::catalog(self, &self.name_text, &self.root, self.sequence(), self.served, *p)),
+            Route::Thread(no) => html(page::thread(self, &self.name_text, &self.root, self.sequence(), self.served, *no)),
             Route::Record => response(200, CT_RECORD, "", &self.record).into(),
             Route::Index => self.index.clone(),
             Route::Raw(c) => match self.blocks.get(c) {
@@ -316,6 +335,15 @@ impl Served {
         let mut out = Vec::with_capacity(order.iter().map(|c| self.blocks[*c].len() + 48).sum::<usize>() + 64);
         car::write_into(&mut out, std::slice::from_ref(cid), order.into_iter().map(|c| (c, self.blocks[c].as_slice())));
         Some(out)
+    }
+}
+
+/// A plain page with its headers (no scripts, no referrer), or the board's 404 page.
+fn html(page: Option<Vec<u8>>) -> Rc<[u8]> {
+    let extra = format!("Content-Security-Policy: {}\r\nReferrer-Policy: no-referrer\r\n", page::CSP);
+    match page {
+        Some(h) => response(200, "text/html; charset=utf-8", &extra, &h).into(),
+        None => response(404, "text/html; charset=utf-8", &extra, b"<!doctype html><title>Not found</title><p>Not on this board (pruned, deleted, or never there). <a href=\"/\">The board</a>").into(),
     }
 }
 

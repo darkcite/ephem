@@ -36,6 +36,8 @@ pub enum Refusal {
     Refused,
     /// Posting paused by the owner, or new threads closed.
     Paused,
+    /// Not the board's host (a mirror): posting needs the owner's onion (G.10).
+    Offline,
 }
 
 impl Refusal {
@@ -45,6 +47,7 @@ impl Refusal {
             Refusal::Busy => 0x0071,
             Refusal::Refused => 0x0072,
             Refusal::Paused => 0x0073,
+            Refusal::Offline => 0x0075,
         }
     }
 
@@ -54,6 +57,7 @@ impl Refusal {
             Refusal::Busy => 503,
             Refusal::Refused => 409,
             Refusal::Paused => 423,
+            Refusal::Offline => 503,
         }
     }
 }

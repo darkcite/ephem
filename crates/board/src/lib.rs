@@ -19,6 +19,7 @@ pub mod board;
 pub mod gateway;
 pub mod host;
 pub mod own;
+pub mod page;
 pub mod pipeline;
 pub mod post;
 pub mod pow;

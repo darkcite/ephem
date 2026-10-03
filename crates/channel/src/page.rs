@@ -28,7 +28,7 @@ pub const MAX_POSTS: usize = 200;
 pub const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /// Escapes text for HTML element content and quoted attributes.
-fn esc(out: &mut String, s: &str) {
+pub fn esc(out: &mut String, s: &str) {
     for c in s.chars() {
         match c {
             '&' => out.push_str("&amp;"),
