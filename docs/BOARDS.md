@@ -352,6 +352,8 @@ Revision 1 relied on the identity-wide vault lease, which is taken silently once
 8. **Moderation state** comes from the `own` block of the latest root (G.5.1).
 9. Continuing without history (D.11.3 step 4) means an empty catalog with numbers continuing; old threads come back if a mirror or the other device serves them.
 
+**As built (BD-7), one limit found in the lab:** both devices serve the same onion address (its key is derived from the identity). A reader's Tor client keeps an onion's descriptor until it expires, and arti fetches a fresh one only after an introduction is explicitly refused (`tor-hsclient` 0.46, `connect.rs`). So right after a takeover, a reader or poster whose client cached the old device's descriptor may fail to reach the board ("Failed to obtain hidden service circuit") until its client refetches, while a client that never saw the old descriptor reaches the new device at once. The lab E2E checks the takeover with a fresh client and logs how the cached one fares. Retrying later is the answer for now; restarting Tor in the reader's tab forces a fresh descriptor.
+
 ## G.14 Security and privacy
 
 ### G.14.1 Threats

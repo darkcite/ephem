@@ -7,8 +7,8 @@
 //   with A's lease → a phone signs in: the board is hosted elsewhere and the phone may not host
 //   it → desktop B signs in: "Host this board here" (explicit) reads the whole board from A's
 //   onion, numbers continue (above the old lease's bound, G.13.6), the ban survives (the encrypted own block) → A stops (its renewal
-//   or its fencing sees B) and says so → a post reaches B with the next number; the banned trip
-//   is still refused.
+//   or its fencing sees B) and says so → a new poster's post reaches B with the next number; the
+//   banned trip (same identity, same trip key) is still refused.
 //
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`.
 import * as fs from 'node:fs';
@@ -46,13 +46,13 @@ async function saveIdentity(p, label) {
   return fs.readFileSync(await dl.path());
 }
 
-async function signIn(p, file) {
+async function signIn(p, file, label = 'Board devices') {
   await toSettings(p);
   await p.click('#b-id-load');
   await p.setInputFiles('#i-file', { name: 'boards.p2pkey', mimeType: 'application/octet-stream', buffer: file });
   await p.fill('#i-pass-in', PASS);
   await p.click('#b-id-do-load');
-  await p.waitForFunction(() => /Board devices/.test(document.querySelector('#id-desc')?.textContent), null, { timeout: 30_000 });
+  await p.waitForFunction((l) => document.querySelector('#id-desc')?.textContent.includes(l), label, { timeout: 30_000 });
 }
 
 const own = (p, fn, ...args) => p.evaluate(([f, a]) => globalThis.ephemBoards.app[f](0, ...a), [fn, args]);
@@ -95,7 +95,7 @@ try {
   const onion = link.match(/&o=([a-z2-7]{56}\.onion)/)[1];
 
   const P = await device('poster');
-  await saveIdentity(P, 'Poster');
+  const posterFile = await saveIdentity(P, 'Poster');
   const t = await post(P, name, onion, 0, 'first thread');
   const tripped = await post(P, name, onion, t.no, 'a trip post', 'lab');
   await own(A, 'ban', tripped.no, 'test');
@@ -135,12 +135,19 @@ try {
   check('A stops hosting by itself (lease or fencing) and lists the board as hosted elsewhere', /hosted on your other device/.test(why), why);
 
   // ---- posting goes on at B ----
+  // A poster whose Tor client never saw A's descriptor (a new device; one that did may keep
+  // A's until arti refetches it, see BOARDS.md G.13 as built).
   await own(B, 'set_efforts', 40, 80);
-  await B.waitForTimeout(2_000);
-  const next = await post(P, name, onion, t.no, 'after the move');
+  const Q = await device('new poster');
+  await signIn(Q, posterFile, 'Poster');
+  const next = await post(Q, name, onion, t.no, 'after the move');
   check('a post after the move gets B\'s next number', next.no === st.next_no, JSON.stringify(next));
-  const again = await post(P, name, onion, t.no, 'banned trip again', 'lab');
-  check('the banned trip is still refused on B', /E_BOARD_REFUSED/.test(again.error || ''), again.error);
+  const again = await post(Q, name, onion, t.no, 'banned trip again', 'lab');
+  check('the banned trip is still refused on B (the same identity, the same trip key)', /E_BOARD_REFUSED/.test(again.error || ''), again.error);
+  // Information only: the first poster, who cached A's descriptor.
+  const t1 = Date.now();
+  const old = await post(P, name, onion, t.no, 'from the poster who knew A');
+  console.log(`  the poster who cached A's descriptor: ${old.no ? `posted No. ${old.no}` : old.error} after ${Math.round((Date.now() - t1) / 1000)} s`);
 
   check('no unexpected page errors', unexpected(problems).length === 0, unexpected(problems).join(' | '));
 } catch (e) {
