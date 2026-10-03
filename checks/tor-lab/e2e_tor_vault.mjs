@@ -23,7 +23,7 @@ const LEASE_S = 30;
 const srv = await serveTor();
 const base = `http://127.0.0.1:${srv.address().port}/app`;
 const { server: routing, cfg, routed } = await routingStandIn();
-const lab = { ...(REAL ? {} : { routing: cfg }), leaseS: LEASE_S, restoreMs: REAL ? 90_000 : 40_000 };
+const lab = { ...(REAL ? {} : { routing: cfg }), leaseS: LEASE_S, restoreMs: REAL ? 90_000 : 40_000, publishDelayMs: 2_000 };
 const browsers = [];
 
 async function device(who, extra = {}) {
@@ -146,6 +146,14 @@ try {
     const t4 = Date.now();
     await F.p.waitForFunction(() => /Unlisted/.test(document.querySelector('#owns')?.textContent), null, { timeout: T });
     check('no vault published: the new device still finds the channel at its own onion (a probe)', true, `${Date.now() - t4} ms`);
+    // M-1: switching to another identity in the tab forgets the previous one's channels and vault
+    // (they must not stay online here, nor leak into the new identity's vault).
+    await F.p.waitForFunction(() => !!globalThis.ephemChannel.vault(), null, { timeout: T });
+    await toSettings(F.p);
+    await F.p.click('#b-id-temp');
+    await F.p.waitForFunction(() => !globalThis.ephemChannel.vault(), null, { timeout: 30_000 }).catch(() => {});
+    const after = await F.p.evaluate(() => ({ vault: globalThis.ephemChannel.vault(), owned: globalThis.ephemChannel.view(0) }));
+    check('another identity in the tab: the previous identity\'s vault and channels are gone', !after.vault && !after.owned, JSON.stringify(after).slice(0, 120));
   }
   check('no page errors or CSP violations', unexpected(problems).length === 0, unexpected(problems).join(' | '));
 } catch (e) {

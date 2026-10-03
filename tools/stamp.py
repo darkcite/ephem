@@ -28,7 +28,11 @@ MODULES = ["app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "perf.js"
 TOR_MODULES = ["app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "perf.js", "pkg/ephem_tor.js"]
 HASHED = ["app.css", "app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "perf.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest"]
 TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm", "channel.html", "redirect.js"]
-PRECACHE = ["./", "index.html"] + HASHED + [
+# The Tor build's pages are precached with the direct app (security audit W-3: fetched on first
+# use, a tor.html of a later deploy pinned that deploy's app.js against this version's, and Tor
+# mode stayed broken). Only the large, integrity-pinned Tor build itself is fetched on first use.
+LAZY = [f for f in TOR_FILES if f.startswith("pkg/")]
+PRECACHE = ["./", "index.html", "tor.html", "channel.html", "redirect.js"] + HASHED + [
     "icons/icon.svg",
     "icons/icon-192.png",
     "icons/icon-512.png",
@@ -110,7 +114,7 @@ def main():
         raise SystemExit("app/index.html: <html lang=\"en\"> not found")
     # Every file feeds the build id (icons and the Tor build too), so any change makes a new SW
     # version. tor.html is derived from the others (and would contain the id itself).
-    cached = [f for f in PRECACHE if f not in ("./", "index.html")] + tor_pkg + ["redirect.js"]
+    cached = [f for f in PRECACHE if f not in ("./", "index.html", "tor.html", "channel.html")] + tor_pkg
     # index.html counts too (a change to it alone, e.g. a <meta>, must reach installed apps): its
     # stamped text with the build id still a placeholder, so stamping twice gives the same id.
     direct = restamp(index, stamp_block(hashes, MODULES, "pkg/ephem_bg.wasm", CONNECT))
@@ -125,7 +129,7 @@ def main():
         sw = f.read()
     sw = re.sub(r"^const VERSION = .*;$", f"const VERSION = '{build}';", sw, count=1, flags=re.M)
     sw = re.sub(r"^const FILES = .*;$", "const FILES = " + json.dumps(PRECACHE) + ";", sw, count=1, flags=re.M)
-    sw = re.sub(r"^const TOR_FILES = .*;$", "const TOR_FILES = " + json.dumps(TOR_FILES) + ";", sw, count=1, flags=re.M)
+    sw = re.sub(r"^const TOR_FILES = .*;$", "const TOR_FILES = " + json.dumps(LAZY) + ";", sw, count=1, flags=re.M)
     with open(path, "w", encoding="utf-8") as f:
         f.write(sw)
     print(f"build {build}")

@@ -7,12 +7,13 @@
 //   'activate'). Closing and reopening the app no longer switches versions (security audit W-1).
 //   What a service worker cannot stop: the host serving a hostile sw.js that does something else
 //   (§5, §17.1, §21 say so).
-// - Tor mode (tor.html and the Tor build, §28.2) is cached on first use only: direct users never
-//   download it. It belongs to the same version (the build id covers it).
+// - The Tor build's pages (tor.html, channel.html) are precached with the app (W-3); only the
+//   Tor build itself (pkg/ephem_tor*, §28.2, integrity-pinned by the pages) is cached on first
+//   use, so direct users never download it. The build id covers it.
 // VERSION, FILES and TOR_FILES are written by tools/stamp.py (run by ./build.sh).
-const VERSION = '890929c8a235';
-const FILES = ["./", "index.html", "app.css", "app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "perf.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
-const TOR_FILES = ["tor.html", "pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm", "channel.html", "redirect.js"];
+const VERSION = 'a55b842a28e9';
+const FILES = ["./", "index.html", "tor.html", "channel.html", "redirect.js", "app.css", "app.js", "slots.js", "bridges.js", "channels.js", "ui.js", "perf.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
+const TOR_FILES = ["pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm"];
 const CACHE = `ephem-${VERSION}`;
 const TOR_PATHS = new Set(TOR_FILES.map((f) => new URL(f, self.location).pathname));
 // The accepted version: one entry in its own cache (survives worker updates, unlike globals).
@@ -52,7 +53,8 @@ self.addEventListener('fetch', (e) => {
     const hit = await cache.match(req, { ignoreSearch: true });
     if (hit) return hit;
     const res = await fetch(req);
-    if (res.ok && TOR_PATHS.has(new URL(req.url).pathname)) await cache.put(req, res.clone());
+    // Only the lazily cached Tor build, never a page (W-3).
+    if (res.ok && TOR_PATHS.has(new URL(req.url).pathname) && !(res.headers.get('content-type') || '').includes('text/html')) await cache.put(req, res.clone());
     return res;
   })());
 });

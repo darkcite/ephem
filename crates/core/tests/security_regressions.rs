@@ -146,3 +146,20 @@ fn uncommitted_ephemeral_is_refused() {
     assert!(try_rig(false, Ephemeral::random(), committed.commit()).is_none(), "another key than the committed one");
     assert!(try_rig(false, committed.clone(), committed.commit()).is_some(), "the committed key");
 }
+
+/// F-03: a resume invite built from public values (the room id and the peer's key) must not
+/// tear down a live chat and point it at the forger's addresses.
+#[test]
+fn forged_resume_invite_does_not_drop_a_live_chat() {
+    let mut r = rig(false);
+    let alice = Identity::from_seed(&[1; 32]);
+    let bob = Identity::from_seed(&[2; 32]);
+    let forged = Code {
+        kind: Kind::ResumeInvite, flags: 0, invite_id: [0xEE; 16], room_id: r.alice.room_id(), static_pk: bob.peer_id().0, onion_pk: [0; 32],
+        commit: [0; COMMIT_LEN], expires_at: NOW_S + 300, ice: ice(&[("198.51.100.66", "50000", "srflx")]),
+    };
+    let mut buf = [0u8; MAX_CODE_LEN];
+    let n = forged.encode(&mut buf).unwrap();
+    assert!(r.alice.accept_resume(&alice, &buf[..n], NOW_S).is_err());
+    assert_eq!(r.alice.state(), State::Connected, "the live path stays");
+}

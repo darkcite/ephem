@@ -952,6 +952,12 @@ impl Session {
         if c.static_pk != self.remote.0 {
             return Err(ErrorCode::AuthFailed);
         }
+        // Only a path that is down (or failing) is replaced: everything checked above is public
+        // to whoever saw the first invite, so a forged resume code must not tear down a live chat
+        // and point it at the forger's addresses (security audit F-03).
+        if self.state == State::Connected && !self.degraded {
+            return Err(ErrorCode::NotPermitted);
+        }
         Self::check_invite(id, &c, now_s)?;
         self.drop_path();
         self.resume = true;

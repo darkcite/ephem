@@ -9,7 +9,7 @@
 |---|---|---|
 | F-01 | high | **Fixed** (owner approved the format change): code format version 2. Answers, resume answers and Tor invites carry `e_commit`, a 16-byte commitment to the Noise ephemeral key of message 2; the initiator refuses message 2 with any other key (`E_AUTH_FAILED`). Each code serves one handshake; a Tor host uses its committed key for the first connection only. Tests: `noise::responder_ephemeral_is_committed`, `security_regressions::uncommitted_ephemeral_is_refused`; spec §8.3, §10.4, §28.4 |
 | F-02 | high | **Fixed**: `Privacy::keeps_remote` filters the peer's candidates (LAN only: mDNS and private/link-local hosts; Drop IPv6: no v6) in invites, answers and in-band restarts; a direct invite opened from a link asks before connecting. Test: `crates/core/tests/security_regressions.rs` |
-| F-03 | medium | Open |
+| F-03 | medium | **Fixed**: a resume invite is accepted only while the path is down or degraded; a live chat refuses it. Test: `security_regressions::forged_resume_invite_does_not_drop_a_live_chat` |
 | F-04 | medium | **Fixed**: `card::valid_nick` (no control, invisible, direction or check-mark characters) for HELLO, own nickname and contacts; older saved names that break it are dropped, not the key file. Tests: `security_regressions.rs`, `card.rs` |
 | F-05 | medium | Open |
 | F-06 – F-10 | low/info | Open |

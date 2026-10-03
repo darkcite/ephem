@@ -8,7 +8,12 @@
 |---|---|---|
 | H-1 | high | **Fixed**: CBOR arrays/maps reserve at most 16 items up front; CAR blocks over 1 MiB are refused. A 1 MiB bomb now peaks at ~53 MiB (values actually parsed) instead of 491–839 MiB. Test: `crates/channel/tests/cbor_bomb.rs` |
 | H-2 | high | **Fixed**: `Tor::launch` uses a bounded accept loop (8 rendezvous being built, 32 live circuits, 8 new streams per circuit per 10 s, 8 open per circuit, a 32-stream queue, `rate_limit_at_intro` 10/s burst 50); the channel gateway serves at most 16 requests at once with a 60 s deadline including the write; the root CAR is built once per version and shared; a chat stream must send its first frame within 30 s. Tor's own onion PoW stays unavailable (B-P2) |
-| M-1 – M-5, M-7 | medium | Open |
+| M-1 | medium | **Fixed**: an identity change (`bind`, `sign_in`) takes the previous identity's channel and mirror onions down and forgets its vault and sequence (`State::forget_identity`). Lab check in `e2e_tor_vault.mjs` |
+| M-2 | medium | **Fixed**: restore reads at least the vault's `record_seq`; the highest vault sequence is kept across visits (`vault_floor`) and an older record is refused; no publish over an unread vault; before a post the lease is re-read if older than 60 s (the spec's "re-read before every post" is met through the lease, not the channel record) |
+| M-3 | medium | **Fixed**: a read keeps the newest valid answer; after the first, the other sources get 4 s |
+| M-4 | medium | Open |
+| M-5 | medium | **Fixed**: every request through a Tor exit uses a new circuit; the vault publish after a change waits a random 5–30 s |
+| M-7 | medium | Open (with H-2's bounded loop, shared uptime remains a property of hosting several onions in one tab) |
 | M-6 | medium | **Fixed**: the HTTP parser moved to `gateway::parse_any_response`, bounds-checked, CRLF required; test `any_response_never_panics` |
 | L-1, L-2 | low | Open |
 | I-2 | info | **Fixed**: `Cid::read` uses `checked_add` |

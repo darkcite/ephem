@@ -34,7 +34,9 @@ pub async fn request(tor: &Tor, method: &str, host: &str, path: &str, content_ty
         .with_root_certificates(roots)
         .with_no_client_auth();
     let server = ServerName::try_from(name.to_owned()).map_err(|e| e.to_string())?;
-    let stream = tor.connect(name, port, false).await?;
+    // A new circuit for every request (security audit M-5): the routing service must not see
+    // one identity's vault and channel records leave through the same exit.
+    let stream = tor.connect(name, port, true).await?;
     let mut tls = TlsConnector::from(Arc::new(cfg)).connect(server, stream).await.map_err(|e| format!("TLS: {e}"))?;
     // `no-cache`: routing answers are cached by URL for minutes (a newer record stayed invisible
     // for ~5 min on delegated-ipfs.dev, 2026-09-29); callers that need the newest also vary the URL.

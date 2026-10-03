@@ -27,6 +27,13 @@ try {
   await p.reload();
   await p.waitForFunction(() => !!navigator.serviceWorker.controller);
   check('first install: build 1 runs, no update offered', (await title(p)) === 'Ephem' && !(await p.evaluate(() => !document.getElementById('update').hidden)));
+  // W-3: the Tor pages belong to the installed build (precached), only the Tor wasm is lazy.
+  const pages = await p.evaluate(async () => {
+    const names = (await caches.keys()).filter((k) => k !== 'ephem-meta');
+    const c = await caches.open(names[0]);
+    return { tor: !!(await c.match('tor.html')), channel: !!(await c.match('channel.html')), wasm: !!(await c.match('pkg/ephem_tor_bg.wasm')) };
+  });
+  check('tor.html and channel.html precached with the build; the Tor wasm is not', pages.tor && pages.channel && !pages.wasm, JSON.stringify(pages));
 
   v2 = true;
   await p.evaluate(async () => (await navigator.serviceWorker.getRegistration()).update());

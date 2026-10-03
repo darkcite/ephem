@@ -44,6 +44,9 @@ const REQUEST_TIMEOUT_MS: u32 = 30_000;
 const FETCH_TIMEOUT_MS: u32 = 90_000;
 /// Rounds over the given addresses before a read fails.
 const READ_ROUNDS: u32 = 4;
+/// After the first valid answer of a read, how long the other sources may take to offer a newer
+/// version (M-3).
+const NEWEST_GRACE_MS: u32 = 4_000;
 /// The owner re-signs the record when it is older than this (§D.5.3).
 const RESIGN_AFTER_S: u64 = 7 * 24 * 3600;
 
@@ -77,9 +80,12 @@ struct State {
     mirrors: Vec<Mirror>,
     /// Onion services launched so far (each needs its own arti nickname).
     launched: u32,
-    /// The newest vault seen or published (§D.11) and its record sequence.
+    /// The newest vault seen or published (§D.11) and its record sequence. `vault_seq` may also
+    /// be a floor the page remembered from earlier visits (`vault_floor`); `vault_known` says
+    /// whether `vault` holds what that sequence names (only then may this tab publish over it).
     vault: Vault,
     vault_seq: u64,
+    vault_known: bool,
 }
 
 /// An owned channel's onion service and what it serves.
@@ -91,6 +97,18 @@ struct Online {
 }
 
 impl State {
+    /// Another identity takes over this tab's channels (security audit M-1): nothing of the
+    /// previous one may stay online here or leak into the new one's vault. Its channel and
+    /// mirror onions go down; the vault and its sequence are forgotten.
+    fn forget_identity(&mut self) {
+        self.own.clear();
+        self.served.clear();
+        self.mirrors.clear();
+        self.vault = Vault::default();
+        self.vault_seq = 0;
+        self.vault_known = false;
+    }
+
     /// The cell serving channel `name` (updated in place if it is online), holding `h`.
     fn cell(&self, name: &Cid, h: Hosted) -> Rc<RefCell<Hosted>> {
         match self.served.iter().find(|s| s.name == *name) {
@@ -124,7 +142,7 @@ impl ChannelApp {
             _ => false,
         };
         if !same {
-            st.own.clear();
+            st.forget_identity();
         }
         st.id = id;
         st.label = label.to_owned();
@@ -157,10 +175,15 @@ impl ChannelApp {
         pass.fill(0);
         let o = r.map_err(|e| err(e.name()))?;
         let mut st = self.st.borrow_mut();
-        st.id = Some(Identity::from_seed(&o.seed));
+        let id = Identity::from_seed(&o.seed);
+        if st.id.as_ref().is_none_or(|a| a.peer_id() != id.peer_id()) {
+            st.forget_identity();
+        } else {
+            st.own.clear();
+        }
+        st.id = Some(id);
         st.label = String::from_utf8_lossy(&o.label).into_owned();
         st.separate = true;
-        st.own.clear();
         Ok(())
     }
 
@@ -452,6 +475,9 @@ impl ChannelApp {
             // "delegate error: routing: not found".
             let missing = std::str::from_utf8(&body).is_ok_and(|t| t.contains("not found"));
             if status == 404 || (status == 200 && missing) {
+                // Nothing to protect: the record expired from the DHT (13–86 h without a
+                // republish, V-P2) or never existed. This tab may publish from what it holds.
+                st.borrow_mut().vault_known = true;
                 return Ok(JsValue::from_str(""));
             }
             if status != 200 {
@@ -467,9 +493,29 @@ impl ChannelApp {
             if seq >= st.vault_seq {
                 st.vault = v;
                 st.vault_seq = seq;
+                st.vault_known = true;
+            } else if !st.vault_known {
+                // Older than this device has seen (a stale or replayed record, M-2): neither adopt
+                // it nor publish over the newer one we cannot read.
+                return Err(err(format!("the routing service returned an older list of your channels (version {seq}; this device has seen {})", st.vault_seq)));
             }
             Ok(JsValue::from_str(&vault_json(&st.vault, st.vault_seq)))
         }))
+    }
+
+    /// The highest vault sequence this device saw on an earlier visit (the page keeps it): an
+    /// older vault record is refused from now on (§D.11.5, security audit M-2).
+    pub fn vault_floor(&self, seq: f64) {
+        let mut st = self.st.borrow_mut();
+        if seq as u64 > st.vault_seq {
+            st.vault_seq = seq as u64;
+            st.vault_known = false;
+        }
+    }
+
+    /// The vault sequence this tab saw or published (0: none).
+    pub fn vault_seq(&self) -> f64 {
+        self.st.borrow().vault_seq as f64
     }
 
     /// The vault as last fetched or published (JSON), "" before either.
@@ -486,6 +532,9 @@ impl ChannelApp {
         let dev = unhex16(device).ok_or_else(|| err("device id: 32 hex digits"))?;
         let (v, seq, record, name) = {
             let st = self.st.borrow();
+            if st.vault_seq > 0 && !st.vault_known {
+                return Err(err("the list of your channels could not be read yet; not overwriting it"));
+            }
             let mut entries: Vec<Entry> = st.own.iter().map(entry_of).collect();
             for e in &st.vault.entries {
                 if !entries.iter().any(|x| x.index == e.index) {
@@ -516,6 +565,7 @@ impl ChannelApp {
             if seq > st.vault_seq {
                 st.vault = v;
                 st.vault_seq = seq;
+                st.vault_known = true;
             }
             Ok(JsValue::from(seq as f64))
         }))
@@ -556,6 +606,12 @@ impl ChannelApp {
         st.served.clear();
     }
 
+    /// The page signed out of channels or switched identity (also done by `bind` and
+    /// `sign_in` when the identity changes, M-1).
+    pub fn forget(&self) {
+        self.st.borrow_mut().forget_identity();
+    }
+
     // ---- readers and mirrors ----
 
     /// Reads channel `name` over Tor from the first onion (comma-separated: owner, mirrors) that
@@ -575,16 +631,46 @@ impl ChannelApp {
             // All addresses at once (the owner may be offline and a mirror up): the first to
             // deliver a valid state wins.
             for round in 0..READ_ROUNDS {
-                let tries = onions.iter().map(|onion| {
-                    let (tor, name) = (tor.clone(), name.clone());
-                    Box::pin(async move { fetch_channel(&tor, &name, onion, min_seq as u64, round > 0).await.map_err(|e| format!("{onion}: {e}")) })
-                });
-                match futures::future::select_ok(tries).await {
-                    Ok((r, _)) => return Ok(r.into()),
-                    Err(e) => {
-                        tracing::info!("channel: {e}");
-                        last = e;
+                let mut tries: futures::stream::FuturesUnordered<_> = onions
+                    .iter()
+                    .map(|onion| {
+                        let (tor, name) = (tor.clone(), name.clone());
+                        Box::pin(async move { fetch_channel(&tor, &name, onion, min_seq as u64, round > 0).await.map_err(|e| format!("{onion}: {e}")) })
+                    })
+                    .collect();
+                // The newest valid state wins, not the first (security audit M-3: a stale or
+                // malicious mirror that answers fast would hold readers on an old version). After
+                // the first valid answer the others get NEWEST_GRACE_MS to beat it.
+                let mut best: Option<Reading> = None;
+                // Started at the first valid answer.
+                let mut grace = None;
+                loop {
+                    let next = futures::StreamExt::next(&mut tries);
+                    let r = match grace.as_mut() {
+                        Some(g) => match futures::future::select(next, g).await {
+                            futures::future::Either::Left((r, _)) => r,
+                            futures::future::Either::Right(_) => break,
+                        },
+                        None => next.await,
+                    };
+                    match r {
+                        None => break,
+                        Some(Ok(r)) => {
+                            if best.as_ref().is_none_or(|b| r.seq > b.seq) {
+                                best = Some(r);
+                            }
+                            if grace.is_none() {
+                                grace = Some(Box::pin(sleep_ms(NEWEST_GRACE_MS)));
+                            }
+                        }
+                        Some(Err(e)) => {
+                            tracing::info!("channel: {e}");
+                            last = e;
+                        }
                     }
+                }
+                if let Some(r) = best {
+                    return Ok(r.into());
                 }
                 sleep_ms(2_000 << round).await;
             }
@@ -674,7 +760,7 @@ fn vault_json(v: &Vault, seq: u64) -> String {
         if i > 0 {
             o.push(',');
         }
-        let _ = write!(o, "{{\"index\":{},\"count\":{},\"title\":", e.index, e.count);
+        let _ = write!(o, "{{\"index\":{},\"count\":{},\"record_seq\":{},\"title\":", e.index, e.count, e.record_seq);
         json::string(&mut o, &e.title);
         o.push_str(",\"mirrors\":[");
         for (j, m) in e.mirrors.iter().enumerate() {

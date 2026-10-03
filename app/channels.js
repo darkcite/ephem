@@ -600,9 +600,29 @@ function renderServing(o) {
     : `Online through Tor while this tab is open (${at}).${r === 'reachable' || r === 'degraded' ? '' : ' Tor is still publishing its address: some readers may not reach it for a minute or two.'}`;
 }
 
+/** Before writing: if the lease was not read recently, read it now; another device holding it
+ *  means this one stopped writing (§D.11.3 step 5, security audit M-2). A failed read lets the
+ *  write go ahead, as the lease does on other failures (offline, routing service down). */
+async function leaseStillOurs() {
+  if (!signedIn() || Date.now() - leaseCheckedAt < LEASE_FRESH_MS) return true;
+  try {
+    const j = await Promise.race([ch.vault_fetch(...routing()), new Promise((_, no) => setTimeout(() => no(new Error('no answer in 10 s')), 10_000))]);
+    vault = j ? JSON.parse(j) : vault;
+    leaseCheckedAt = Date.now();
+    saveFloor();
+  } catch (e) {
+    console.info('vault:', e?.message || e);
+    return true;
+  }
+  if (!leasedElsewhere(vault) || Date.now() - claimedAt < LEASE_S * 1000) return true;
+  standDown();
+  return false;
+}
+
 // Every change: Rust rebuilds and re-signs; the page stores the new CAR and record at once.
 async function change(o, fn) {
   try {
+    if (!(await leaseStillOurs())) return;
     fn();
     await store('channels', o.n, ch.car(o.i), ch.record(o.i));
     renderOwn(o);
@@ -732,6 +752,26 @@ let syncing = false;
 let renewTimer = 0;
 let publishTimer = 0;
 let claimedAt = 0;                   // when this device last took over (ms)
+let leaseCheckedAt = 0;              // when the vault (and so the lease) was last read (ms)
+/** Before a change, the lease is read again if it is older than this (§D.11.3 step 5, M-2). */
+const LEASE_FRESH_MS = 60_000;
+
+/** The highest vault version this device saw, kept across visits so an older vault record is
+ *  refused (§D.11.5, security audit M-2). Keyed by the identity's first channel name. */
+function floorKey() {
+  try { return `ephem-vault-seq-${ch.channel_name(0).slice(-16)}`; } catch { return ''; }
+}
+function loadFloor() {
+  const k = floorKey();
+  if (!k) return;
+  try { ch.vault_floor(Number(localStorage.getItem(k)) || 0); } catch { /* storage blocked */ }
+}
+function saveFloor() {
+  const k = floorKey();
+  const seq = ch.vault_seq();
+  if (!k || !seq) return;
+  try { if (seq > (Number(localStorage.getItem(k)) || 0)) localStorage.setItem(k, String(seq)); } catch { /* storage blocked */ }
+}
 
 /** A lab stand-in routing host and its test CA, or delegated-ipfs.dev. */
 function routing() {
@@ -787,6 +827,8 @@ function renderDiag() {
 function resetVault() {
   vault = null;
   writer = true;
+  leaseCheckedAt = 0;
+  if (signedIn()) loadFloor();
 }
 
 /** Fetches the vault and acts on its lease; `takeover`: this device writes from now on. */
@@ -803,6 +845,8 @@ async function syncVault(takeover = false) {
       const j = await ch.vault_fetch(host, root);
       vault = j ? JSON.parse(j) : null;
       found = !!vault;
+      leaseCheckedAt = Date.now();
+      saveFloor();
       diag.fetched = hhmm();
       diag.read = vault ? `found version ${vault.seq}` : 'no list published yet for this identity';
     } catch (e) {
@@ -874,8 +918,10 @@ async function restore(e, fresh) {
   const n = ch.channel_name(e.index);
   const onions = [ch.channel_onion(e.index), ...e.mirrors].join(',');
   const local = have ? JSON.parse(ch.view(e.index) || '{"sequence":0}').sequence : 0;
+  // Never below the version the vault recorded: a stale mirror must not roll the owner back (M-2).
+  const floor = Math.max(local, e.record_seq || 0);
   try {
-    const r = await Promise.race([ch.read(n, onions, local), new Promise((_, no) => setTimeout(() => no(new Error('no host answered')), RESTORE_MS))]);
+    const r = await Promise.race([ch.read(n, onions, floor), new Promise((_, no) => setTimeout(() => no(new Error('no host answered')), RESTORE_MS))]);
     if (!have || r.sequence > local) {
       ch.open(e.index, r.car(), r.record());
       await store('channels', n, ch.car(e.index), ch.record(e.index));
@@ -934,6 +980,7 @@ async function publishVault() {
   try {
     await ch.vault_publish(...routing(), deviceId(), Math.floor(Date.now() / 1000) + LEASE_S);
     vault = JSON.parse(ch.vault());
+    saveFloor();
     diag.published = `${hhmm()}: version ${vault.seq}, ${vault.channels.length} channel(s)`;
   } catch (e) {
     console.info('vault: not published:', e?.message || e);
@@ -942,10 +989,13 @@ async function publishVault() {
   renderDiag();
 }
 
-/** After a change: publish the vault once the burst of changes is over. */
+/** After a change: publish the vault once the burst of changes is over, after a random delay
+ *  (5–30 s): a fixed delay after a post that readers see would let the routing service tie the
+ *  vault to the channel (security audit M-5). */
 function publishSoon() {
   clearTimeout(publishTimer);
-  publishTimer = setTimeout(publishVault, 2000);
+  const lab = globalThis.ephemTorLab?.publishDelayMs;
+  publishTimer = setTimeout(publishVault, lab ?? 5_000 + Math.random() * 25_000);
 }
 
 /** Every third of a lease: a writer checks nobody took over, then renews; a device that stood
@@ -957,6 +1007,8 @@ async function renew() {
   try {
     const j = await ch.vault_fetch(...routing());
     vault = j ? JSON.parse(j) : vault;
+    leaseCheckedAt = Date.now();
+    saveFloor();
   } catch (e) {
     return console.info('vault:', e?.message || e);
   }
