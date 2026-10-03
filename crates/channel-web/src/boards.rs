@@ -1039,19 +1039,23 @@ async fn fence_loop(host: Weak<RefCell<Host>>, st: Weak<RefCell<State>>, index: 
         let Some(h) = host.upgrade() else { return };
         let Some(state) = st.upgrade() else { return };
         let Some(tor) = state.borrow().tor.borrow().clone() else { continue };
-        let (name, mine, mut sources) = {
+        let (name, mut sources) = {
             let h = h.borrow();
-            (h.served.name.clone(), h.board.seq, h.board.manifest.mirrors.clone())
+            (h.served.name.clone(), h.board.manifest.mirrors.clone())
         };
         if let Some(onion) = state.borrow().boards.hosted.iter().find(|b| b.index == index).map(|b| b.onion.clone()).filter(|o| !o.is_empty()) {
             sources.push(onion);
         }
-        drop((h, state));
+        drop(h);
+        drop(state);
         let path = format!("/ipns/{}?format=ipns-record", name.to_text());
         for o in &sources {
             let Ok(resp) = with_timeout(FETCH_MS, fetch(&tor, o, &ephem_channel::gateway::get(o, &path), true, gateway::MAX_RECORD)).await else { continue };
             let Ok(body) = ephem_channel::gateway::parse_response(&resp) else { continue };
             let Ok(rec) = ipns::verify(&name, body, now_s()) else { continue };
+            // This tab's own sequence now, not before the fetch: a publish here meanwhile is
+            // not another device.
+            let Some(mine) = host.upgrade().map(|h| h.borrow().board.seq) else { return };
             if rec.sequence > mine {
                 tracing::info!("board {index}: a newer record (sequence {} > {mine}) from another device: not hosting here any more", rec.sequence);
                 let Some(state) = st.upgrade() else { return };
