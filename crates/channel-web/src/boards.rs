@@ -18,7 +18,7 @@
 //! Copies (G.14.2): stream bytes are read into the slot (one copy); blocks cross to JS once,
 //! for the store (`delta`), and once back at a reopen (`open`).
 
-use crate::{ChannelApp, State, err, json, now_s, with_timeout, PORT};
+use crate::{ChannelApp, NEWEST_GRACE_MS, PORT, State, err, json, now_s, with_timeout};
 use ephem_board::board::{Board, Entry};
 use ephem_board::gateway::{self, Answer, Route, SHORT, Served};
 use ephem_board::host::Host;
@@ -391,6 +391,25 @@ impl BoardApp {
         o
     }
 
+    /// The owner's own board as readers see it (JSON as `read`), from what this tab serves: the
+    /// index and the `threads` asked for, verified locally (no Tor round trip).
+    pub fn owner_view(&self, index: u32, threads: Vec<f64>) -> Result<String, JsValue> {
+        let h = self.host(index)?;
+        let h = h.borrow();
+        let body_of = |r: Route| -> Option<Vec<u8>> { ephem_channel::gateway::parse_response(&h.served.respond(&r)).ok().map(<[u8]>::to_vec) };
+        let (record, _, mut blocks) = body_of(Route::Index).as_deref().and_then(gateway::parse_index).ok_or_else(|| err("index"))?;
+        let index_view = verify::verify(&h.served.name, &record, &blocks, now_ms(), 0, &[]).map_err(|e| err(format!("{e:?}")))?;
+        for no in threads {
+            if let Some(c) = index_view.catalog.iter().find(|c| c.no == no as u64)
+                && let Some((_, b)) = body_of(Route::Car(c.thread.clone())).as_deref().and_then(ephem_channel::car::read)
+            {
+                blocks.extend(b);
+            }
+        }
+        let v = verify::verify(&h.served.name, &record, &blocks, now_ms(), 0, &[]).map_err(|e| err(format!("{e:?}")))?;
+        Ok(view_json(&v))
+    }
+
     /// Closes board `index` here (its onion goes down; the store keeps it).
     pub fn close(&self, index: u32) {
         self.st.borrow_mut().boards.hosted.retain(|b| b.index != index);
@@ -553,14 +572,41 @@ impl BoardApp {
             let mut last = String::new();
             let known: Vec<[u8; 32]> = dels.borrow().iter().find(|(n, _)| *n == name).map(|(_, d)| d.clone()).unwrap_or_default();
             for round in 0..READ_ROUNDS {
-                for onion in &ok {
-                    match with_timeout(FETCH_MS, read_from(&tor, &name, onion, min_seq as u64, &threads, round > 0, &known)).await {
-                        Ok(v) => {
-                            remember_dels(&mut dels.borrow_mut(), &name, &v.dels);
-                            return Ok(JsValue::from_str(&view_json(&v)));
+                // Every address at once (the owner may be offline and a mirror up); the newest
+                // valid version wins, the others get NEWEST_GRACE_MS after the first (as channels,
+                // security audit M-3).
+                let mut tries: futures::stream::FuturesUnordered<_> = ok
+                    .iter()
+                    .map(|onion| {
+                        let (tor, name, threads, known) = (tor.clone(), name.clone(), threads.clone(), known.clone());
+                        Box::pin(async move { with_timeout(FETCH_MS, read_from(&tor, &name, onion, min_seq as u64, &threads, round > 0, &known)).await.map_err(|e| format!("{onion}: {e}")) })
+                    })
+                    .collect();
+                let mut best: Option<View> = None;
+                let mut grace = None;
+                loop {
+                    let next = futures::StreamExt::next(&mut tries);
+                    let r = match grace.as_mut() {
+                        Some(g) => match futures::future::select(next, g).await {
+                            futures::future::Either::Left((r, _)) => r,
+                            futures::future::Either::Right(_) => break,
+                        },
+                        None => next.await,
+                    };
+                    match r {
+                        None => break,
+                        Some(Ok(v)) => {
+                            if best.as_ref().is_none_or(|b| v.sequence > b.sequence) {
+                                best = Some(v);
+                            }
+                            grace.get_or_insert_with(|| Box::pin(sleep_ms(NEWEST_GRACE_MS)));
                         }
-                        Err(e) => last = format!("{onion}: {e}"),
+                        Some(Err(e)) => last = e,
                     }
+                }
+                if let Some(v) = best {
+                    remember_dels(&mut dels.borrow_mut(), &name, &v.dels);
+                    return Ok(JsValue::from_str(&view_json(&v)));
                 }
                 sleep_ms(2_000 << round).await;
             }

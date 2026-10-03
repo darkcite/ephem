@@ -291,3 +291,15 @@ h2 small { color: var(--dim); font-weight: 400; text-transform: none; letter-spa
 #perf-text, #disp-text, #own-diag-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; margin: 6px 0; }
 .pane, .side { overflow-x: hidden; }
 .pane > .view, .card { min-width: 0; max-width: 100%; }
+
+/* Boards (docs/BOARDS.md) */
+input.num { width: 7em; display: inline-block; }
+input.short { width: 12em; }
+.pre { white-space: pre-wrap; }
+.posts .meta .trip { color: var(--ok); }
+.posts .meta .cap { color: var(--warn); }
+.posts .gt { color: #8fbf5a; }
+.posts .mod { margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap; }
+.posts .mod button { margin: 0; padding: 2px 8px; font-size: 11px; }
+.rows li.board .avatar::after { content: "▦"; }
+.stale { color: var(--warn); }

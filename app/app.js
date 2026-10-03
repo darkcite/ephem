@@ -1489,6 +1489,7 @@ function applyCode(raw, scanned, fromLink = false) {
   closeCodeSheet();
   if (app.card_nick(v) !== undefined) return showAdd(v);
   if (/#c=/.test(v)) return channels.openLink(v);
+  if (/#B=/.test(v)) return boards.openLink(v);
   const info = app.code_info(v);
   let sending = false;
   if ((info & 0xff) === 1 && (info >> 8) & FLAG_TRANSFER) {
@@ -2081,7 +2082,7 @@ async function main() {
     })),
   });
   channels.init({ TOR, phone, app, mod: TOR ? mod : null, showPane, setTab, setStatus, error, persist, scan, download, notify, notice, ramSections: () => !app.identity_label() });
-  boards.init({ TOR, mod: TOR ? mod : null, ch: channels.channelApp(), error });
+  boards.init({ TOR, app, mod: TOR ? mod : null, ch: channels.channelApp(), showPane, setTab, error });
   renderIdentity();
   if (TOR) beginTor();
 
@@ -2293,6 +2294,7 @@ async function main() {
     return;
   }
   if (frag.startsWith('#c=')) return channels.openLink(frag);
+  if (frag.startsWith('#B=')) return boards.openLink(frag);
   if (frag.startsWith('#b=')) return openBridgeLink(frag);
   if (frag.startsWith('#i=') || frag.startsWith('#t=') || frag.startsWith('#k=')) return applyCode(frag, false, true);
   if (await forward(frag)) {

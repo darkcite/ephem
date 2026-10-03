@@ -35,6 +35,8 @@ const readings = new Map();          // name → the latest verified Reading
 const sessionHw = new Map();         // name → sequence seen this session (channels not followed)
 const signedMirrors = new Map();     // name → the mirror onions its last verified manifest names
 let refreshing = false;
+let torMod = null;                   // the Tor build's module (boards construct BoardApp from it)
+let boardsHook = null;               // boards.js: re-render its rows when the follow list changes
 
 export function init(c) {
   ctx = c;
@@ -49,10 +51,25 @@ export function init(c) {
   if (globalThis.ephemTorLab) globalThis.ephemChannelsRefresh = refreshAll; // lab: refresh now
 }
 
-/** Tor mode: the page's ChannelApp (boards share its identity and Tor client). */
+/** The page's ChannelApp and the Tor build's module, once loaded (direct mode: on first use).
+ *  Boards share its identity and Tor client. */
+export async function engine() {
+  if (!(await ready())) throw new Error('the Tor part did not start');
+  return { ch, mod: torMod || ctx.mod };
+}
+
+/** Tor mode: the page's ChannelApp, made at start (boards share its identity and Tor client). */
 export function channelApp() {
   return ctx?.TOR ? ch : null;
 }
+
+/** The follow list, boards included (`k: 'board'`; their rows are boards.js's). */
+export const followList = () => follows;
+export const saveFollowList = () => saveFollows();
+export function setBoardsHook(f) {
+  boardsHook = f;
+}
+const isChannel = (f) => f.k !== 'board';
 
 /** Direct mode: the Tor part's own WebAssembly memory, once loaded (for the performance readout). */
 let torWasm = null;
@@ -98,9 +115,9 @@ export async function openTab(tab) {
   if (!(await ready())) return;
   if (tab === 'follow') {
     if (!torResolve) refreshAll();
-    const f = current?.read && follows.find((x) => x.n === current.read);
+    const f = current?.read && follows.find((x) => x.n === current.read && isChannel(x));
     if (f) return showReader(f.n, f.o);
-    return ctx.showPane(follows.length ? 'v-read' : 'v-follow-new');
+    return ctx.showPane(follows.some(isChannel) ? 'v-read' : 'v-follow-new');
   }
   const o = current?.own !== undefined && owned.find((x) => x.i === current.own);
   if (o) return showOwner(o.i);
@@ -142,6 +159,7 @@ async function loadEngine() {
   if (!ctx.phone()) ctx.showPane('v-channels-off');
   $('ch-state').textContent = 'Loading the Tor part of Ephem…';
   const mod = await import('./pkg/ephem_tor.js');
+  torMod = mod;
   const sri = document.querySelector('meta[name="ephem-tor-wasm"]')?.content;
   torWasm = await mod.default({ module_or_path: fetch(new URL('./pkg/ephem_tor_bg.wasm', import.meta.url), sri ? { integrity: sri } : {}) });
   ch = new mod.ChannelApp();
@@ -242,7 +260,7 @@ function loadFollows() {
 
 async function saveFollows() {
   // Only what identifies a channel and what was seen; posts are re-read.
-  const list = follows.map(({ n, o, s, t, seen, m }) => ({ n, o, s, t, seen, m }));
+  const list = follows.map(({ n, o, s, t, seen, m, k }) => ({ n, o, s, t, seen, m, k }));
   if (ctx.app.identity_label()) {
     if (ctx.app.set_section(TLV_FOLLOWS, JSON.stringify(list)) === 0) await ctx.persist();
   } else ramFollows = follows;
@@ -257,6 +275,7 @@ function renderFollows() {
   let fresh = 0;
   for (const f of follows) {
     fresh += f.fresh || 0;
+    if (!isChannel(f)) continue;
     const li = document.createElement('li');
     li.className = current?.read === f.n ? 'active' : '';
     li.innerHTML = '<span class="dot"></span><span class="grow"><b></b><span class="sub"></span></span>';
@@ -275,13 +294,14 @@ function renderFollows() {
   $('follows-empty').hidden = follows.length > 0;
   $('badge-follow').hidden = !fresh;
   $('badge-follow').textContent = String(fresh);
+  boardsHook?.();
 }
 
 // Every followed channel, a few at a time; counts the posts newer than the last one seen.
 async function refreshAll() {
   if (refreshing || !follows.length) return;
   refreshing = true;
-  const queue = [...follows];
+  const queue = follows.filter(isChannel);
   const worker = async () => {
     for (let f = queue.shift(); f; f = queue.shift()) {
       try {
