@@ -16,17 +16,23 @@ pub type Block = (Cid, Vec<u8>);
 pub const MAX_BLOCK: usize = 1 << 20;
 
 pub fn write(roots: &[Cid], blocks: &[Block]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64 + blocks.iter().map(|(_, b)| b.len() + 48).sum::<usize>());
+    write_into(&mut out, roots, blocks.iter().map(|(c, b)| (c, b.as_slice())));
+    out
+}
+
+/// As [`write`], appending to `out` from borrowed blocks (no copy of a block before its one copy
+/// into `out`).
+pub fn write_into<'a>(out: &mut Vec<u8>, roots: &[Cid], blocks: impl Iterator<Item = (&'a Cid, &'a [u8])>) {
     let header = cbor::map(vec![("roots", Value::Array(roots.iter().cloned().map(Value::Link).collect())), ("version", Value::Uint(1))]).encode();
-    let mut out = Vec::with_capacity(header.len() + blocks.iter().map(|(_, b)| b.len() + 48).sum::<usize>());
-    varint::put(&mut out, header.len() as u64);
+    varint::put(out, header.len() as u64);
     out.extend_from_slice(&header);
     for (cid, data) in blocks {
         let c = cid.to_bytes();
-        varint::put(&mut out, (c.len() + data.len()) as u64);
+        varint::put(out, (c.len() + data.len()) as u64);
         out.extend_from_slice(&c);
         out.extend_from_slice(data);
     }
-    out
 }
 
 /// Reads a CAR: its roots and its blocks, each **verified** against its CID (a block that does

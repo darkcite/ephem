@@ -89,6 +89,21 @@ pub fn attempt(c: &Challenge, effort: u32, mem: &mut SolverMemory) -> Option<[u8
     None
 }
 
+/// The poster's loop: up to `attempts` nonces from `n` (counting up from its low bytes), the
+/// first that solves. `n` is left at the solving nonce (or the next one to try); `c` must have
+/// been built with it.
+pub fn solve(c: &mut Challenge, n: &mut [u8; 16], effort: u32, mem: &mut SolverMemory, attempts: u32) -> Option<[u8; SOLUTION_LEN]> {
+    for _ in 0..attempts {
+        if let Some(s) = attempt(c, effort, mem) {
+            return Some(s);
+        }
+        let low = u64::from_le_bytes(n[..8].try_into().expect("8 bytes")).wrapping_add(1);
+        n[..8].copy_from_slice(&low.to_le_bytes());
+        c.set_nonce(n);
+    }
+    None
+}
+
 /// `seed(epoch) = BLAKE2b-keyed(pow secret, "ephem-board-seed-v1" ‖ epoch)`: unpredictable before
 /// its epoch, the same on every device of the owner (the secret is derived from the identity).
 pub fn seed(secret: &[u8; 32], epoch: u32) -> [u8; 32] {

@@ -104,7 +104,8 @@ pub fn reachable(root: &Cid, blocks: Vec<Block>) -> Vec<Block> {
     out
 }
 
-fn links(v: &Value, out: &mut Vec<Cid>) {
+/// The CIDs `v` links to, appended to `out`.
+pub fn links(v: &Value, out: &mut Vec<Cid>) {
     match v {
         Value::Link(c) => out.push(c.clone()),
         Value::Array(a) => a.iter().for_each(|x| links(x, out)),

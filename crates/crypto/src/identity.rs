@@ -152,6 +152,19 @@ impl Identity {
         (sign, derive(&self.seed, &info[..m + 4]))
     }
 
+    /// Board number `index` (docs/BOARDS.md G.4): `[signing seed, onion seed, PoW secret]`, each
+    /// `HKDF(seed, "p2pchat/board…/" ‖ u32 index)`. One-way from the identity seed, from each
+    /// other and from every channel key. The caller wipes all three.
+    pub fn board_seeds(&self, index: u32) -> [[u8; 32]; 3] {
+        let mut info = [0u8; 28];
+        let mut one = |label: &[u8]| {
+            info[..label.len()].copy_from_slice(label);
+            info[label.len()..label.len() + 4].copy_from_slice(&index.to_be_bytes());
+            derive(&self.seed, &info[..label.len() + 4])
+        };
+        [one(b"p2pchat/board/"), one(b"p2pchat/board-onion/"), one(b"p2pchat/board-pow/")]
+    }
+
     /// The onion service public key (the `.onion` address is its base32 form).
     pub fn onion_pk(&self) -> [u8; 32] {
         let mut s = self.onion_secret();
@@ -198,6 +211,21 @@ mod tests {
         let l = a.peer_id().lock_name();
         assert!(l.starts_with(b"p2pchat-id-") && l[11..].iter().all(u8::is_ascii_hexdigit));
         assert_eq!(&l[11..17], &h[5..11], "same hash prefix as the handle");
+    }
+
+    #[test]
+    fn board_keys_are_separate() {
+        let a = Identity::from_seed(&[1; 32]);
+        let [sign, onion, pow] = a.board_seeds(0);
+        let [sign1, ..] = a.board_seeds(1);
+        let (ch_sign, ch_onion) = a.channel_seeds(0);
+        let all = [sign, onion, pow, sign1, ch_sign, ch_onion, a.onion_secret()];
+        for i in 0..all.len() {
+            for j in i + 1..all.len() {
+                assert_ne!(all[i], all[j], "{i} and {j}");
+            }
+        }
+        assert_eq!(a.board_seeds(0), Identity::from_seed(&[1; 32]).board_seeds(0), "the same on every device");
     }
 
     #[test]

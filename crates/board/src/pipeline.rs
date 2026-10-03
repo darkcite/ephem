@@ -442,6 +442,12 @@ impl Intake {
         self.advertise(now_s);
     }
 
+    /// More than half the posts cap used this minute: publishing slows to once every 5 s
+    /// (G.5.3).
+    pub fn busy(&self) -> bool {
+        self.posts_this_minute * 2 > caps::POSTS_PER_MIN
+    }
+
     /// The owner reopens new threads (after R8 closed them).
     pub fn reopen_threads(&mut self) {
         self.threads_closed = false;

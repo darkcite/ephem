@@ -147,19 +147,27 @@ impl Thread {
         self.full.truncate(idx / limits::CHUNK);
     }
 
-    /// The chunk blocks (cached full ones, a fresh last one) and the thread block.
-    fn blocks(&mut self, out: &mut Vec<Block>) -> Cid {
+    /// The chunk blocks (cached full ones, a fresh last one) and the thread block. Full chunks
+    /// the caller already `held` are not copied out again; every CID goes to `live`.
+    fn blocks(&mut self, out: &mut Vec<Block>, held: &dyn Fn(&Cid) -> bool, live: &mut Vec<Cid>) -> Cid {
         let n_full = self.entries.len() / limits::CHUNK;
         while self.full.len() < n_full {
             let i = self.full.len();
             self.full.push(chunk_block(&self.entries[i * limits::CHUNK..(i + 1) * limits::CHUNK]));
         }
-        let mut links: Vec<Value> = self.full.iter().map(|(c, _)| Value::Link(c.clone())).collect();
-        out.extend(self.full.iter().cloned());
+        let mut links: Vec<Value> = Vec::with_capacity(n_full + 1);
+        for (c, b) in &self.full {
+            links.push(Value::Link(c.clone()));
+            live.push(c.clone());
+            if !held(c) {
+                out.push((c.clone(), b.clone()));
+            }
+        }
         let rest = &self.entries[n_full * limits::CHUNK..];
         if !rest.is_empty() {
             let b = chunk_block(rest);
             links.push(Value::Link(b.0.clone()));
+            live.push(b.0.clone());
             out.push(b);
         }
         let t = cbor::map(vec![
@@ -172,6 +180,7 @@ impl Thread {
         ])
         .encode();
         let cid = Cid::of(DAG_CBOR, &t);
+        live.push(cid.clone());
         out.push((cid.clone(), t));
         cid
     }
@@ -306,7 +315,7 @@ impl Board {
         let i = self.threads.iter().position(|t| t.no == no).ok_or(BoardError::NotFound)?;
         let mut t = self.threads.remove(i);
         let mut blocks = Vec::with_capacity(t.entries.len() / limits::CHUNK + 2);
-        let cid = t.blocks(&mut blocks);
+        let cid = t.blocks(&mut blocks, &|_| false, &mut Vec::new());
         self.archive.push(Archived { no, sub: t.sub.clone(), ex: t.excerpt(), pruned: now_s, thread: cid, blocks });
         self.expire_archive(now_s);
         Ok(())
@@ -405,20 +414,29 @@ impl Board {
 
     /// Every block of the current state and the root CID (the root block comes last).
     pub fn build(&mut self, now_s: u64) -> (Cid, Vec<Block>) {
+        self.build_into(now_s, &|_| false, &mut Vec::new())
+    }
+
+    /// As [`Self::build`], but blocks that never change once written (full chunks, archived
+    /// threads) are left out when the caller already `held` them: a publish copies only what
+    /// changed, not the whole board (G.5.3). `live` gets every CID of the new state, for the
+    /// store's garbage collection.
+    pub fn build_into(&mut self, now_s: u64, held: &dyn Fn(&Cid) -> bool, live: &mut Vec<Cid>) -> (Cid, Vec<Block>) {
         self.expire_archive(now_s);
         self.trim_dels(now_s);
         let mut out: Vec<Block> = Vec::with_capacity(16 + self.threads.len() * 3);
-        let add = |out: &mut Vec<Block>, v: Value| {
+        let add = |out: &mut Vec<Block>, live: &mut Vec<Cid>, v: Value| {
             let b = v.encode();
             let c = Cid::of(DAG_CBOR, &b);
+            live.push(c.clone());
             out.push((c.clone(), b));
             c
         };
-        let manifest = add(&mut out, self.manifest_value());
+        let manifest = add(&mut out, live, self.manifest_value());
         let mut buckets: Vec<Vec<Value>> = vec![Vec::new(); limits::BUCKETS];
         let mut pins = Vec::with_capacity(self.threads.len());
         for t in &mut self.threads {
-            let cid = t.blocks(&mut out);
+            let cid = t.blocks(&mut out, held, live);
             buckets[(t.no % limits::BUCKETS as u64) as usize].push(cbor::map(vec![
                 ("no", Value::Uint(t.no)),
                 ("thread", Value::Bytes(cid.to_bytes())),
@@ -431,8 +449,8 @@ impl Board {
             ]));
             pins.push(Value::Link(cid));
         }
-        let cat: Vec<Value> = buckets.into_iter().map(|t| Value::Link(add(&mut out, cbor::map(vec![("t", Value::Array(t))])))).collect();
-        let threads = add(&mut out, cbor::map(vec![("t", Value::Array(pins))]));
+        let cat: Vec<Value> = buckets.into_iter().map(|t| Value::Link(add(&mut out, live, cbor::map(vec![("t", Value::Array(t))])))).collect();
+        let threads = add(&mut out, live, cbor::map(vec![("t", Value::Array(pins))]));
         let mut arch = Vec::with_capacity(self.archive.len());
         let mut arch_pins = Vec::with_capacity(self.archive.len());
         for a in &self.archive {
@@ -444,13 +462,19 @@ impl Board {
                 ("thread", Value::Bytes(a.thread.to_bytes())),
             ]));
             arch_pins.push(Value::Link(a.thread.clone()));
-            out.extend(a.blocks.iter().cloned());
+            for (c, b) in &a.blocks {
+                live.push(c.clone());
+                if !held(c) {
+                    out.push((c.clone(), b.clone()));
+                }
+            }
         }
-        let archive = add(&mut out, cbor::map(vec![("t", Value::Array(arch))]));
-        let arch_threads = add(&mut out, cbor::map(vec![("t", Value::Array(arch_pins))]));
-        let dels = add(&mut out, cbor::map(vec![("d", Value::Array(self.dels.iter().map(|(h, at)| cbor::map(vec![("h", Value::Bytes(h.to_vec())), ("at", Value::Uint(*at))])).collect()))]));
+        let archive = add(&mut out, live, cbor::map(vec![("t", Value::Array(arch))]));
+        let arch_threads = add(&mut out, live, cbor::map(vec![("t", Value::Array(arch_pins))]));
+        let dels = add(&mut out, live, cbor::map(vec![("d", Value::Array(self.dels.iter().map(|(h, at)| cbor::map(vec![("h", Value::Bytes(h.to_vec())), ("at", Value::Uint(*at))])).collect()))]));
         let modlog = add(
             &mut out,
+            live,
             cbor::map(vec![(
                 "a",
                 Value::Array(
@@ -462,6 +486,7 @@ impl Board {
             )]),
         );
         let own_cid = Cid::of(RAW, &self.own);
+        live.push(own_cid.clone());
         out.push((own_cid.clone(), self.own.clone()));
         let root = cbor::map(vec![
             ("v", Value::Uint(1)),
@@ -478,7 +503,7 @@ impl Board {
             ("next_no", Value::Uint(self.next_no)),
             ("updated", Value::Uint(now_s)),
         ]);
-        let rcid = add(&mut out, root);
+        let rcid = add(&mut out, live, root);
         (rcid, out)
     }
 
