@@ -48,7 +48,7 @@ const ANSWER_MS: u32 = 20_000;
 /// The whole of one request, write included.
 const SERVE_MS: u32 = 60_000;
 const FETCH_MS: u32 = 90_000;
-const READ_ROUNDS: u32 = 3;
+const READ_ROUNDS: u32 = 4;
 /// The publish loop's period; `Host::due` decides.
 const TICK_MS: u32 = 250;
 
