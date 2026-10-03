@@ -29,6 +29,7 @@ let current = null;                  // on screen: { read, onions, thread } | { 
 const views = new Map();             // board name → last verified view (shown at once, B-UX-3)
 let box = null;                      // the reply box's pre-solve: { key, promise }
 let refreshTimer = 0;
+let ownTimer = 0;
 
 export function init(c) {
   ctx = c;
@@ -234,6 +235,11 @@ async function showOwn(i, thread = 0) {
   }
   renderOwned();
   renderOwn();
+  // The onion's reachability and the counters change without a publish.
+  clearInterval(ownTimer);
+  ownTimer = setInterval(() => {
+    if (current?.own === i && !$('v-board-own').hidden && !document.activeElement?.closest?.('#v-board-own')) renderOwn();
+  }, 3_000);
 }
 
 /** The owner view of the board on screen (local: what this tab serves). */
