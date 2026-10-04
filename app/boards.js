@@ -53,6 +53,7 @@ export function init(c) {
   channels.setBoardsHook(() => {
     renderFollows();
     scanOwned();
+    resumeOnce();
   }, () => {
     // The Following tab opened and only boards are followed: the one on screen last, or the first.
     if (current?.read) return showBoard(current.read, current.onions, current.thread), true;
@@ -60,7 +61,7 @@ export function init(c) {
     return f ? (showBoard(f.n, f.o), true) : false;
   }, openLink);
   if (ctx.TOR && ctx.ch) adopt(new ctx.mod.BoardApp(ctx.ch));
-  if (ctx.TOR) channels.torIsUp().then(resumeMirrors);
+  resumeOnce();
   setInterval(publishIpfs, 60_000);
   // Earlier versions kept board data in localStorage (catalogs, mirror keys, lists): gone.
   try {
@@ -71,6 +72,7 @@ export function init(c) {
 function adopt(b) {
   boards = b;
   boards.set_listener((index, why) => {
+    if (why === 'mirror') return persistMirror(index); // `index` is the mirrored board's name
     if (why === 'fenced') return standDown(index, 'Another of your devices published this board: it hosts it now, and this tab stopped.');
     persist(index);
     if (current?.own === index && !$('v-board-own').hidden) renderOwn();
@@ -161,6 +163,20 @@ async function persist(index) {
     await storeCall({ op: 'apply', name, record: d.record, added: d.added, removed: d.removed }, transfer);
   } catch (e) {
     ctx.error?.(`The board could not be stored: ${e.message}`);
+  }
+}
+
+/** A mirror's new version to this tab's store (`bmirrors/`): after a reload it serves this copy
+ *  at once, owner online or not. A temporary identity keeps nothing on disk. */
+async function persistMirror(name) {
+  let d;
+  try { d = boards.mirror_delta(name); } catch { return; }
+  if (!signedIn()) return;
+  const transfer = d.added.map(([, b]) => b.buffer).concat(d.record.length ? [d.record.buffer] : []);
+  try {
+    await storeCall({ op: 'apply', kind: 'bmirrors', name, record: d.record, added: d.added, removed: d.removed }, transfer);
+  } catch (e) {
+    console.info('board mirror store:', e?.message || e);
   }
 }
 
@@ -588,7 +604,9 @@ async function showBoard(name, onions, thread = 0) {
   refreshTimer = setInterval(() => { if (!$('v-board').hidden && current?.read === name) refresh(); }, REFRESH_MS);
 }
 
-async function refresh() {
+/** Reads the board on screen; `fresh`: on new Tor circuits from the first try, which fetches
+ *  the onion's descriptor again (after the owner moved to another device, G.13). */
+async function refresh(fresh = false) {
   const c = current;
   if (!c?.read) return;
   const f = follows().find((x) => x.n === c.read);
@@ -597,7 +615,9 @@ async function refresh() {
   const onions = [...new Set([known?.host, ...(known?.mirrors || []), ...(f?.o || []), ...c.onions].filter(Boolean))].slice(0, READ_ONIONS);
   try {
     const b = await net();
-    const v = JSON.parse(await b.read(c.read, onions.join(','), f?.s || 0, c.thread ? [c.thread] : []));
+    if (fresh && current === c) $('bd-source').textContent = 'Reading again on a fresh Tor connection…';
+    const v = JSON.parse(await b.read(c.read, onions.join(','), f?.s || 0, c.thread ? [c.thread] : [], fresh));
+    $('b-bd-fresh').hidden = true;
     views.set(c.read, v);
     cacheView(v);
     if (f) {
@@ -613,6 +633,7 @@ async function refresh() {
     if (current === c) renderBoard(v);
   } catch (e) {
     if (f) f.err = true;
+    $('b-bd-fresh').hidden = current !== c;
     if (current === c) $('bd-source').textContent = views.has(c.read) ? `Showing the last verified version: the board did not answer (${e?.message || e}).` : `The board could not be read: ${e?.message || e}`;
   }
   renderFollows();
@@ -759,6 +780,7 @@ async function mirror() {
     const v = views.get(c.read);
     const sources = [...new Set([v?.host, ...(v?.mirrors || []), ...c.onions].filter(Boolean))].slice(0, READ_ONIONS);
     const onion = await b.mirror(c.read, sources.join(','), mirrorSeed(b, c.read));
+    await persistMirror(c.read);
     note.textContent = `Mirroring on ${onion}. It refreshes every 10 s while this tab is open${signedIn() ? ', and starts again when Ephem opens with this identity' : ''}. Send this address to the board's owner to sign it into the board.`;
     rememberMirror(c.read, sources);
     $('bd-mirror-ipfs-row').hidden = false;
@@ -828,12 +850,34 @@ function rememberMirror(name, onions) {
   savePrefs(p);
 }
 
-/** Mirrors this identity kept start again once Tor is up. */
+/** Once per identity (its mirror list is in its key file), when Tor is up. */
+let resumedFor = null;
+function resumeOnce() {
+  const who = ctx.app.identity_label() || '';
+  if (!ctx.TOR || resumedFor === who) return;
+  resumedFor = who;
+  channels.torIsUp().then(resumeMirrors);
+}
+
+/** Mirrors this identity kept start again once Tor is up: from their stored copy at once (it
+ *  verifies, and serves even while the owner is offline), else from the network. */
 async function resumeMirrors() {
   const list = prefs().m;
   if (!list.length) return;
   const b = await net();
-  for (const m of list) b.mirror(m.n, m.o.join(','), mirrorSeed(b, m.n)).catch((e) => console.info('board mirror:', e?.message || e));
+  for (const m of list) {
+    const seed = mirrorSeed(b, m.n);
+    try {
+      const had = await storeCall({ op: 'load', kind: 'bmirrors', name: m.n });
+      if (had.record) {
+        b.mirror_open(m.n, m.o.join(','), seed, had.record, had.blocks);
+        continue;
+      }
+    } catch (e) {
+      console.info('board mirror: the stored copy is not used:', e?.message || e);
+    }
+    b.mirror(m.n, m.o.join(','), seed).then(() => persistMirror(m.n)).catch((e) => console.info('board mirror:', e?.message || e));
+  }
 }
 
 const ipfsOn = (name) => !!name && prefs().i.includes(name);
@@ -1024,7 +1068,7 @@ export async function resend(draft) {
 
 /** Reads and verifies board `name` with the given threads (numbers). */
 export async function read(name, onions, threads = [], minSeq = 0) {
-  return JSON.parse(await (await net()).read(name, onions, minSeq, threads.map(Number)));
+  return JSON.parse(await (await net()).read(name, onions, minSeq, threads.map(Number), false));
 }
 
 // ---- wiring -----------------------------------------------------------------------------------
@@ -1061,7 +1105,8 @@ function wire() {
   };
   $('b-bd-follow').onclick = follow;
   $('b-bd-unfollow').onclick = unfollow;
-  $('b-bd-refresh').onclick = refresh;
+  $('b-bd-refresh').onclick = () => refresh();
+  $('b-bd-fresh').onclick = () => refresh(true);
   $('b-bd-catalog').onclick = () => { current.thread = 0; setBox(); const v = views.get(current.read); if (v) renderBoard(v); };
   $('b-bd-mirror').onclick = mirror;
   $('bd-body').onfocus = () => { presolve()?.catch((e) => { $('bd-post-state').textContent = REASONS[String(e?.message).match(/E_BOARD_[A-Z]+/)?.[0]] || String(e?.message || e); }); };

@@ -7,8 +7,10 @@
 //   solved while typing), a reply, greentext → Follow (the board is in Following, ▦) → the owner
 //   sees the posts and moderates (delete with its undo bar) → a second reader mirrors the board
 //   and the owner signs the mirror in → Tor Browser reads the plain pages (catalog and thread,
-//   no scripts) → the owner's tab closes → a new reader opens the link and reads from the
-//   mirror; posting says E_BOARD_OFFLINE and keeps the draft.
+//   no scripts) → the owner's tab closes → the mirror's tab reloads and serves its stored copy
+//   (OPFS) with the owner still offline → a new reader opens the link and reads from the
+//   mirror; posting says E_BOARD_OFFLINE and keeps the draft → a read that fails offers "Try
+//   again on a fresh connection".
 //
 // Stale mode (a record past its 72 h) is the native test `stale_mode_after_expiry`.
 // Needs `checks/tor-lab/lab.sh up` and `./build.sh`; LIVE=1 for the real Tor network.
@@ -109,9 +111,21 @@ try {
   await a.waitForFunction(() => [...document.querySelectorAll('#bd-posts li')].some((l) => l.classList.contains('deleted')), null, { timeout: T });
   check('readers see it deleted', (await bodies(a)).includes('(deleted)'));
 
-  // ---- reader B mirrors; the owner signs the mirror in ----
+  // ---- reader B (a saved identity: its mirror is kept on disk) mirrors; the owner signs it in ----
   const b = await page('reader B');
-  await b.goto(link.replace('/tor.html#', '/tor.html?b#'));
+  await b.goto(`${base}/tor.html?b`);
+  await b.waitForSelector('#v-start:not([hidden])');
+  await toSettings(b);
+  await b.click('#b-id-save');
+  await b.fill('#i-label', 'Mirror B');
+  await b.fill('#i-pass', PASS);
+  await b.fill('#i-pass2', PASS);
+  await Promise.all([b.waitForEvent('download'), b.click('#b-id-do-save')]);
+  await torReady(b, 'reader B');
+  await b.click('#tab-follow');
+  await b.click('#b-follow-new');
+  await b.fill('#t-channel', link);
+  await b.click('#b-channel-open');
   await b.waitForFunction(() => /Verified through Tor/.test(document.querySelector('#bd-source')?.textContent), null, { timeout: T });
   await b.click('#b-bd-mirror');
   await b.waitForFunction(() => /Mirroring on [a-z2-7]{56}\.onion/.test(document.querySelector('#bd-mirror-note')?.textContent), null, { timeout: T });
@@ -132,9 +146,20 @@ try {
         && th.status === 200 && th.body.includes('&gt;be me') && th.body.includes('(deleted)') && mp.status === 200 && mp.body.includes('Served by a mirror'), `${cat.status} ${th.status} ${mp.status}`);
   }
 
-  // ---- the owner goes offline: read from the mirror, posting keeps the draft ----
+  // ---- the owner goes offline; the mirror's tab reloads and serves its stored copy ----
   await b.waitForTimeout(12_000); // the mirror's next pull (10 s) has the signed mirror list
   await o.close();
+  await b.reload();
+  await b.waitForSelector('#v-start:not([hidden])');
+  await toSettings(b);
+  await b.locator('#slots li', { hasText: 'Mirror B' }).locator('button', { hasText: 'Sign in' }).click();
+  await b.locator('#slots li input[type=password]').fill(PASS);
+  await b.locator('#slots li', { hasText: 'Mirror B' }).locator('button', { hasText: 'Sign in' }).click();
+  await b.waitForFunction(() => /Mirror B/.test(document.querySelector('#id-desc')?.textContent));
+  const tb = Date.now();
+  const boardName = link.match(/#B=([^&]+)/)[1];
+  const back = await b.waitForFunction((n) => globalThis.ephemBoards?.app.mirror_seq(n) > 0, boardName, { timeout: T, polling: 500 }).then(() => true, () => false);
+  check('owner offline, the mirror reloads: it serves its stored copy at once (no source answers)', back, `${Date.now() - tb} ms after sign-in`);
   const c = await page('reader C');
   const t0 = Date.now();
   await c.goto(link2.replace('/tor.html#', '/tor.html?c#'));
@@ -145,6 +170,14 @@ try {
   const said = await postFromBox(c, '', 'written while the host is away');
   check('posting while the host is offline says so (E_BOARD_OFFLINE) and keeps the draft',
     /host is offline/.test(said) && (await c.inputValue('#bd-body')) === 'written while the host is away', said);
+
+  // ---- a read that fails offers a fresh connection (G.13: a cached descriptor of a moved host) ----
+  const d = await page('reader D');
+  await d.goto(link.replace('/tor.html#', '/tor.html?d#')); // the owner's onion only: offline
+  await d.waitForSelector('#b-bd-fresh:not([hidden])', { timeout: 8 * 60_000 });
+  await d.click('#b-bd-fresh');
+  const again = await d.waitForFunction(() => /fresh Tor connection/.test(document.querySelector('#bd-source')?.textContent), null, { timeout: 10_000 }).then(() => true, () => false);
+  check('a failed read shows "Try again on a fresh connection", which reads again on new circuits', again);
 
   check('no unexpected page errors', unexpected(problems).length === 0, unexpected(problems).join(' | '));
 } catch (e) {

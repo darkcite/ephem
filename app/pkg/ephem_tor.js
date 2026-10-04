@@ -1388,6 +1388,72 @@ export class BoardApp {
         }
     }
     /**
+     * What mirror `name`'s store must write and delete since the last call (as `delta`).
+     * @param {string} name
+     * @returns {object}
+     */
+    mirror_delta(name) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.boardapp_mirror_delta(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Serves board `name`'s mirror at once from this tab's store (`record`, `[[cid, bytes]…]`),
+     * owner online or not, then keeps it current from `onions` as `mirror` does. The copy must
+     * verify (an expired record is served, readers mark it stale) and be complete. Returns
+     * the mirror's onion.
+     * @param {string} name
+     * @param {string} onions
+     * @param {Uint8Array} seed
+     * @param {Uint8Array} record
+     * @param {Array<any>} blocks
+     * @returns {string}
+     */
+    mirror_open(name, onions, seed, record, blocks) {
+        let deferred6_0;
+        let deferred6_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(onions, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passArray8ToWasm0(seed, wasm.__wbindgen_export);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passArray8ToWasm0(record, wasm.__wbindgen_export);
+            const len3 = WASM_VECTOR_LEN;
+            wasm.boardapp_mirror_open(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, addHeapObject(blocks));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr5 = r0;
+            var len5 = r1;
+            if (r3) {
+                ptr5 = 0; len5 = 0;
+                throw takeObject(r2);
+            }
+            deferred6_0 = ptr5;
+            deferred6_1 = len5;
+            return getStringFromWasm0(ptr5, len5);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export5(deferred6_0, deferred6_1, 1);
+        }
+    }
+    /**
      * The onion seed of this identity's mirror of board `name` (stable across visits, BF-5);
      * the page passes it to `mirror`. Needs a signed-in identity.
      * @param {string} name
@@ -1671,13 +1737,17 @@ export class BoardApp {
      * Reads board `name` from the first onion (comma-separated: owner, mirrors) that serves a
      * valid state, with the `threads` asked for (numbers). Resolves to the JSON view
      * ([`view_json`]).
+     * `fresh`: every request on new circuits from the first round, so the onion's descriptor is
+     * fetched again (a reader whose Tor client kept the descriptor of a device that no longer
+     * hosts the board, G.13: "Try again on a fresh connection").
      * @param {string} name
      * @param {string} onions
      * @param {number} min_seq
      * @param {Float64Array} threads
+     * @param {boolean} fresh
      * @returns {Promise<any>}
      */
-    read(name, onions, min_seq, threads) {
+    read(name, onions, min_seq, threads, fresh) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
@@ -1686,7 +1756,7 @@ export class BoardApp {
             const len1 = WASM_VECTOR_LEN;
             const ptr2 = passArrayF64ToWasm0(threads, wasm.__wbindgen_export);
             const len2 = WASM_VECTOR_LEN;
-            wasm.boardapp_read(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, min_seq, ptr2, len2);
+            wasm.boardapp_read(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, min_seq, ptr2, len2, fresh);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
@@ -3183,7 +3253,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_6772(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_6792(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -3284,7 +3354,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_6772_170(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_6792_172(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -3314,7 +3384,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_6772_171(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_6792_173(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -3518,17 +3588,17 @@ function __wbg_get_imports() {
         },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 847, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_6737);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_6757);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000002: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 647, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_4832);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_4851);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000003: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 384, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_3111);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_3130);
             return addHeapObject(ret);
         },
         __wbindgen_generic_0000000000000004: function(arg0) {
@@ -3560,30 +3630,30 @@ function __wbg_get_imports() {
     };
 }
 
-function __wasm_bindgen_func_elem_3111(arg0, arg1) {
-    wasm.__wasm_bindgen_func_elem_3111(arg0, arg1);
+function __wasm_bindgen_func_elem_3130(arg0, arg1) {
+    wasm.__wasm_bindgen_func_elem_3130(arg0, arg1);
 }
 
-function __wasm_bindgen_func_elem_4832(arg0, arg1, arg2) {
-    wasm.__wasm_bindgen_func_elem_4832(arg0, arg1, addHeapObject(arg2));
+function __wasm_bindgen_func_elem_4851(arg0, arg1, arg2) {
+    wasm.__wasm_bindgen_func_elem_4851(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_6772(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_6772(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_6792(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_6792(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_6772_170(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_6772_170(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_6792_172(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_6792_172(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_6772_171(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_6772_171(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_6792_173(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_6792_173(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
-function __wasm_bindgen_func_elem_6737(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_6757(arg0, arg1, arg2) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        wasm.__wasm_bindgen_func_elem_6737(retptr, arg0, arg1, addHeapObject(arg2));
+        wasm.__wasm_bindgen_func_elem_6757(retptr, arg0, arg1, addHeapObject(arg2));
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         if (r1) {

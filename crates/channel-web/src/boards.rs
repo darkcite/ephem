@@ -32,7 +32,7 @@ use crate::{ChannelApp, NEWEST_GRACE_MS, PORT, State, err, json, now_s, with_tim
 use ephem_board::board::{Board, Entry};
 use std::collections::{HashMap, HashSet};
 use ephem_board::gateway::{self, Answer, Route, SHORT, Served};
-use ephem_board::host::Host;
+use ephem_board::host::{Delta, Host};
 use ephem_board::own::Switches;
 use ephem_board::pipeline::{Efforts, Intake, Next, PowInfo, Refusal, submission};
 use ephem_board::post::{Signed, trip_text};
@@ -130,10 +130,42 @@ impl Boards {
     }
 }
 
-/// What a mirror serves: the last verified version.
+/// What a mirror serves: the last verified version, and what its store (OPFS `bmirrors/`) has
+/// not written yet.
 pub(crate) struct Mirror {
     served: Served,
     seq: u64,
+    delta: Delta,
+}
+
+/// The store's changes from `prev` (none: everything) to `next`, after the `pending` ones the
+/// page has not taken yet.
+fn mirror_delta(pending: Delta, prev: Option<&Served>, next: &Served) -> Delta {
+    let had: HashSet<&Cid> = prev.map(|p| p.blocks().map(|(c, _)| c).collect()).unwrap_or_default();
+    let now: HashSet<&Cid> = next.blocks().map(|(c, _)| c).collect();
+    let mut d = pending;
+    d.added.retain(|(c, _)| now.contains(c));
+    d.added.extend(next.blocks().filter(|(c, _)| !had.contains(c)).map(|(c, b)| (c.clone(), b.to_vec())));
+    d.removed.retain(|c| !now.contains(c));
+    d.removed.extend(had.iter().filter(|c| !now.contains(*c)).map(|c| (*c).clone()));
+    d.record = next.record.clone();
+    d
+}
+
+/// Starts serving mirror `m` of board `name` on the onion of `seed` and keeps it current.
+fn launch_mirror(st: &Rc<RefCell<State>>, tor: Rc<Tor>, name: Cid, m: Mirror, seed: &[u8; 32], sources: Vec<String>) -> Result<String, JsValue> {
+    let m = Rc::new(RefCell::new(m));
+    let nick = {
+        let mut s = st.borrow_mut();
+        s.launched += 1;
+        format!("bmirror{}", s.launched)
+    };
+    let svc = Rc::new(tor.launch(&nick, seed).map_err(err)?);
+    let onion = svc.onion().to_owned();
+    wasm_bindgen_futures::spawn_local(serve_loop(Rc::downgrade(&svc), Target::Mirror(Rc::downgrade(&m))));
+    wasm_bindgen_futures::spawn_local(pull_loop(Rc::downgrade(&m), Rc::downgrade(st), tor, name.clone(), sources));
+    st.borrow_mut().boards.mirrors.push(Mirrored { name, onion: onion.clone(), m, _svc: svc });
+    Ok(onion)
 }
 
 pub(crate) struct Mirrored {
@@ -387,17 +419,7 @@ impl BoardApp {
     /// What the store must write and delete since the last call: `{record, added: [[cid,
     /// bytes]…], removed: [cid…]}` (each block copied into JS once).
     pub fn delta(&self, index: u32) -> Result<js_sys::Object, JsValue> {
-        let d = self.host(index)?.borrow_mut().take_delta();
-        let added = js_sys::Array::new_with_length(d.added.len() as u32);
-        for (i, (c, b)) in d.added.iter().enumerate() {
-            added.set(i as u32, js_sys::Array::of2(&JsValue::from_str(&c.to_text()), &js_sys::Uint8Array::from(b.as_slice())).into());
-        }
-        let removed: js_sys::Array = d.removed.iter().map(|c| JsValue::from_str(&c.to_text())).collect();
-        let o = js_sys::Object::new();
-        js_sys::Reflect::set(&o, &"record".into(), &js_sys::Uint8Array::from(d.record.as_slice()))?;
-        js_sys::Reflect::set(&o, &"added".into(), &added)?;
-        js_sys::Reflect::set(&o, &"removed".into(), &removed)?;
-        Ok(o)
+        delta_js(self.host(index)?.borrow_mut().take_delta())
     }
 
     /// The owner's view of board `index`: `{name, onion, seq, threads, next_no, paused,
@@ -614,19 +636,52 @@ impl BoardApp {
             if st.borrow().generation != generation {
                 return Err(err("the identity changed meanwhile"));
             }
-            let m = Rc::new(RefCell::new(first.ok_or_else(|| err(last))?));
-            let nick = {
-                let mut s = st.borrow_mut();
-                s.launched += 1;
-                format!("bmirror{}", s.launched)
-            };
-            let svc = Rc::new(tor.launch(&nick, &seed).map_err(err)?);
-            let onion = svc.onion().to_owned();
-            wasm_bindgen_futures::spawn_local(serve_loop(Rc::downgrade(&svc), Target::Mirror(Rc::downgrade(&m))));
-            wasm_bindgen_futures::spawn_local(pull_loop(Rc::downgrade(&m), tor, name.clone(), sources));
-            st.borrow_mut().boards.mirrors.push(Mirrored { name, onion: onion.clone(), m, _svc: svc });
+            if let Some(m) = st.borrow().boards.mirrors.iter().find(|m| m.name == name) {
+                return Ok(JsValue::from_str(&m.onion)); // opened from the store meanwhile
+            }
+            let onion = launch_mirror(&st, tor, name, first.ok_or_else(|| err(last))?, &seed, sources)?;
             Ok(JsValue::from_str(&onion))
         }))
+    }
+
+    /// Serves board `name`'s mirror at once from this tab's store (`record`, `[[cid, bytes]…]`),
+    /// owner online or not, then keeps it current from `onions` as `mirror` does. The copy must
+    /// verify (an expired record is served, readers mark it stale) and be complete. Returns
+    /// the mirror's onion.
+    pub fn mirror_open(&self, name: &str, onions: &str, seed: &[u8], record: &[u8], blocks: js_sys::Array) -> Result<String, JsValue> {
+        let tor = self.tor()?;
+        let name = Cid::parse(name).filter(|c| c.ed25519_key().is_some()).ok_or_else(|| err("not a board name"))?;
+        let seed: [u8; 32] = seed.try_into().map_err(|_| err("mirror seed must be 32 bytes"))?;
+        if let Some(m) = self.st.borrow().boards.mirrors.iter().find(|m| m.name == name) {
+            return Ok(m.onion.clone());
+        }
+        let sources: Vec<String> = list(onions).into_iter().filter(|o| is_onion(o)).take(1 + ephem_board::limits::MIRRORS).collect();
+        let mut held: Vec<Block> = Vec::with_capacity(blocks.length() as usize);
+        for pair in blocks.iter() {
+            let pair = js_sys::Array::from(&pair);
+            let cid = pair.get(0).as_string().and_then(|c| Cid::parse(&c)).ok_or_else(|| err("store: a block name"))?;
+            let bytes = js_sys::Uint8Array::new(&pair.get(1)).to_vec();
+            if cid.verifies(&bytes) {
+                held.push((cid, bytes));
+            }
+        }
+        let v = verify::verify_stale(&name, record, &held, now_ms(), 0, &[]).map_err(|e| err(format!("the stored copy: {e:?}")))?;
+        let own = held.iter().find(|(c, _)| *c == v.root).and_then(|(_, b)| ephem_channel::cbor::Value::decode(b)).and_then(|r| r.get("own").and_then(ephem_channel::cbor::Value::link).cloned());
+        let need: Vec<Cid> = v.catalog.iter().map(|c| c.thread.clone()).chain(v.archive.iter().map(|a| a.thread.clone())).chain(own).collect();
+        let by: HashMap<&Cid, &[u8]> = held.iter().map(|(c, b)| (c, b.as_slice())).collect();
+        if !complete(&by, &need) {
+            return Err(err("the stored copy is incomplete"));
+        }
+        let served = Served::new(name.clone(), v.root.clone(), record.to_vec(), held, ephem_board::page::Served::Mirror).ok_or_else(|| err("the stored copy is not a board"))?;
+        launch_mirror(&self.st, tor, name, Mirror { served, seq: v.sequence, delta: Delta::default() }, &seed, sources)
+    }
+
+    /// What mirror `name`'s store must write and delete since the last call (as `delta`).
+    pub fn mirror_delta(&self, name: &str) -> Result<js_sys::Object, JsValue> {
+        let st = self.st.borrow();
+        let m = st.boards.mirrors.iter().find(|m| m.name.to_text() == name).ok_or_else(|| err("not mirrored here"))?;
+        let d = std::mem::take(&mut m.m.borrow_mut().delta);
+        delta_js(d)
     }
 
     /// The onion seed of this identity's mirror of board `name` (stable across visits, BF-5);
@@ -713,7 +768,10 @@ impl BoardApp {
     /// Reads board `name` from the first onion (comma-separated: owner, mirrors) that serves a
     /// valid state, with the `threads` asked for (numbers). Resolves to the JSON view
     /// ([`view_json`]).
-    pub fn read(&self, name: &str, onions: &str, min_seq: f64, threads: Vec<f64>) -> Result<js_sys::Promise, JsValue> {
+    /// `fresh`: every request on new circuits from the first round, so the onion's descriptor is
+    /// fetched again (a reader whose Tor client kept the descriptor of a device that no longer
+    /// hosts the board, G.13: "Try again on a fresh connection").
+    pub fn read(&self, name: &str, onions: &str, min_seq: f64, threads: Vec<f64>, fresh: bool) -> Result<js_sys::Promise, JsValue> {
         let tor = self.tor()?;
         let name = Cid::parse(name).filter(|c| c.ed25519_key().is_some()).ok_or_else(|| err("not a board name"))?;
         let mut ok: Vec<String> = Vec::with_capacity(1 + ephem_board::limits::MIRRORS);
@@ -738,7 +796,7 @@ impl BoardApp {
                     .iter()
                     .map(|onion| {
                         let (tor, name, threads, known) = (tor.clone(), name.clone(), threads.clone(), known.clone());
-                        Box::pin(async move { with_timeout(FETCH_MS, read_from(&tor, &name, onion, min_seq as u64, &threads, round > 0, &known)).await.map_err(|e| format!("{onion}: {e}")) })
+                        Box::pin(async move { with_timeout(FETCH_MS, read_from(&tor, &name, onion, min_seq as u64, &threads, fresh || round > 0, &known)).await.map_err(|e| format!("{onion}: {e}")) })
                     })
                     .collect();
                 let mut best: Option<View> = None;
@@ -834,6 +892,21 @@ impl Draft {
     pub fn trip(&self) -> String {
         if self.trip { trip_text(&self.key.verifying_key().to_bytes()) } else { String::new() }
     }
+}
+
+/// A store delta for the page: `{record, added: [[cid, bytes]…], removed: [cid…]}` (each block
+/// copied into JS once).
+fn delta_js(d: Delta) -> Result<js_sys::Object, JsValue> {
+    let added = js_sys::Array::new_with_length(d.added.len() as u32);
+    for (i, (c, b)) in d.added.iter().enumerate() {
+        added.set(i as u32, js_sys::Array::of2(&JsValue::from_str(&c.to_text()), &js_sys::Uint8Array::from(b.as_slice())).into());
+    }
+    let removed: js_sys::Array = d.removed.iter().map(|c| JsValue::from_str(&c.to_text())).collect();
+    let o = js_sys::Object::new();
+    js_sys::Reflect::set(&o, &"record".into(), &js_sys::Uint8Array::from(d.record.as_slice()))?;
+    js_sys::Reflect::set(&o, &"added".into(), &added)?;
+    js_sys::Reflect::set(&o, &"removed".into(), &removed)?;
+    Ok(o)
 }
 
 fn onion_of(seed: &[u8; 32]) -> String {
@@ -1212,7 +1285,8 @@ impl Pulled {
             self.blocks.extend(old);
         }
         let served = Served::new(name.clone(), self.root, self.record, self.blocks, ephem_board::page::Served::Mirror)?;
-        Some(Mirror { served, seq: self.seq })
+        let delta = mirror_delta(Delta::default(), prev.map(|p| &p.served), &served);
+        Some(Mirror { served, seq: self.seq, delta })
     }
 }
 
@@ -1247,7 +1321,7 @@ async fn newest(tor: &Rc<Tor>, name: &Cid, sources: &[String], floor: u64, prefe
 
 /// Keeps a mirror current while it lives: the first source with a newer complete version wins
 /// (one stale or hostile source does not end the round, BW-4).
-async fn pull_loop(m: Weak<RefCell<Mirror>>, tor: Rc<Tor>, name: Cid, sources: Vec<String>) {
+async fn pull_loop(m: Weak<RefCell<Mirror>>, st: Weak<RefCell<State>>, tor: Rc<Tor>, name: Cid, sources: Vec<String>) {
     loop {
         sleep_ms(PULL_MS).await;
         let Some(mirror) = m.upgrade() else { return };
@@ -1259,8 +1333,16 @@ async fn pull_loop(m: Weak<RefCell<Mirror>>, tor: Rc<Tor>, name: Cid, sources: V
             match with_timeout(FETCH_MS * 2, pull(&tor, &name, o, Some((seq, &held)), false)).await {
                 Ok(Some(p)) => {
                     let next = p.into_mirror(&name, Some(&mirror.borrow()));
-                    if let Some(n) = next {
+                    if let Some(mut n) = next {
+                        // What the store has not taken yet stays owed.
+                        let pending = std::mem::take(&mut mirror.borrow_mut().delta);
+                        n.delta = mirror_delta(pending, Some(&mirror.borrow().served), &n.served);
                         *mirror.borrow_mut() = n;
+                        // The page writes it to the store (`mirror_delta`).
+                        let f = st.upgrade().and_then(|s| s.borrow().boards.listener.clone());
+                        if let Some(f) = f {
+                            let _ = f.call2(&JsValue::NULL, &JsValue::from_str(&name.to_text()), &JsValue::from_str("mirror"));
+                        }
                         break;
                     }
                     tracing::info!("board mirror: {o}: an incomplete copy");

@@ -55,7 +55,7 @@ async function start() {
     const t0 = performance.now();
     const at = new Date().toISOString();
     try {
-      const v = JSON.parse(await boards.read(name, onions, 0, []));
+      const v = JSON.parse(await boards.read(name, onions, 0, [], false));
       rows.push({ at, ok: true, ms: performance.now() - t0, seq: v.sequence });
     } catch (e) {
       rows.push({ at, ok: false, err: String(e?.message || e) });

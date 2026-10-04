@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright 2026 Anton (darkcite)
-// A hosted board's block store (docs/BOARDS.md G.5.3): one OPFS file per block,
-// `boards/<name>/b/<cid>`, plus `record.bin`, written with SyncAccessHandle from this Worker
-// (the page's createWritable costs milliseconds per file). Blocks arrive transferred, not
-// copied; each is written once. Messages, answered in order:
-//   { op: 'apply', name, record, added: [[cid, Uint8Array]…], removed: [cid…] } → { ok }
-//   { op: 'load', name } → { record, blocks: [[cid, Uint8Array]…] } (empty when none)
-//   { op: 'drop', name } → { ok } (the whole board)
+// The boards' block store (docs/BOARDS.md G.5.3): one OPFS file per block,
+// `<kind>/<name>/b/<cid>`, plus `record.bin`, written with SyncAccessHandle from this Worker
+// (the page's createWritable costs milliseconds per file). `kind`: `boards` (hosted here) or
+// `bmirrors` (this tab's mirrors, so a mirror serves its copy again at once after a reload,
+// owner offline or not). Blocks arrive transferred, not copied; each is written once.
+// Messages, answered in order:
+//   { op: 'apply', kind, name, record, added: [[cid, Uint8Array]…], removed: [cid…] } → { ok }
+//   { op: 'load', kind, name } → { record, blocks: [[cid, Uint8Array]…] } (empty when none)
+//   { op: 'drop', kind, name } → { ok } (the whole board)
 
-async function dir(name, create) {
+const KINDS = ['boards', 'bmirrors'];
+const kindOf = (k) => (KINDS.includes(k) ? k : 'boards');
+
+async function dir(kind, name, create) {
   const root = await navigator.storage.getDirectory();
-  const boards = await root.getDirectoryHandle('boards', { create });
+  const boards = await root.getDirectoryHandle(kindOf(kind), { create });
   const b = await boards.getDirectoryHandle(name, { create });
   return { b, blocks: await b.getDirectoryHandle('b', { create }) };
 }
@@ -38,8 +43,8 @@ async function get(d, file) {
 }
 
 const ops = {
-  async apply({ name, record, added, removed }) {
-    const { b, blocks } = await dir(name, true);
+  async apply({ kind, name, record, added, removed }) {
+    const { b, blocks } = await dir(kind, name, true);
     for (const [cid, bytes] of added) await put(blocks, cid, bytes);
     // The record last: a crash before it leaves the previous version whole (its blocks are
     // removed only after the new record is written).
@@ -47,17 +52,17 @@ const ops = {
     for (const cid of removed) await blocks.removeEntry(cid).catch(() => {});
     return { ok: true };
   },
-  async load({ name }) {
+  async load({ kind, name }) {
     let d;
-    try { d = await dir(name, false); } catch { return { record: null, blocks: [] }; }
+    try { d = await dir(kind, name, false); } catch { return { record: null, blocks: [] }; }
     const record = await get(d.b, 'record.bin').catch(() => null);
     const blocks = [];
     for await (const [cid] of d.blocks.entries()) blocks.push([cid, await get(d.blocks, cid)]);
     return { record, blocks };
   },
-  async drop({ name }) {
+  async drop({ kind, name }) {
     const root = await navigator.storage.getDirectory();
-    const boards = await root.getDirectoryHandle('boards', { create: true });
+    const boards = await root.getDirectoryHandle(kindOf(kind), { create: true });
     await boards.removeEntry(name, { recursive: true }).catch(() => {});
     return { ok: true };
   },
