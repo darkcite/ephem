@@ -139,6 +139,15 @@ try {
   const link2 = await o.inputValue('#bo-link');
   check('a reader mirrors the board; the owner signs the mirror into the board (the link names it)', link2.includes(`&m=${mirror}`));
 
+  // ---- "see also": the owner pastes a board link (here its own); readers see it named ----
+  await o.fill('#bo-see', `look at ${link2} too`);
+  await o.click('#b-bo-see');
+  const boardEnd = link.match(/#B=([^&]+)/)[1].slice(-8);
+  await o.waitForFunction((n) => document.querySelector('#bo-see')?.value.includes(`${n}@`), boardEnd, { timeout: 30_000 });
+  await a.click('#b-bd-refresh');
+  const seen = await a.waitForFunction((n) => !document.querySelector('#bd-see')?.hidden && document.querySelector('#bd-see').textContent.includes(n), boardEnd, { timeout: T }).then(() => true, () => false);
+  check('"see also": a pasted board link is signed as name@onion; readers see the board, named by the end of its name', seen, await a.textContent('#bd-see'));
+
   // ---- Tor Browser: the plain pages ----
   if (!REAL) {
     const cat = await torBrowserGet(onion, '/');

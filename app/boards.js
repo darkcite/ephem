@@ -102,6 +102,18 @@ const short = (n) => `…${n.slice(-8)}`;
 const named = (title, n) => (title ? `${title} · ${short(n)}` : short(n));
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/** "See also" entries from what the owner pasted: board links (their own onion, not their
+ *  mirrors) and `name@onion`, in order, each once. */
+function seeAlso(text) {
+  const out = [];
+  const re = /#B=(k51[a-z0-9]+)&o=([a-z2-7]{56}\.onion)|(k51[a-z0-9]+)@([a-z2-7]{56}\.onion)/g;
+  for (const m of text.matchAll(re)) {
+    const e = `${m[1] || m[3]}@${m[2] || m[4]}`;
+    if (!out.includes(e)) out.push(e);
+  }
+  return out;
+}
+
 // ---- links ----------------------------------------------------------------------------------
 
 function linkFor(name, onion, mirrors = []) {
@@ -1111,7 +1123,11 @@ function wire() {
   for (const k of ['paused', 'threads_closed', 'trips_only', 'approved_only', 'premod', 'panic_trips']) $(`bs-${k}`).onchange = setSwitches;
   $('b-bo-efforts').onclick = () => act(() => boards.set_efforts(current.own, Number($('bo-eff-reply').value), Number($('bo-eff-thread').value)));
   $('b-bo-mirrors').onclick = () => act(() => boards.set_mirrors(current.own, $('bo-mirrors').value));
-  $('b-bo-see').onclick = () => act(() => boards.set_see_also(current.own, $('bo-see').value.replace(/\s+/g, '')));
+  $('b-bo-see').onclick = () => {
+    const list = seeAlso($('bo-see').value);
+    if ($('bo-see').value.trim() && !list.length) return ctx.error('Paste board links (#B=…&o=…) or name@onion entries.');
+    act(() => boards.set_see_also(current.own, list.join(',')));
+  };
   $('bo-ipfs').onchange = () => setIpfs(owned.find((o) => o.i === current?.own)?.name, $('bo-ipfs').checked);
   $('bd-mirror-ipfs').onchange = () => setIpfs(current?.read, $('bd-mirror-ipfs').checked);
   $('bd-sort').onchange = () => { const v = views.get(current?.read); if (v) renderBoard(v); };

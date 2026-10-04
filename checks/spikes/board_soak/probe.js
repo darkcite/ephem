@@ -27,7 +27,7 @@ function render(status) {
   $('out').textContent = [
     `Ephem B-P11 result (${new Date().toISOString().slice(0, 16)}Z)`,
     `probe: ${navigator.userAgent}`,
-    `running for ${hm(Date.now() - started)}; ${rows.length} reads, every 5 min`,
+    `running for ${hm(started ? Date.now() - started : 0)}; ${rows.length} reads, every 5 min`,
     `reachable: ${ok}/${rows.length} = ${pct(ok, rows.length)}; longest outage: ${worst * 5} min; median read ${(med / 1000).toFixed(1)} s`,
     '',
     status,
