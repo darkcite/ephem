@@ -8,6 +8,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ephem-proto = { path = "../proto" }
 ephem-channel = { path = "../channel" }
 ephem-board = { path = "../board" }
 ephem-crypto = { path = "../crypto" }

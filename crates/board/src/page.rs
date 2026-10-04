@@ -23,7 +23,7 @@ pub use ephem_channel::page::{CSP, Served};
 /// Threads per catalog page (10 pages, B4).
 pub const PER_PAGE: usize = 15;
 
-const STYLE: &str = "body{margin:0;background:#0f1115;color:#d7dbe3;font:15px/1.5 ui-monospace,Menlo,Consolas,monospace}\
+const STYLE: &str = "h1,h2,.body,.ex,.about,.rules,li{unicode-bidi:isolate}body{margin:0;background:#0f1115;color:#d7dbe3;font:15px/1.5 ui-monospace,Menlo,Consolas,monospace}\
 main{max-width:860px;margin:0 auto;padding:16px}h1{font-size:20px;margin:8px 0}h2{font-size:16px;margin:4px 0}a{color:#5b9cf5}\
 .about,.rules{color:#8a93a6;white-space:pre-wrap}.box{border:1px solid #262b36;border-radius:6px;padding:10px 12px;margin:14px 0;background:#171a21;font-size:13px}\
 .box b{color:#39c26c}.mirror b{color:#e2b13c}ol{list-style:none;padding:0}li{border:1px solid #262b36;border-radius:6px;padding:8px 12px;margin:8px 0;background:#171a21}\

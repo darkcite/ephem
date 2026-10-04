@@ -28,7 +28,7 @@
 //! at once and keep the newest **complete** version (every catalog and archived thread with all
 //! its chunks, and the `own` block); a takeover refuses anything older than the vault says.
 
-use crate::{ChannelApp, NEWEST_GRACE_MS, PORT, State, err, json, now_s, with_timeout};
+use crate::{ChannelApp, NEWEST_GRACE_MS, PORT, State, err, json, now_s, text_check, with_timeout};
 use ephem_board::board::{Board, Entry};
 use std::collections::{HashMap, HashSet};
 use ephem_board::gateway::{self, Answer, Route, SHORT, Served};
@@ -215,6 +215,7 @@ impl BoardApp {
 
     /// A new board `index` (the page refuses when its store already holds one).
     pub fn create(&self, index: u32, title: &str, about: &str, rules: &str) -> Result<(), JsValue> {
+        text_check(&[title], &[about, rules])?;
         let mut s = self.seeds(index)?;
         let board = Board::new(&s[0], &onion_of(&s[1]), title, about, rules, now_s());
         let r = board.map(|b| self.start(index, b, &s[2], s[3]));
@@ -292,6 +293,7 @@ impl BoardApp {
 
     /// The owner posts (capcode, no proof of work): a new thread (`thread` 0) or a reply.
     pub fn post(&self, index: u32, thread: f64, sub: &str, body: &str, sage: bool) -> Result<f64, JsValue> {
+        text_check(&[sub], &[body])?;
         let host = self.host(index)?;
         let no = host.borrow_mut().post_owner(thread as u64, sub, body, sage, now_s());
         no.map(|n| n as f64).map_err(|e| err(format!("{e:?}")))
@@ -743,6 +745,7 @@ impl BoardApp {
     /// Signs and submits the post solved for `draft` (`n`, `solution` from a Worker), on a new
     /// Tor isolation group. Resolves to `{no, seq}` as JSON; a refusal rejects with its reason.
     pub fn post_draft(&self, draft: &Draft, sub: &str, body: &str, sage: bool, n: &[u8], solution: &[u8]) -> Result<js_sys::Promise, JsValue> {
+        text_check(&[sub], &[body])?;
         let tor = self.tor()?;
         let n: [u8; 16] = n.try_into().map_err(|_| err("nonce: 16 bytes"))?;
         let solution = solution.try_into().map_err(|_| err("solution: 16 bytes"))?;

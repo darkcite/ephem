@@ -59,6 +59,16 @@ fn now_s() -> u64 {
     (js_sys::Date::now() / 1000.0) as u64
 }
 
+/// Text others will see, before it is signed (`ephem_proto::text`): a message the page shows as
+/// is when it holds characters that could disguise it.
+pub(crate) fn text_check(lines: &[&str], bodies: &[&str]) -> Result<(), JsValue> {
+    if lines.iter().all(|s| ephem_proto::text::line_ok(s)) && bodies.iter().all(|s| ephem_proto::text::body_ok(s)) {
+        Ok(())
+    } else {
+        Err(err("E_TEXT: the text contains invisible or direction-changing characters, which could disguise it; remove them"))
+    }
+}
+
 fn err(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
@@ -265,6 +275,7 @@ impl ChannelApp {
     /// A new channel `index` (§D.3: use a separate identity for channels). Replaces nothing
     /// stored: the page refuses when this channel already exists in its store.
     pub fn create(&self, index: u32, title: &str, about: &str) -> Result<(), JsValue> {
+        text_check(&[title], &[about])?;
         let now = now_s();
         let ch = {
             let st = self.st.borrow();
@@ -349,6 +360,7 @@ impl ChannelApp {
 
     /// Publishes a post (≤ 4 KiB) in channel `index`; `reply` = the `seq` it answers, or 0.
     pub fn post(&self, index: u32, body: &str, reply: u32) -> Result<(), JsValue> {
+        text_check(&[], &[body])?;
         let now = now_s();
         self.change(index, |c| c.post(body, u64::from(reply), now).map(|_| ()))
     }

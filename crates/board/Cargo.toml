@@ -8,6 +8,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# What shown text may contain (titles, subjects, posts: no direction controls, nothing invisible).
+ephem-proto = { path = "../proto" }
 ephem-channel = { path = "../channel" }
 ed25519-dalek = { version = "2", default-features = false, features = ["zeroize"] }
 sha2 = { version = "0.10", default-features = false }

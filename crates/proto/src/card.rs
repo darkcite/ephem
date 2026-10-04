@@ -39,12 +39,11 @@ pub fn valid_nick(n: &[u8]) -> bool {
 
 #[inline]
 fn forbidden_in_nick(c: char) -> bool {
+    // As titles (crate::text), and stricter: no variation selectors, no check marks.
     c.is_control()
-        || matches!(c,
-            '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}' | '\u{180E}'
-            | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FE00}'..='\u{FE0F}'
-            | '\u{FEFF}' | '\u{FFA0}' | '\u{FFF9}'..='\u{FFFB}' | '\u{E0000}'..='\u{E007F}'
-            | '\u{2713}' | '\u{2714}' | '\u{2705}' | '\u{2611}' | '\u{1F5F8}')
+        || crate::text::direction(c)
+        || crate::text::invisible(c)
+        || matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{2713}' | '\u{2714}' | '\u{2705}' | '\u{2611}' | '\u{1F5F8}')
 }
 
 impl<'a> Card<'a> {

@@ -303,3 +303,7 @@ input.short { width: 12em; }
 .posts .mod button { margin: 0; padding: 2px 8px; font-size: 11px; }
 .rows li.board .avatar::after { content: "▦"; }
 .stale { color: var(--warn); }
+
+/* Text others wrote never reorders what is around it (direction controls are refused,
+   ephem_proto::text; right-to-left scripts stay inside their own box). */
+.body, .grow b, .grow .sub, .log li, #bd-title, #bo-title, #r-title, #o-title, #bd-about, #r-about { unicode-bidi: isolate; }

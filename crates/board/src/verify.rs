@@ -142,7 +142,7 @@ fn manifest(v: &Value, key: &VerifyingKey) -> Result<Manifest, BoardError> {
         see_also: texts(v, "see_also", limits::SEE_ALSO)?,
         ids: flag(v, "ids")?,
     };
-    if man.pk != key.to_bytes() || man.title.len() > limits::TITLE || man.about.len() > limits::ABOUT || man.rules.len() > limits::RULES {
+    if man.pk != key.to_bytes() || man.title.len() > limits::TITLE || man.about.len() > limits::ABOUT || man.rules.len() > limits::RULES || !crate::board::text_ok(&man.title, &man.about, &man.rules) {
         return Err(BoardError::Invalid);
     }
     if !crate::onion::valid(&man.host) || !man.mirrors.iter().all(|m| crate::onion::valid(m)) || !man.see_also.iter().all(|l| crate::onion::see_also_valid(l)) {
@@ -293,7 +293,7 @@ pub fn read(key: &VerifyingKey, name: &Cid, root: &Cid, blocks: &[Block], known_
                 sticky: flag(e, "st")?,
                 locked: flag(e, "lk")?,
             };
-            if ce.no % limits::BUCKETS as u64 != i as u64 || !pinned.contains(&ce.thread) || ce.no >= next_no || ce.ex.len() > limits::EXCERPT || ce.sub.len() > limits::SUBJECT || ce.replies >= limits::THREAD_POSTS as u64 {
+            if ce.no % limits::BUCKETS as u64 != i as u64 || !pinned.contains(&ce.thread) || ce.no >= next_no || ce.ex.len() > limits::EXCERPT || ce.sub.len() > limits::SUBJECT || ce.replies >= limits::THREAD_POSTS as u64 || !ephem_proto::text::line_ok(&ce.sub) || !ephem_proto::text::body_ok(&ce.ex) {
                 return Err(BoardError::Invalid);
             }
             catalog.push(ce);
@@ -333,13 +333,17 @@ pub fn read(key: &VerifyingKey, name: &Cid, root: &Cid, blocks: &[Block], known_
         })
         .collect::<Result<Vec<_>, BoardError>>()?;
     let arch_pins: Vec<Cid> = list(&node(&by, &link(&r, "arch_threads")?)?, "t")?.iter().map(|x| x.link().cloned().ok_or(BoardError::Invalid)).collect::<Result<_, _>>()?;
-    if archive.len() > limits::ARCHIVE || archive.len() != arch_pins.len() || archive.iter().any(|a| !arch_pins.contains(&a.thread)) {
+    let shown = |sub: &str, ex: &str| ephem_proto::text::line_ok(sub) && ephem_proto::text::body_ok(ex);
+    if archive.len() > limits::ARCHIVE || archive.len() != arch_pins.len() || archive.iter().any(|a| !arch_pins.contains(&a.thread) || !shown(&a.sub, &a.ex)) {
         return Err(BoardError::Invalid);
     }
     let modlog = list(&node(&by, &link(&r, "modlog")?)?, "a")?
         .iter()
         .map(|m| Ok(ModEntry { ts: uint(m, "ts")?, act: text(m, "act")?, no: uint(m, "no")?, why: text(m, "why")? }))
         .collect::<Result<Vec<_>, BoardError>>()?;
+    if modlog.iter().any(|m| !shown(&m.act, &m.why)) {
+        return Err(BoardError::Invalid);
+    }
     let own_cid = link(&r, "own")?;
     let own = get(&by, &own_cid).cloned().unwrap_or_default();
     if own.len() > limits::OWN {

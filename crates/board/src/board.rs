@@ -129,6 +129,12 @@ impl Entry {
     }
 }
 
+/// A board's title (one line), "about" and rules (multi-line) as readers may be shown them
+/// (`ephem_proto::text`).
+pub(crate) fn text_ok(title: &str, about: &str, rules: &str) -> bool {
+    ephem_proto::text::line_ok(title) && ephem_proto::text::body_ok(about) && ephem_proto::text::body_ok(rules)
+}
+
 /// `SHA-256(dag-cbor(s))`: what the deletion list names (G.5.1 `dels`).
 pub fn post_hash(s: &Signed) -> [u8; 32] {
     Sha256::digest(s.to_value().encode()).into()
@@ -324,7 +330,7 @@ impl Board {
         if title.len() > limits::TITLE || about.len() > limits::ABOUT || rules.len() > limits::RULES {
             return Err(BoardError::TooLong);
         }
-        if !crate::onion::valid(host) {
+        if !crate::onion::valid(host) || !text_ok(title, about, rules) {
             return Err(BoardError::Invalid);
         }
         let pk = key.verifying_key().to_bytes();
@@ -575,7 +581,9 @@ impl Board {
 
     /// Appends to the public moderation log (oldest dropped past `MODLOG`).
     pub fn log(&mut self, ts: u64, act: &str, no: u64, why: &str) {
-        self.modlog.push(ModEntry { ts, act: act.to_owned(), no, why: why.to_owned() });
+        // A reason as readers accept it: one line, nothing invisible or reordering.
+        let why: String = why.chars().filter(|&c| !c.is_control() && !ephem_proto::text::direction(c) && !ephem_proto::text::invisible(c)).collect();
+        self.modlog.push(ModEntry { ts, act: act.to_owned(), no, why });
         let over = self.modlog.len().saturating_sub(limits::MODLOG);
         self.modlog.drain(..over);
     }

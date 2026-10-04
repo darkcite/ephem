@@ -488,3 +488,37 @@ fn bc10_mass_delete_is_linear() {
     // Before: 20 000 deletes scanned the board once each (quadratic, seconds).
     assert!(ms < 2_000, "{} posts deleted in {ms} ms", done.len());
 }
+
+// ---- shown text: no direction controls or invisible characters (spoofing) ----
+
+#[test]
+fn text_that_could_disguise_itself_is_refused() {
+    use ephem_board::post::Signed;
+    let onion = host_onion();
+    assert_eq!(Board::new(&SEED, &onion, "news\u{202E}gpj.exe", "", "", NOW).err(), Some(BoardError::Invalid), "a title with a right-to-left override");
+    assert_eq!(Board::new(&SEED, &onion, "Board\u{200B}", "", "", NOW).err(), Some(BoardError::Invalid), "a title with a zero-width space");
+    assert!(Board::new(&SEED, &onion, "Доска · لوحة · 板 ❤️", "line one\nline two", "", NOW).is_ok(), "any script, emoji, new lines in about");
+    let mut b = board();
+    let t = put(&mut b, 0, "op", 1, NOW);
+    let (mut s, _) = signed(&b, t, "x", 2);
+    for bad in ["click\u{202E}gpj.exe", "a\u{2066}b", "hidden\u{E0041}tag"] {
+        s.body = bad.into();
+        assert_eq!(s.check(), Err(BoardError::Invalid), "{bad:?}");
+    }
+    s.body = "fine 👨\u{200D}👩\n>greentext".into();
+    assert_eq!(s.check(), Ok(()));
+    let op = Signed { sub: "sub\u{202E}ject".into(), ..signed(&b, 0, "op", 3).0 };
+    assert_eq!(op.check(), Err(BoardError::Invalid), "a subject");
+    // An owner's ban reason is cleaned, never a board readers refuse.
+    b.log(NOW, "ban", t, "spam\u{202E}x");
+    view(&mut b, NOW, &[]);
+}
+
+#[test]
+fn readers_refuse_a_disguised_title() {
+    let mut b = board();
+    b.manifest.title = "news\u{202E}gpj.exe".into();
+    let (root, blocks) = b.build(NOW);
+    let rec = b.record(&root, NOW * 1000);
+    assert_eq!(verify::verify(b.name(), &rec, &blocks, NOW * 1000, 0, &[]).err(), Some(BoardError::Invalid));
+}

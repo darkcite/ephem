@@ -959,6 +959,7 @@ const REASONS = {
   E_BOARD_POW: 'The board asked for more work; try again.',
   E_BOARD_POW_TOO_HIGH: 'The board asks for far more work than any board needs (a phone would solve for hours): not posted.',
   E_BOARD_UNREAD: 'The board could not be read yet: posts go to the address it signs.',
+  E_TEXT: 'Your text contains invisible or direction-changing characters, which could disguise it: remove them (your text is kept).',
   E_BOARD_BUSY: 'The board is busy (or a thread was started moments ago); try again in a minute.',
   E_BOARD_REFUSED: 'Refused: the thread is locked or gone, the same text was just posted, or this key is banned.',
   E_BOARD_PAUSED: 'Posting is paused here, or limited to trips.',
@@ -999,7 +1000,7 @@ async function submitPost(e) {
     if (r.no) state.textContent = `Posted as No. ${r.no}.`;
   } catch (err) {
     const m = String(err?.message || err);
-    const code = m.match(/E_BOARD_[A-Z]+/)?.[0];
+    const code = m.match(/E_(BOARD_[A-Z_]+|TEXT)/)?.[0];
     state.textContent = REASONS[code] || `Not posted: ${m}`;
     box = null;
   } finally {

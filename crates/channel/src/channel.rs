@@ -13,6 +13,7 @@
 //! so a mirror or a gateway can serve them but not change them; the IPNS record signs the root,
 //! which pins the rest by CID. A deleted post is re-signed with `deleted = true` and no body.
 
+use ephem_proto::text;
 use crate::car::Block;
 use crate::cbor::{self, Value};
 use crate::cid::{Cid, DAG_CBOR};
@@ -109,6 +110,9 @@ impl Manifest {
         if v.get("v").and_then(Value::uint) != Some(1) || m.pk != key.to_bytes() || m.mirrors.len() > MAX_MIRRORS {
             return Err(ChannelError::Invalid);
         }
+        if m.title.len() > MAX_TITLE || m.about.len() > MAX_ABOUT || !text::line_ok(&m.title) || !text::body_ok(&m.about) {
+            return Err(ChannelError::Invalid);
+        }
         Ok(m)
     }
 }
@@ -134,7 +138,7 @@ impl Post {
             reply: v.get("reply").and_then(Value::uint).ok_or(ChannelError::Invalid)?,
             deleted: v.get("deleted").and_then(Value::boolean).ok_or(ChannelError::Invalid)?,
         };
-        if p.body.len() > MAX_BODY || (p.deleted && !p.body.is_empty()) {
+        if p.body.len() > MAX_BODY || (p.deleted && !p.body.is_empty()) || !text::body_ok(&p.body) {
             return Err(ChannelError::Invalid);
         }
         Ok(p)
@@ -184,6 +188,9 @@ impl Channel {
         if title.len() > MAX_TITLE || about.len() > MAX_ABOUT {
             return Err(ChannelError::TooLong);
         }
+        if !text::line_ok(title) || !text::body_ok(about) {
+            return Err(ChannelError::Invalid);
+        }
         let key = SigningKey::from_bytes(sign_seed);
         let pk = key.verifying_key().to_bytes();
         Ok(Self { key, manifest: Manifest { title: title.into(), about: about.into(), pk, created, mirrors: Vec::new() }, posts: Vec::new(), revision: 0, base: None, signed: HashMap::new() })
@@ -230,6 +237,9 @@ impl Channel {
     pub fn post(&mut self, body: &str, reply: u64, now_s: u64) -> Result<u64, ChannelError> {
         if body.len() > MAX_BODY || body.is_empty() {
             return Err(ChannelError::TooLong);
+        }
+        if !text::body_ok(body) {
+            return Err(ChannelError::Invalid);
         }
         let older = self.base.as_ref().is_some_and(|b| reply <= b.count);
         if reply != 0 && !older && !self.posts.iter().any(|p| p.seq == reply) {
@@ -540,6 +550,24 @@ mod tests {
         let short: Vec<_> = blocks.iter().filter(|(cid, _)| *cid != pages[1].0).cloned().collect();
         let v = verify(&c.name(), &rec, &short, NOW, 0).unwrap();
         assert_eq!((v.posts.len(), v.missing), (2, 128));
+    }
+
+    /// Text that could disguise itself (ephem_proto::text): refused from the owner, and from a
+    /// signed channel by readers.
+    #[test]
+    fn disguised_text_is_refused() {
+        assert_eq!(Channel::new(&[1; 32], "news\u{202E}gpj.exe", "", NOW).err(), Some(ChannelError::Invalid));
+        assert!(Channel::new(&[1; 32], "Новости · أخبار ❤️", "about\nlines", NOW).is_ok());
+        let mut c = sample(0);
+        assert_eq!(c.post("click\u{202E}gpj.exe", 0, NOW), Err(ChannelError::Invalid));
+        assert_eq!(c.post("hidden\u{E0041}", 0, NOW), Err(ChannelError::Invalid));
+        assert!(c.post("fine 👨\u{200D}👩\n\u{200F}שלום", 0, NOW).is_ok());
+        // A hostile owner signs one anyway: readers refuse the channel.
+        let mut c = sample(0);
+        c.manifest.title = "news\u{202E}gpj.exe".into();
+        let (root, blocks) = c.build(NOW);
+        let rec = c.record(&root, NOW);
+        assert!(verify(&c.name(), &rec, &blocks, NOW, 0).is_err());
     }
 
     #[test]

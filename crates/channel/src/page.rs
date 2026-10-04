@@ -46,7 +46,7 @@ fn head(s: &str, n: usize) -> &str {
     s.char_indices().nth(n).map_or(s, |(i, _)| &s[..i])
 }
 
-const STYLE: &str = "body{margin:0;background:#0f1115;color:#d7dbe3;font:15px/1.5 ui-monospace,Menlo,Consolas,monospace}\
+const STYLE: &str = "h1,h2,.body,.ex,.about,.rules,li{unicode-bidi:isolate}body{margin:0;background:#0f1115;color:#d7dbe3;font:15px/1.5 ui-monospace,Menlo,Consolas,monospace}\
 main{max-width:720px;margin:0 auto;padding:16px}h1{font-size:20px;margin:8px 0}\
 .about{color:#8a93a6;white-space:pre-wrap}.box{border:1px solid #262b36;border-radius:6px;padding:10px 12px;margin:14px 0;background:#171a21;font-size:13px}\
 .box b{color:#39c26c}.mirror b{color:#e2b13c}ol{list-style:none;padding:0}li{border:1px solid #262b36;border-radius:6px;padding:8px 12px;margin:8px 0;background:#171a21}\

@@ -16,6 +16,7 @@ pub mod code;
 pub mod error;
 pub mod frame;
 pub mod sdp;
+pub mod text;
 
 pub use error::ErrorCode;
 

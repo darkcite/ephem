@@ -82,10 +82,14 @@ impl Signed {
         Ok(s)
     }
 
-    /// Limits; a reply carries no subject.
+    /// Limits; a reply carries no subject; no direction controls or invisible characters
+    /// (`ephem_proto::text`: a subject or post must look like what it is).
     pub fn check(&self) -> Result<(), BoardError> {
         if self.body.len() > limits::BODY || self.sub.len() > limits::SUBJECT || (self.t != 0 && !self.sub.is_empty()) {
             return Err(BoardError::TooLong);
+        }
+        if !ephem_proto::text::line_ok(&self.sub) || !ephem_proto::text::body_ok(&self.body) {
+            return Err(BoardError::Invalid);
         }
         if self.t == 0 && self.body.is_empty() && self.sub.is_empty() {
             return Err(BoardError::Invalid);
