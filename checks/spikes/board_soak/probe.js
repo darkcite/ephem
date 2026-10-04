@@ -47,6 +47,8 @@ async function start() {
   render('Starting Tor (Snowflake)…');
   await init({ module_or_path: new URL('../../../app/pkg/ephem_tor_bg.wasm', import.meta.url) });
   const ch = new ChannelApp();
+  const log = new URLSearchParams(location.search).get('log'); // ?log=debug: arti's log in the console
+  if (log) ch.tor_log(log);
   const boards = new BoardApp(ch);
   const lab = globalThis.ephemTorLab; // the offline lab's network, when its checks drive this page
   await ch.tor_start(lab?.bridges || DEFAULT_BRIDGES, lab?.nat || '', lab?.network || '', new Uint8Array());
