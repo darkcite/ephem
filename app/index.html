@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- stamp:begin (tools/stamp.py) -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-4xQrAZhK/F3yZ0xmKL56tdwPqLdluaeFmn9yia/5dUI='; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self' blob:; manifest-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'none'">
-<meta name="ephem-build" content="09fbf95bc044">
+<meta name="ephem-build" content="43d6ae004a98">
 <meta name="ephem-wasm" content="sha384-Ef8Ciyppkkguu/QisS5l6ikR/mENh527jKTrEmPsHrrGvpOn+3kKt/LIShpvupQf">
 <meta name="ephem-tor-wasm" content="sha384-4XpSPfRvuf33PA0DIHg9eXoE+zM8xHe/F4ZTacmgBOHQOxTlqL+DrXbG00dv3a7s">
 <meta name="ephem-pow-wasm" content="sha384-cMF7re8U/WaXErxoGoCCCXBzhIJ5r7VK1L8Gb0PHgro9gkfwMbifnwRI+j6lULvq">
@@ -41,7 +41,7 @@
   <span id="me" class="pill" title="Your display handle (not a proof of identity)">…</span>
   <span id="status" class="pill status">starting</span>
   <a id="b-tor" class="modebtn mode-switch direct-only" href="tor.html" title="Tor mode: your peers never see your IP address"><span aria-hidden="true">🧅</span> <span class="long">Tor mode</span><span class="short">Tor</span></a>
-  <button id="b-code" class="primary codebtn" aria-haspopup="dialog" aria-controls="code-sheet" title="Scan or paste an invite, answer, contact card, channel or bridge link">⌗ Code</button>
+  <button id="b-code" class="primary codebtn" aria-haspopup="dialog" aria-controls="code-sheet" title="Scan or paste an invite, answer, contact card, channel, board or bridge link">⌗ Code</button>
 </header>
 
 <!-- "Got a code?": from every tab (the header's Code button). -->
@@ -53,7 +53,7 @@
 <div id="code-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="code-sheet-title" hidden>
   <div class="card">
     <h2 id="code-sheet-title">Got a code?</h2>
-    <p>Scan it, or paste an invite link to answer it, the answer to your own invite, a reconnect code, someone's contact card, a channel link or a bridge link.</p>
+    <p>Scan it, or paste an invite link to answer it, the answer to your own invite, a reconnect code, someone's contact card, a channel or board link, or a bridge link.</p>
     <textarea id="t-code" rows="3" placeholder="https://…/app/#i=…" spellcheck="false" autocomplete="off"></textarea>
     <div class="actions">
       <button id="b-apply" class="primary">Open code</button>
