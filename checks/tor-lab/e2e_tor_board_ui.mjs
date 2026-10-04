@@ -36,6 +36,7 @@ const bodies = (p) => p.$$eval('#bd-posts li .body', (ls) => ls.map((l) => l.tex
 
 /** Types into the reply box (which starts the proof of work), then posts. */
 async function postFromBox(p, sub, body) {
+  if (await p.isVisible('#b-bd-new')) await p.click('#b-bd-new'); // the catalog's "New thread" opens the box
   await p.click('#bd-body');
   if (sub) await p.fill('#bd-sub', sub);
   await p.fill('#bd-body', body);
@@ -73,6 +74,7 @@ try {
   // lag behind its published descriptor in the lab).
   await o.waitForFunction(() => /#B=k51/.test(document.querySelector('#bo-link')?.value), null, { timeout: 30_000 });
   // Lab efforts: the defaults are calibrated for phones.
+  await o.evaluate(() => { document.querySelector('#bo-settings').open = true; }); // the owner's settings are folded
   await o.fill('#bo-eff-reply', '40');
   await o.fill('#bo-eff-thread', '80');
   await o.click('#b-bo-efforts');
@@ -130,6 +132,7 @@ try {
   await b.click('#b-bd-mirror');
   await b.waitForFunction(() => /Mirroring on [a-z2-7]{56}\.onion/.test(document.querySelector('#bd-mirror-note')?.textContent), null, { timeout: T });
   const mirror = (await b.textContent('#bd-mirror-note')).match(/([a-z2-7]{56}\.onion)/)[1];
+  await o.evaluate(() => { document.querySelector('#bo-settings').open = true; }); // the owner's settings are folded
   await o.fill('#bo-mirrors', mirror);
   await o.click('#b-bo-mirrors');
   await o.waitForFunction((m) => document.querySelector('#bo-link')?.value.includes(`&m=${m}`), mirror, { timeout: 30_000 });

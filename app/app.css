@@ -307,3 +307,10 @@ input.short { width: 12em; }
 /* Text others wrote never reorders what is around it (direction controls are refused,
    ephem_proto::text; right-to-left scripts stay inside their own box). */
 .body, .grow b, .grow .sub, .log li, #bd-title, #bo-title, #r-title, #o-title, #bd-about, #r-about { unicode-bidi: isolate; }
+
+/* Boards: long onion addresses wrap; the catalog's tools share one row. */
+#bd-source, #bo-state, #bo-plain { overflow-wrap: anywhere; }
+#bd-tools { flex-wrap: wrap; align-items: center; }
+#bd-tools select, #bd-tools input { flex: 1 1 9em; width: auto; min-width: 0; margin: 0; }
+#bo-settings > summary { cursor: pointer; list-style: none; }
+#bo-settings > summary h2 { display: inline; }

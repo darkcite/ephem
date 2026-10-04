@@ -40,6 +40,7 @@ let owned = [];                      // [{ i, name, title, onion }]
 let current = null;                  // on screen: { read, onions, thread } | { own, thread }
 const views = new Map();             // board name → last verified view (shown at once, B-UX-3)
 let box = null;                      // the reply box's pre-solve: { key, promise, stop }
+let newOpen = false;                 // the catalog's "New thread" box is open
 let refreshTimer = 0;
 let ownTimer = 0;
 let ownHover = false;                // the pointer is over the owner view: no re-render under it
@@ -99,6 +100,7 @@ const signedIn = () => !!ctx.app.identity_label();
 // Every board name starts `k51qzi5uqu5d`: its end tells boards apart (BF-7).
 const short = (n) => `…${n.slice(-8)}`;
 const named = (title, n) => (title ? `${title} · ${short(n)}` : short(n));
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // ---- links ----------------------------------------------------------------------------------
 
@@ -468,7 +470,7 @@ function renderOwn() {
   $('bo-title').textContent = `▦ ${named(v.title, v.name)}`;
   const reach = boards.reach(i);
   const online = { reachable: 'Online through Tor', degraded: 'Online through Tor (degraded)', publishing: 'Publishing its onion…', unreachable: 'Tor is still setting up its onion' }[reach] || 'Offline';
-  $('bo-state').textContent = `${online} · ${st.threads} threads · next No. ${st.next_no} · version ${st.seq}`
+  $('bo-state').textContent = `${online} · ${plural(st.threads, 'thread')} · next No. ${st.next_no} · last published ${new Date(st.seq).toLocaleTimeString()}`
     + (st.closed_notice ? ' · the board closed itself under a flood (switches below)' : '');
   $('bo-link').value = linkFor(v.name, st.onion, v.mirrors);
   $('bo-plain').textContent = `http://${st.onion}/`;
@@ -649,7 +651,7 @@ function renderBoard(v) {
     ? `The last verified copy, read ${new Date(v.cachedAt).toLocaleString()} (not checked again yet).`
     : v.stale
       ? `Board not updated since ${new Date(v.updated * 1000).toLocaleString()}; the host is offline. Reading only.`
-      : `Verified through Tor: signed by the board key, version ${v.sequence}, updated ${new Date(v.updated * 1000).toLocaleString()}. Posts go to its own onion, ${v.host}.`;
+      : `Verified through Tor: signed by the board key, updated ${new Date(v.updated * 1000).toLocaleString()}. Posts go to its own onion, ${v.host}.`;
   $('bd-source').classList.toggle('stale', !!v.stale);
   const followed = follows().some((f) => f.n === v.name);
   $('b-bd-follow').hidden = followed;
@@ -677,7 +679,7 @@ function renderCatalog(ol, v, open) {
     const li = document.createElement('li');
     li.innerHTML = '<span class="grow"><b></b><span class="sub"></span></span>';
     li.querySelector('b').textContent = `No. ${t.no} ${t.sub}${t.st ? ' 📌' : ''}${t.lk ? ' 🔒' : ''}`;
-    li.querySelector('.sub').textContent = `${t.r} replies · ${t.ex}`;
+    li.querySelector('.sub').textContent = `${plural(t.r, 'reply', 'replies')} · ${t.ex}`;
     li.className = current?.thread === t.no ? 'active' : '';
     li.onclick = () => open(t.no);
     return li;
@@ -907,6 +909,8 @@ function setBox() {
   const t = current?.thread || 0;
   $('bd-box-title').textContent = t ? `Reply to No. ${t}` : 'New thread';
   $('bd-sub').hidden = !!t;
+  // In a thread the reply box sits under the posts; on the catalog it opens with "＋ New thread".
+  $('f-bd-post').hidden = !t && !newOpen;
   $('bd-trip-row').hidden = !signedIn();
   $('bd-post-state').textContent = '';
   dropBox();
@@ -946,7 +950,8 @@ function presolve() {
     if (draft.effort_now > (c.thread ? MAX_EFFORT.reply : MAX_EFFORT.thread)) throw new Error(`E_BOARD_POW_TOO_HIGH: the board asks for effort ${draft.effort_now}`);
     if (sw.trips_only && !trip && mine()) state.textContent = 'This board accepts trips only right now.';
     const t0 = performance.now();
-    const s = await solve(draft.params(), (n) => { if (mine()) state.textContent = `Preparing your post (proof of work at effort ${draft.effort_now}, ${n} attempts)…`; }, job);
+    const about = estimate(draft.effort_now);
+    const s = await solve(draft.params(), () => { if (mine()) state.textContent = `Preparing your post${about}… ${Math.round((performance.now() - t0) / 1000)} s`; }, job);
     if (mine()) state.textContent = `Ready (${Math.round((performance.now() - t0) / 1000)} s of work).`;
     return { draft, s, premod: sw.premod };
   })();
@@ -990,14 +995,14 @@ async function submitPost(e) {
     $('bd-sub').value = '';
     try { sessionStorage.removeItem(draftKey()); } catch { /* nothing kept */ }
     if (!c.thread && r.no) current.thread = r.no;
-    setTimeout(async () => {
-      await refresh();
-      const v = views.get(c.read);
-      const seen = r.no && v?.threads.some((t) => t.posts.some((p) => p.no === r.no));
-      if (seen) state.textContent = `✓ No. ${r.no} is on the board.`;
-    }, 1_500);
+    newOpen = false;
     setBox();
-    if (r.no) state.textContent = `Posted as No. ${r.no}.`;
+    if (r.no) state.textContent = `Posted as No. ${r.no}. Loading it…`;
+    $('b-bd-post').disabled = false;
+    // The answer came after the publish: the post is on the board now.
+    await refresh();
+    const v = views.get(c.read);
+    if (r.no && v?.threads.some((t) => t.posts.some((p) => p.no === r.no))) state.textContent = `✓ No. ${r.no} is on the board.`;
   } catch (err) {
     const m = String(err?.message || err);
     const code = m.match(/E_(BOARD_[A-Z_]+|TEXT)/)?.[0];
@@ -1020,6 +1025,18 @@ function module() {
   return powModule;
 }
 
+// This device's speed, measured by its own solves (attempts per second, all Workers): the reply
+// box says how long a post takes here before it starts (G.12; no device list to calibrate on).
+const RATE = 'ephem-pow-rate';
+const SOLUTIONS_PER_ATTEMPT = 2.16;  // Equi-X, B-P1
+function estimate(effort) {
+  let rate = 0;
+  try { rate = Number(localStorage.getItem(RATE)) || 0; } catch { /* not kept */ }
+  if (!rate) return '';
+  const s = effort / SOLUTIONS_PER_ATTEMPT / rate;
+  return ` (about ${s < 90 ? `${Math.max(1, Math.round(s))} s` : `${Math.round(s / 60)} min`} on this device; it varies a lot)`;
+}
+
 /** Solves `params` (Draft.params()) in up to 4 Workers; the first solution wins. `job.stop()`
  *  ends it early (its Workers terminate, the promise rejects). */
 export async function solve(params, onProgress, job = {}) {
@@ -1029,7 +1046,8 @@ export async function solve(params, onProgress, job = {}) {
   const workers = [];
   let attempts = 0;
   try {
-    return await new Promise((resolve, reject) => {
+    const t0 = performance.now();
+    const found = await new Promise((resolve, reject) => {
       job.stop = () => reject(new Error('stopped'));
       for (let i = 0; i < n; i++) {
         const w = new Worker(url);
@@ -1044,6 +1062,12 @@ export async function solve(params, onProgress, job = {}) {
         w.postMessage({ module: m, ...params, n: start });
       }
     });
+    // A rate from a few seconds of work or more; one lucky attempt says nothing.
+    const secs = (performance.now() - t0) / 1000;
+    if (secs > 3 && attempts > 0) {
+      try { localStorage.setItem(RATE, String(attempts / secs)); } catch { /* not kept */ }
+    }
+    return found;
   } finally {
     job.stop = null;
     for (const w of workers) w.terminate();
@@ -1108,7 +1132,13 @@ function wire() {
   $('b-bd-unfollow').onclick = unfollow;
   $('b-bd-refresh').onclick = () => refresh();
   $('b-bd-fresh').onclick = () => refresh(true);
-  $('b-bd-catalog').onclick = () => { current.thread = 0; setBox(); const v = views.get(current.read); if (v) renderBoard(v); };
+  $('b-bd-new').onclick = () => {
+    newOpen = true;
+    setBox();
+    $('bd-sub').focus();
+    $('f-bd-post').scrollIntoView({ block: 'nearest' });
+  };
+  $('b-bd-catalog').onclick = () => { current.thread = 0; newOpen = false; setBox(); const v = views.get(current.read); if (v) renderBoard(v); };
   $('b-bd-mirror').onclick = mirror;
   $('bd-body').onfocus = () => { presolve()?.catch((e) => { $('bd-post-state').textContent = REASONS[String(e?.message).match(/E_BOARD_[A-Z]+/)?.[0]] || String(e?.message || e); }); };
   $('bd-body').oninput = () => { try { sessionStorage.setItem(draftKey(), $('bd-body').value); } catch { /* not kept */ } };
