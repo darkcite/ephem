@@ -17,7 +17,9 @@ const broker = new URL(JSON.parse(JSON.stringify(Object.fromEntries(fs.readFileS
 const srv = await serve((p, read) => (p.endsWith('/board_soak/probe.html') ? read().replace("connect-src 'self' https:", `connect-src 'self' https: ${broker}`) : null));
 const b = await launch();
 const page = await (await torContext(await b.newContext())).newPage();
-page.on('console', (m) => { if (/error|panic/i.test(m.text())) fs.appendFileSync(`${OUT}.log`, `${new Date().toISOString()} ${m.text()}\n`); });
+// SOAK_VERBOSE=1 keeps every console line (arti's log), to see where a slow read waits.
+const VERBOSE = process.env.SOAK_VERBOSE === '1';
+page.on('console', (m) => { if (VERBOSE || /error|panic/i.test(m.text())) fs.appendFileSync(`${OUT}.log`, `${new Date().toISOString()} ${m.text()}\n`); });
 await page.goto(`http://127.0.0.1:${srv.address().port}/checks/spikes/board_soak/probe.html`);
 await page.fill('#link', LINK);
 await page.click('#start');
