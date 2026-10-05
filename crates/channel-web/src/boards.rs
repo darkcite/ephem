@@ -41,6 +41,7 @@ use ephem_board::verify::{self, View};
 use ephem_channel::car::Block;
 use ephem_channel::cid::Cid;
 use ephem_channel::ipns;
+use ephem_tor::hedge::hedged;
 use ephem_tor::web::{DataStream, Service, Tor, is_onion, list, sleep_ms};
 use futures::{AsyncReadExt, AsyncWriteExt};
 use std::cell::RefCell;
@@ -70,6 +71,10 @@ const ANSWER_MS: u32 = 20_000;
 /// The whole of one request, write included.
 const SERVE_MS: u32 = 60_000;
 const FETCH_MS: u32 = 90_000;
+/// A read with no answer after this long starts a second attempt on fresh circuits beside the
+/// first ([`hedged`]; B-P11, G.16.2: one first attempt in three never got its rendezvous from the
+/// hosting tab and cost the whole `FETCH_MS`).
+const HEDGE_MS: u32 = 25_000;
 /// `/pow` on the reads' circuit, before a retry on a fresh one.
 const POW_MS: u32 = 30_000;
 const READ_ROUNDS: u32 = 4;
@@ -799,7 +804,7 @@ impl BoardApp {
                     .iter()
                     .map(|onion| {
                         let (tor, name, threads, known) = (tor.clone(), name.clone(), threads.clone(), known.clone());
-                        Box::pin(async move { with_timeout(FETCH_MS, read_from(&tor, &name, onion, min_seq as u64, &threads, fresh || round > 0, &known)).await.map_err(|e| format!("{onion}: {e}")) })
+                        Box::pin(async move { with_timeout(FETCH_MS, hedged(fresh || round > 0, sleep_ms(HEDGE_MS), |f| read_from(&tor, &name, onion, min_seq as u64, &threads, f, &known))).await.map_err(|e| format!("{onion}: {e}")) })
                     })
                     .collect();
                 let mut best: Option<View> = None;

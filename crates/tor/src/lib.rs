@@ -8,11 +8,13 @@
 //! - [`tls`]: TLS for Tor channels (rustls + ring, Tor's certificate policy).
 //! - [`bridge`]: Tor bridge lines (Tor Browser format) → the Snowflake setup (Appendix F.2).
 //! - [`config`]: arti configuration (bridge, in-memory storage, lab network).
+//! - [`hedge`]: a second attempt on fresh circuits beside a slow first one.
 //! - `web` (wasm32 only): browser runtime, Snowflake carrier (broker + DataChannels) and the
 //!   JS API.
 
 pub mod bridge;
 pub mod config;
+pub mod hedge;
 pub mod net;
 pub mod stream;
 pub mod tls;
