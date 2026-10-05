@@ -7,11 +7,12 @@
 //   'activate'). Closing and reopening the app no longer switches versions (security audit W-1).
 //   What a service worker cannot stop: the host serving a hostile sw.js that does something else
 //   (§5, §17.1, §21 say so).
-// - The Tor build's pages (tor.html, channel.html) are precached with the app (W-3); only the
-//   Tor build itself (pkg/ephem_tor*, §28.2, integrity-pinned by the pages) is cached on first
-//   use, so direct users never download it. The build id covers it.
+// - The Tor build's pages (tor.html, channel.html) are precached with the app (W-3); the Tor build
+//   itself (pkg/ephem_tor*, §28.2, integrity-pinned by the pages) is cached on first use, so direct
+//   users never download it, and precached with every later version once a device has used it.
+//   The build id covers it.
 // VERSION, FILES and TOR_FILES are written by tools/stamp.py (run by ./build.sh).
-const VERSION = '6dc22452462b';
+const VERSION = '5cda43397332';
 const FILES = ["./", "index.html", "tor.html", "channel.html", "redirect.js", "app.css", "app.js", "slots.js", "bridges.js", "channels.js", "boards.js", "pow-worker.js", "store-worker.js", "ui.js", "perf.js", "pkg/ephem.js", "pkg/ephem_bg.wasm", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
 const TOR_FILES = ["pkg/ephem_tor.js", "pkg/ephem_tor_bg.wasm", "pkg/ephem_pow.wasm"];
 const CACHE = `ephem-${VERSION}`;
@@ -31,8 +32,14 @@ async function accept(name) {
 }
 
 self.addEventListener('install', (e) => {
-  // cache: 'reload' bypasses the HTTP cache so the precache matches this version exactly.
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: 'reload' })))));
+  // cache: 'reload' bypasses the HTTP cache so the precache matches this version exactly. A device
+  // that already uses the Tor build gets this version's Tor build in the same precache: fetched
+  // later, it could be a newer deploy than the accepted pages expect (their integrity check fails).
+  e.waitUntil((async () => {
+    const was = await accepted();
+    const tor = was && (await (await caches.open(was)).match(TOR_FILES[0]));
+    await (await caches.open(CACHE)).addAll((tor ? FILES.concat(TOR_FILES) : FILES).map((f) => new Request(f, { cache: 'reload' })));
+  })());
 });
 
 self.addEventListener('activate', (e) => {

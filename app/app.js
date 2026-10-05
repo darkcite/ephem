@@ -1799,8 +1799,12 @@ if (bc) {
 }
 
 // ---- version pinning (§17.1): a new build waits until the user agrees ------------------------
+let workerRegistered = false;
 async function registerWorker() {
-  if (!('serviceWorker' in navigator)) return;
+  if (workerRegistered || !('serviceWorker' in navigator)) return;
+  workerRegistered = true;
+  $('b-update').onclick = applyUpdate;
+  $('b-update-later').onclick = () => { $('update').hidden = true; };
   const reg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => null);
   if (!reg) return;
   let reloading = false;
@@ -2208,8 +2212,6 @@ async function main() {
       if ([...chats.values()].some((c) => c.open) && !confirm('Switching mode reloads Ephem and ends your open chats. Switch now?')) e.preventDefault();
     };
   }
-  $('b-update').onclick = applyUpdate;
-  $('b-update-later').onclick = () => { $('update').hidden = true; };
   $('b-id-save').onclick = () => { $('id-save').hidden = !$('id-save').hidden; $('id-load').hidden = true; $('id-saved').hidden = true; };
   $('b-id-load').onclick = () => { $('id-load').hidden = !$('id-load').hidden; $('id-save').hidden = true; };
   $('b-id-temp').onclick = () => {
@@ -2311,5 +2313,10 @@ async function main() {
 
 main().catch((e) => {
   setStatus('error', 'bad');
-  error(`Ephem could not start: ${e?.message || e}`);
+  // The Tor build of the accepted version is fetched on first use (sw.js); once a newer version is
+  // deployed the host no longer serves it and the integrity check fails. The worker is registered
+  // even then, so a newer version can be offered (Update), never switched to without the user.
+  const msg = `${e?.message || e}`;
+  error(`Ephem could not start: ${msg}${/dynamically imported module/.test(msg) ? ' — this version\'s files are no longer on the server. If an Update bar appears, tap Update; otherwise reload in a minute.' : ''}`);
+  registerWorker();
 });

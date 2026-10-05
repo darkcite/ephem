@@ -7,7 +7,14 @@
 import { check, finish, launch, serve, watch } from './e2e_lib.mjs';
 
 let v2 = false;
+// Build 3 (a later deploy): a new worker and a Tor build the accepted pages' integrity no longer matches.
+let v3 = false;
 const srv = await serve((p, text) => {
+  if (v3) {
+    if (p === '/app/sw.js') return text().replace(/const VERSION = '[^']+'/, "const VERSION = 'v3test'");
+    if (p === '/app/pkg/ephem_tor.js') return `${text()}\n// build 3\n`;
+    return null;
+  }
   if (!v2) return null;
   if (p === '/app/sw.js') return text().replace(/const VERSION = '[^']+'/, "const VERSION = 'v2test'");
   if (p === '/app/index.html' || p === '/app/') return text().replace('<title>Ephem</title>', '<title>Ephem v2</title>');
@@ -55,8 +62,56 @@ try {
   check('…and stays after a reload, with no offer', (await title(p)) === 'Ephem v2' && !(await p.evaluate(() => !document.getElementById('update').hidden)));
 } catch (e) {
   check('service-worker update flow', false, e.message.split('\n')[0]);
-} finally {
-  await browser.close();
-  srv.close();
 }
+
+// The accepted build's Tor files are fetched on first use; after a later deploy the host serves
+// another build's, whose integrity the accepted tor.html refuses. The page must still offer the
+// update (not stay stuck), and a device that uses the Tor build gets it precached with each update.
+v2 = false;
+try {
+  const ctx = await browser.newContext();
+  let p = await ctx.newPage();
+  watch(p, 'stuck');
+  await p.goto(base);
+  await p.evaluate(() => navigator.serviceWorker.ready);
+  await p.reload();
+  await p.waitForFunction(() => !!navigator.serviceWorker.controller);
+  v3 = true;
+  await p.goto(`${base}tor.html`);
+  const stuck = await p.waitForFunction(() => /could not start/.test(document.body.textContent), null, { timeout: 20000 }).then(() => true, () => false);
+  check('a Tor build from a later deploy fails the accepted pages\' integrity check', stuck);
+  check('…and the failed start still offers the new build (Update)', await banner(p));
+  check('…without switching to it on its own', await p.evaluate(async () => {
+    const r = await (await caches.open('ephem-meta')).match(new URL('__accepted', (await navigator.serviceWorker.getRegistration()).scope).href);
+    return (await r.text()) !== 'ephem-v3test';
+  }));
+  await p.close();
+  v3 = false;
+
+  // A device on the Tor build: the next update precaches that build's Tor files too.
+  const ctx2 = await browser.newContext();
+  p = await ctx2.newPage();
+  watch(p, 'tor');
+  await p.goto(`${base}tor.html`);
+  await p.evaluate(() => navigator.serviceWorker.ready);
+  await p.reload();
+  await p.waitForFunction(async () => {
+    for (const k of await caches.keys()) if (await (await caches.open(k)).match('pkg/ephem_tor.js')) return true;
+    return false;
+  }, null, { timeout: 30000, polling: 500 });
+  v3 = true;
+  await p.evaluate(async () => (await navigator.serviceWorker.getRegistration()).update());
+  check('an update on a Tor device is offered', await banner(p));
+  const pre = await p.evaluate(async () => {
+    const c = await caches.open('ephem-v3test');
+    return { js: !!(await c.match('pkg/ephem_tor.js')), wasm: !!(await c.match('pkg/ephem_tor_bg.wasm')) };
+  });
+  check('…with its own Tor build precached (pages and Tor files from one deploy)', pre.js && pre.wasm, JSON.stringify(pre));
+} catch (e) {
+  check('stuck start / Tor precache', false, e.message.split('\n')[0]);
+} finally {
+  v3 = false;
+}
+await browser.close();
+srv.close();
 finish();
